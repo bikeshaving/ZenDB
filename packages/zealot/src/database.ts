@@ -43,6 +43,14 @@ export interface DatabaseDriver {
 	val<T = unknown>(sql: string, params: unknown[]): Promise<T>;
 
 	/**
+	 * Escape an identifier (table name, column name) for safe SQL interpolation.
+	 *
+	 * Each driver implements this using the underlying library's escaping,
+	 * ensuring proper handling of special characters for that dialect.
+	 */
+	escapeIdentifier(name: string): string;
+
+	/**
 	 * Begin a transaction and return a connection-bound driver.
 	 *
 	 * Optional — implement this for connection-pooled databases to ensure
@@ -268,10 +276,7 @@ export class Transaction {
 	// ==========================================================================
 
 	#quoteIdent(name: string): string {
-		if (this.#dialect === "mysql") {
-			return `\`${name}\``;
-		}
-		return `"${name}"`;
+		return this.#driver.escapeIdentifier(name);
 	}
 
 	#placeholder(index: number): string {
@@ -676,10 +681,7 @@ export class Database extends EventTarget {
 	// ==========================================================================
 
 	#quoteIdent(name: string): string {
-		if (this.#dialect === "mysql") {
-			return `\`${name}\``;
-		}
-		return `"${name}"`;
+		return this.#driver.escapeIdentifier(name);
 	}
 
 	#placeholder(index: number): string {

@@ -81,6 +81,11 @@ export function createDriver(url: string, options: MySQLOptions = {}): DatabaseA
 			const values = Object.values(row as object);
 			return values[0] as T;
 		},
+
+		escapeIdentifier(name: string): string {
+			// MySQL: wrap in backticks, double any embedded backticks
+			return `\`${name.replace(/`/g, "``")}\``;
+		},
 	};
 
 	const close = async (): Promise<void> => {

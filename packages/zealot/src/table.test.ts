@@ -124,6 +124,61 @@ describe("table", () => {
 
 		expect(posts.indexes).toEqual([["authorId", "createdAt"]]);
 	});
+
+	test("extracts Zod 4 .meta() for UI metadata", () => {
+		const users = table("users", {
+			id: primary(z.string().uuid()),
+			email: unique(
+				z.string().email().meta({
+					label: "Email Address",
+					helpText: "We will never share your email",
+					placeholder: "you@example.com",
+				}),
+			),
+			role: z
+				.enum(["user", "admin"])
+				.default("user")
+				.meta({label: "User Role", widget: "radio"}),
+			bio: z.string().optional().meta({label: "Biography", widget: "textarea"}),
+		});
+
+		const fields = users.fields();
+
+		// Email field with .meta()
+		expect(fields.email.label).toBe("Email Address");
+		expect(fields.email.helpText).toBe("We will never share your email");
+		expect(fields.email.placeholder).toBe("you@example.com");
+		expect(fields.email.type).toBe("email"); // Inferred type preserved
+		expect(fields.email.unique).toBe(true); // DB metadata preserved
+
+		// Enum with .meta()
+		expect(fields.role.label).toBe("User Role");
+		expect(fields.role.widget).toBe("radio");
+		expect(fields.role.type).toBe("select"); // Inferred type preserved
+		expect(fields.role.options).toEqual(["user", "admin"]);
+
+		// Optional field with .meta() - meta survives unwrapping
+		expect(fields.bio.label).toBe("Biography");
+		expect(fields.bio.widget).toBe("textarea");
+		expect(fields.bio.required).toBe(false);
+	});
+
+	test("rejects table names containing dots", () => {
+		expect(() =>
+			table("schema.users", {
+				id: z.string().uuid(),
+			}),
+		).toThrow('table names cannot contain "."');
+	});
+
+	test("rejects field names containing dots", () => {
+		expect(() =>
+			table("users", {
+				id: z.string().uuid(),
+				"user.name": z.string(), // Invalid field name
+			}),
+		).toThrow('field names cannot contain "."');
+	});
 });
 
 describe("type inference", () => {

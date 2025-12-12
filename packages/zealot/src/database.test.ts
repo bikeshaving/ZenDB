@@ -24,13 +24,19 @@ const posts = table("posts", {
 	published: z.boolean().default(false),
 });
 
-// Mock driver factory
-function createMockDriver(): DatabaseDriver {
+// Mock driver factory (default: SQLite-style escaping)
+function createMockDriver(dialect: "sqlite" | "mysql" | "postgresql" = "sqlite"): DatabaseDriver {
 	return {
 		all: mock(async () => []) as DatabaseDriver["all"],
 		get: mock(async () => null) as DatabaseDriver["get"],
 		run: mock(async () => 1) as DatabaseDriver["run"],
 		val: mock(async () => 0) as DatabaseDriver["val"],
+		escapeIdentifier: (name: string) => {
+			if (dialect === "mysql") {
+				return `\`${name.replace(/`/g, "``")}\``;
+			}
+			return `"${name.replace(/"/g, '""')}"`;
+		},
 	};
 }
 
@@ -264,7 +270,7 @@ describe("PostgreSQL dialect", () => {
 
 describe("MySQL dialect", () => {
 	test("uses backtick quoting", async () => {
-		const driver = createMockDriver();
+		const driver = createMockDriver("mysql");
 		const db = new Database(driver, {dialect: "mysql"});
 
 		await db.insert(users, {
@@ -276,6 +282,22 @@ describe("MySQL dialect", () => {
 		const [sql] = (driver.run as any).mock.calls[0];
 		expect(sql).toContain("INSERT INTO `users`");
 		expect(sql).toContain("`id`, `email`, `name`");
+	});
+});
+
+describe("escapeIdentifier", () => {
+	test("SQLite/PostgreSQL escapes double quotes", () => {
+		const driver = createMockDriver("sqlite");
+		expect(driver.escapeIdentifier("users")).toBe('"users"');
+		expect(driver.escapeIdentifier('table"name')).toBe('"table""name"');
+		expect(driver.escapeIdentifier('foo"bar"baz')).toBe('"foo""bar""baz"');
+	});
+
+	test("MySQL escapes backticks", () => {
+		const driver = createMockDriver("mysql");
+		expect(driver.escapeIdentifier("users")).toBe("`users`");
+		expect(driver.escapeIdentifier("table`name")).toBe("`table``name`");
+		expect(driver.escapeIdentifier("foo`bar`baz")).toBe("`foo``bar``baz`");
 	});
 });
 

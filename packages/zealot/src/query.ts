@@ -70,9 +70,11 @@ export function createFragment(sql: string, params: unknown[] = []): SQLFragment
 
 function quoteIdent(name: string, dialect: SQLDialect): string {
 	if (dialect === "mysql") {
-		return `\`${name}\``;
+		// MySQL: backticks, doubled to escape
+		return `\`${name.replace(/`/g, "``")}\``;
 	}
-	return `"${name}"`;
+	// PostgreSQL and SQLite: double quotes, doubled to escape
+	return `"${name.replace(/"/g, '""')}"`;
 }
 
 function placeholder(index: number, dialect: SQLDialect): string {

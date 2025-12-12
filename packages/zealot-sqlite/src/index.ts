@@ -62,6 +62,11 @@ export function createDriver(url: string): DatabaseAdapter {
 		async val<T>(sql: string, params: unknown[]): Promise<T> {
 			return sqlite.prepare(sql).pluck().get(...params) as T;
 		},
+
+		escapeIdentifier(name: string): string {
+			// SQLite: wrap in double quotes, double any embedded quotes
+			return `"${name.replace(/"/g, '""')}"`;
+		},
 	};
 
 	const close = async (): Promise<void> => {

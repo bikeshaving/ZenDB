@@ -80,6 +80,11 @@ export function createDriver(url: string, options: PostgresOptions = {}): Databa
 			const values = Object.values(row as object);
 			return values[0] as T;
 		},
+
+		escapeIdentifier(name: string): string {
+			// PostgreSQL: wrap in double quotes, double any embedded quotes
+			return `"${name.replace(/"/g, '""')}"`;
+		},
 	};
 
 	const close = async (): Promise<void> => {

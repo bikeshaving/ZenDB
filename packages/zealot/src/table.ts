@@ -154,6 +154,8 @@ export interface FieldMeta {
 		field: string;
 		as: string;
 	};
+	/** Additional user-defined metadata from Zod's .meta() (label, helpText, widget, etc.) */
+	[key: string]: unknown;
 }
 
 // ============================================================================
@@ -216,6 +218,13 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 	shape: T,
 	options: TableOptions = {},
 ): Table<any> {
+	// Validate table name doesn't contain dots (would break normalization)
+	if (name.includes(".")) {
+		throw new Error(
+			`Invalid table name "${name}": table names cannot contain "." as it conflicts with normalization prefixes`,
+		);
+	}
+
 	// Extract Zod schemas and metadata
 	const zodShape: Record<string, ZodTypeAny> = {};
 	const meta = {
@@ -227,6 +236,12 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 	};
 
 	for (const [key, value] of Object.entries(shape)) {
+		// Validate field names don't contain dots (would break normalization)
+		if (key.includes(".")) {
+			throw new Error(
+				`Invalid field name "${key}" in table "${name}": field names cannot contain "." as it conflicts with normalization prefixes`,
+			);
+		}
 		if (isFieldWrapper(value)) {
 			zodShape[key] = value.schema;
 			meta.fields[key] = value.meta;
@@ -294,23 +309,42 @@ interface UnwrapResult {
 	isNullable: boolean;
 	hasDefault: boolean;
 	defaultValue?: unknown;
+	/** Collected .meta() from all layers, merged (outer overrides inner) */
+	collectedMeta: Record<string, unknown>;
+}
+
+/**
+ * Extract .meta() from a single schema layer.
+ */
+function getLayerMeta(schema: z.ZodType): Record<string, unknown> {
+	if (typeof (schema as any).meta === "function") {
+		return (schema as any).meta() ?? {};
+	}
+	return {};
 }
 
 /**
  * Unwrap wrapper types using public Zod APIs only.
  * No _def access - uses removeDefault(), unwrap(), innerType(), etc.
+ * Collects .meta() from all layers during unwrapping.
  */
 function unwrapType(schema: z.ZodType): UnwrapResult {
 	let core: z.ZodType = schema;
 	let hasDefault = false;
 	let defaultValue: unknown = undefined;
 
+	// Collect meta from all layers (will merge at the end, outer wins)
+	const metaLayers: Record<string, unknown>[] = [];
+
 	// Use public isOptional/isNullable
 	const isOptional = schema.isOptional();
 	const isNullable = schema.isNullable();
 
-	// Unwrap layers using public methods
+	// Unwrap layers using public methods, collecting meta at each step
 	while (true) {
+		// Collect meta from current layer
+		metaLayers.push(getLayerMeta(core));
+
 		// Check for ZodDefault (has removeDefault method)
 		if (typeof (core as any).removeDefault === "function") {
 			hasDefault = true;
@@ -339,24 +373,33 @@ function unwrapType(schema: z.ZodType): UnwrapResult {
 		break;
 	}
 
-	return {core, isOptional, isNullable, hasDefault, defaultValue};
+	// Merge meta: inner layers first, outer layers override
+	// metaLayers[0] is outermost, metaLayers[n-1] is innermost
+	// Spread in reverse so outer wins
+	const collectedMeta: Record<string, unknown> = {};
+	for (let i = metaLayers.length - 1; i >= 0; i--) {
+		Object.assign(collectedMeta, metaLayers[i]);
+	}
+
+	return {core, isOptional, isNullable, hasDefault, defaultValue, collectedMeta};
 }
 
 /**
  * Extract field metadata using instanceof checks and public properties.
- * No _def access.
+ * No _def access. Merges Zod 4 .meta() for Shovel UI metadata.
  */
 function extractFieldMeta(
 	name: string,
 	zodType: ZodTypeAny,
 	dbMeta: FieldDbMeta,
 ): FieldMeta {
-	const {core, isOptional, isNullable, hasDefault, defaultValue} = unwrapType(zodType);
+	const {core, isOptional, isNullable, hasDefault, defaultValue, collectedMeta} = unwrapType(zodType);
 
 	const meta: FieldMeta = {
 		name,
 		type: "text",
 		required: !isOptional && !isNullable && !hasDefault,
+		...collectedMeta, // Spread user-defined metadata (label, helpText, widget, etc.)
 	};
 
 	// Apply database metadata

@@ -186,9 +186,11 @@ function mapZodToSQL(
 
 function quoteIdent(name: string, dialect: SQLDialect): string {
 	if (dialect === "mysql") {
-		return `\`${name}\``;
+		// MySQL: backticks, doubled to escape
+		return `\`${name.replace(/`/g, "``")}\``;
 	}
-	return `"${name}"`;
+	// PostgreSQL and SQLite: double quotes, doubled to escape
+	return `"${name.replace(/"/g, '""')}"`;
 }
 
 /**

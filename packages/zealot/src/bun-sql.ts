@@ -88,6 +88,15 @@ export function createDriver(
 			const firstKey = Object.keys(row)[0];
 			return row[firstKey] as T;
 		},
+
+		escapeIdentifier(name: string): string {
+			if (dialect === "mysql") {
+				// MySQL: backticks, doubled to escape
+				return `\`${name.replace(/`/g, "``")}\``;
+			}
+			// PostgreSQL and SQLite: double quotes, doubled to escape
+			return `"${name.replace(/"/g, '""')}"`;
+		},
 	};
 
 	const close = async (): Promise<void> => {
