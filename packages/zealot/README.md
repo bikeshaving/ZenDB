@@ -120,6 +120,12 @@ const Posts = table("posts", {...}, {
 });
 ```
 
+**Column casing**: By default, camelCase field names convert to snake_case columns. Override per-table:
+```typescript
+const Users = table("users", {...}, {casing: "camelCase"});
+// createdAt field → createdAt column (no conversion)
+```
+
 **Table identity**: A table definition is a singleton value. Importing it from multiple modules does not create duplicates — normalization and references rely on identity, not name.
 
 ## Queries
@@ -338,8 +344,43 @@ interface DatabaseDriver {
   get<T>(sql: string, params: unknown[]): Promise<T | null>;
   run(sql: string, params: unknown[]): Promise<number>; // affected rows
   val<T>(sql: string, params: unknown[]): Promise<T>;   // single value
+  escapeIdentifier(name: string): string;               // quote table/column names
+  withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>; // optional atomic migrations
 }
 ```
+
+**Migration locking**: If the driver provides `withMigrationLock()`, migrations run atomically (PostgreSQL uses advisory locks, MySQL uses `GET_LOCK`, SQLite uses exclusive transactions).
+
+## Error Handling
+
+All errors extend `ZealotError` with typed error codes:
+
+```typescript
+import {
+  ZealotError,
+  ValidationError,
+  NotFoundError,
+  isZealotError,
+  hasErrorCode
+} from "@b9g/zealot";
+
+try {
+  await db.insert(Users, invalidData);
+} catch (e) {
+  if (hasErrorCode(e, "VALIDATION_ERROR")) {
+    console.log(e.fieldErrors); // {email: ["Invalid email"]}
+  }
+}
+```
+
+**Error types:**
+- `ValidationError` — Zod validation failed
+- `NotFoundError` — Entity not found
+- `AlreadyExistsError` — Unique constraint violated
+- `QueryError` — SQL execution failed
+- `MigrationError` / `MigrationLockError` — Migration failures
+- `ConstraintViolationError` — FK or check constraint violated
+- `ConnectionError` / `TransactionError` — Connection issues
 
 ## What This Library Does Not Do
 
