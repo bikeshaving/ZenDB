@@ -1,4 +1,4 @@
-import {test, expect, describe, beforeEach, spyOn} from "bun:test";
+import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, primary, unique, references} from "./table.js";
 import {
@@ -9,7 +9,6 @@ import {
 	resolveReferences,
 	normalize,
 	normalizeOne,
-	_resetWarnings,
 } from "./normalize.js";
 
 // Test tables (using plain strings - normalization doesn't need UUID validation)
@@ -291,45 +290,33 @@ describe("self-referencing tables", () => {
 	});
 });
 
-describe("unregistered table warnings", () => {
-	beforeEach(() => {
-		_resetWarnings();
-	});
-
-	test("warns when joined table not passed to normalize", () => {
-		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-
+describe("unregistered table validation", () => {
+	test("throws when joined table not passed to normalize", () => {
 		// Query includes users data but we only pass posts table
-		normalize<any>(rawRows, [posts]);
-
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		expect(warnSpy.mock.calls[0][0]).toContain("users");
-		expect(warnSpy.mock.calls[0][0]).toContain("was not passed to all()/one()");
-
-		warnSpy.mockRestore();
+		expect(() => normalize<any>(rawRows, [posts])).toThrow(
+			'Query results contain columns for table(s) "users" not passed to all()/one()',
+		);
 	});
 
-	test("warns only once per table name", () => {
-		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+	test("error message includes all missing tables", () => {
+		// Create rows with multiple unregistered tables
+		const rowsWithMultipleTables = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"users.id": "u1",
+				"users.name": "Alice",
+				"comments.id": "c1",
+				"comments.body": "Great post",
+			},
+		];
 
-		// Call normalize multiple times with same missing table
-		normalize<any>(rawRows, [posts]);
-		normalize<any>(rawRows, [posts]);
-		normalize<any>(rawRows, [posts]);
-
-		// Should only warn once
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-
-		warnSpy.mockRestore();
+		expect(() => normalize<any>(rowsWithMultipleTables, [posts])).toThrow(
+			/"users".*"comments"|"comments".*"users"/,
+		);
 	});
 
-	test("does not warn when all tables are passed", () => {
-		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-
-		normalize<any>(rawRows, [posts, users]);
-
-		expect(warnSpy).not.toHaveBeenCalled();
-
-		warnSpy.mockRestore();
+	test("does not throw when all tables are passed", () => {
+		expect(() => normalize<any>(rawRows, [posts, users])).not.toThrow();
 	});
 });
