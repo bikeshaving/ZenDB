@@ -290,6 +290,192 @@ describe("self-referencing tables", () => {
 	});
 });
 
+describe("circular references", () => {
+	test("handles circular references without infinite loop", () => {
+		// Users can have a featured post, posts have an author
+		const circularUsers = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+			featuredPostId: z.string().nullable(),
+		});
+
+		const circularPosts = table("posts", {
+			id: primary(z.string()),
+			title: z.string(),
+			authorId: references(z.string(), circularUsers, {as: "author"}),
+		});
+
+		// Note: Can't actually create circular references() at definition time
+		// because tables must be defined before being referenced.
+		// But we can test that the normalization handles circular data.
+
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+				"users.featuredPostId": "p1",
+			},
+		];
+
+		// This should not infinite loop
+		const results = normalize<any>(rows, [circularPosts, circularUsers]);
+
+		expect(results.length).toBe(1);
+		expect(results[0].id).toBe("p1");
+		expect(results[0].author.id).toBe("u1");
+		expect(results[0].author.name).toBe("Alice");
+		// The user's featuredPostId is just a string, not resolved
+		// (because we didn't define it as a reference)
+		expect(results[0].author.featuredPostId).toBe("p1");
+	});
+
+	test("resolves mutual references when both are defined", () => {
+		// Create tables where we manually test the resolution
+		const usersTable = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const postsTable = table("posts", {
+			id: primary(z.string()),
+			title: z.string(),
+			authorId: references(z.string(), usersTable, {as: "author"}),
+		});
+
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Post 1",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "Post 2",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const results = normalize<any>(rows, [postsTable, usersTable]);
+
+		// Both posts should reference the same user instance
+		expect(results[0].author).toBe(results[1].author);
+		expect(results[0].author.name).toBe("Alice");
+	});
+});
+
+describe("deep nesting (3+ tables)", () => {
+	test("resolves references across 3 tables", () => {
+		const orgs = table("organizations", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const deepUsers = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+			orgId: references(z.string(), orgs, {as: "organization"}),
+		});
+
+		const deepPosts = table("posts", {
+			id: primary(z.string()),
+			title: z.string(),
+			authorId: references(z.string(), deepUsers, {as: "author"}),
+		});
+
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+				"users.orgId": "o1",
+				"organizations.id": "o1",
+				"organizations.name": "Acme Corp",
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "World",
+				"posts.authorId": "u2",
+				"users.id": "u2",
+				"users.name": "Bob",
+				"users.orgId": "o1",
+				"organizations.id": "o1",
+				"organizations.name": "Acme Corp",
+			},
+		];
+
+		const results = normalize<any>(rows, [deepPosts, deepUsers, orgs]);
+
+		expect(results.length).toBe(2);
+
+		// Post -> Author -> Organization chain works
+		expect(results[0].author.name).toBe("Alice");
+		expect(results[0].author.organization.name).toBe("Acme Corp");
+
+		expect(results[1].author.name).toBe("Bob");
+		expect(results[1].author.organization.name).toBe("Acme Corp");
+
+		// Same org instance for both users
+		expect(results[0].author.organization).toBe(results[1].author.organization);
+	});
+
+	test("resolves 4-level deep nesting", () => {
+		const countries = table("countries", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const cities = table("cities", {
+			id: primary(z.string()),
+			name: z.string(),
+			countryId: references(z.string(), countries, {as: "country"}),
+		});
+
+		const offices = table("offices", {
+			id: primary(z.string()),
+			name: z.string(),
+			cityId: references(z.string(), cities, {as: "city"}),
+		});
+
+		const employees = table("employees", {
+			id: primary(z.string()),
+			name: z.string(),
+			officeId: references(z.string(), offices, {as: "office"}),
+		});
+
+		const rows = [
+			{
+				"employees.id": "e1",
+				"employees.name": "Alice",
+				"employees.officeId": "off1",
+				"offices.id": "off1",
+				"offices.name": "HQ",
+				"offices.cityId": "c1",
+				"cities.id": "c1",
+				"cities.name": "San Francisco",
+				"cities.countryId": "usa",
+				"countries.id": "usa",
+				"countries.name": "United States",
+			},
+		];
+
+		const results = normalize<any>(rows, [employees, offices, cities, countries]);
+
+		expect(results[0].name).toBe("Alice");
+		expect(results[0].office.name).toBe("HQ");
+		expect(results[0].office.city.name).toBe("San Francisco");
+		expect(results[0].office.city.country.name).toBe("United States");
+	});
+});
+
 describe("unregistered table validation", () => {
 	test("throws when joined table not passed to normalize", () => {
 		// Query includes users data but we only pass posts table

@@ -319,4 +319,26 @@ describe("DDL generation", () => {
 
 		expect(ddl).toContain("FOREIGN KEY (`authorId`) REFERENCES `users`(`id`) ON DELETE CASCADE");
 	});
+
+	test("casing option does NOT affect DDL column names", () => {
+		// NOTE: The casing option only affects fragment helpers (where, set, on).
+		// DDL uses field names as defined in the schema.
+		// If you want snake_case columns in your DB, define fields with snake_case names.
+		const posts = table(
+			"posts",
+			{
+				id: primary(z.string().uuid()),
+				createdAt: z.date(),
+				authorId: z.string().uuid(),
+			},
+			{casing: "snake_case"},
+		);
+
+		const ddl = generateDDL(posts, {dialect: "postgresql"});
+
+		// Columns use schema field names, NOT snake_case converted names
+		expect(ddl).toContain('"createdAt" TIMESTAMPTZ');
+		expect(ddl).toContain('"authorId" TEXT');
+		// NOT '"created_at"' or '"author_id"'
+	});
 });
