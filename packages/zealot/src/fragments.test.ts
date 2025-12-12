@@ -233,3 +233,71 @@ describe("fragment interpolation in parseTemplate", () => {
 		expect(params).toEqual([true, "Hello", "post-123"]);
 	});
 });
+
+describe("table-level casing configuration", () => {
+	// Tables with camelCase casing
+	const UsersCamel = table(
+		"users",
+		{
+			id: primary(z.string().uuid()),
+			email: z.string().email(),
+			createdAt: z.date(),
+		},
+		{casing: "camelCase"},
+	);
+
+	const PostsCamel = table(
+		"posts",
+		{
+			id: primary(z.string().uuid()),
+			authorId: references(z.string().uuid(), UsersCamel, {as: "author"}),
+			viewCount: z.number().int().default(0),
+		},
+		{casing: "camelCase"},
+	);
+
+	test("default casing is snake_case", () => {
+		// Posts table has default casing
+		expect(Posts._meta.casing).toBe("snake_case");
+	});
+
+	test("table can specify camelCase casing", () => {
+		expect(PostsCamel._meta.casing).toBe("camelCase");
+	});
+
+	describe("where() respects table casing", () => {
+		test("snake_case table converts camelCase fields", () => {
+			const fragment = where(Posts, {viewCount: 100});
+			expect(fragment.sql).toBe("view_count = ?");
+		});
+
+		test("camelCase table keeps field names as-is", () => {
+			const fragment = where(PostsCamel, {viewCount: 100});
+			expect(fragment.sql).toBe("viewCount = ?");
+		});
+	});
+
+	describe("set() respects table casing", () => {
+		test("snake_case table converts camelCase fields", () => {
+			const fragment = set(Posts, {viewCount: 42});
+			expect(fragment.sql).toBe("view_count = ?");
+		});
+
+		test("camelCase table keeps field names as-is", () => {
+			const fragment = set(PostsCamel, {viewCount: 42});
+			expect(fragment.sql).toBe("viewCount = ?");
+		});
+	});
+
+	describe("on() respects table casing", () => {
+		test("snake_case table converts FK column names", () => {
+			const fragment = on(Posts, "authorId");
+			expect(fragment.sql).toBe("users.id = posts.author_id");
+		});
+
+		test("camelCase table keeps FK column names as-is", () => {
+			const fragment = on(PostsCamel, "authorId");
+			expect(fragment.sql).toBe("users.id = posts.authorId");
+		});
+	});
+});

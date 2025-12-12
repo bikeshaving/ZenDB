@@ -186,6 +186,57 @@ export function extractMainEntities<T>(
 }
 
 // ============================================================================
+// Warnings
+// ============================================================================
+
+// Track which warnings have been emitted to avoid spam
+const emittedWarnings = new Set<string>();
+
+/**
+ * Reset emitted warnings (for testing).
+ * @internal
+ */
+export function _resetWarnings(): void {
+	emittedWarnings.clear();
+}
+
+/**
+ * Detect column prefixes in rows that don't match any provided table.
+ * This catches cases where a JOIN includes a table not passed to normalize().
+ */
+function warnUnregisteredTables(rows: RawRow[], tables: Table<any>[]): void {
+	if (rows.length === 0) return;
+
+	const registeredPrefixes = new Set(tables.map((t) => `${t.name}.`));
+	const unregisteredTables = new Set<string>();
+
+	// Check first row for unregistered prefixes
+	const firstRow = rows[0];
+	for (const key of Object.keys(firstRow)) {
+		const dotIndex = key.indexOf(".");
+		if (dotIndex === -1) continue;
+
+		const prefix = key.slice(0, dotIndex + 1);
+		if (!registeredPrefixes.has(prefix)) {
+			const tableName = key.slice(0, dotIndex);
+			unregisteredTables.add(tableName);
+		}
+	}
+
+	// Emit warnings for unregistered tables (once per table name)
+	for (const tableName of unregisteredTables) {
+		const warningKey = `unregistered:${tableName}`;
+		if (!emittedWarnings.has(warningKey)) {
+			emittedWarnings.add(warningKey);
+			console.warn(
+				`[zealot] Query results contain columns for table "${tableName}" but it was not passed to all()/one(). ` +
+					`Add it to the tables array to include this data in normalization.`,
+			);
+		}
+	}
+}
+
+// ============================================================================
 // Main API
 // ============================================================================
 
@@ -212,6 +263,9 @@ export function normalize<T>(
 	if (rows.length === 0) {
 		return [];
 	}
+
+	// Warn about joined tables not passed to normalize
+	warnUnregisteredTables(rows, tables);
 
 	const entities = buildEntityMap(rows, tables);
 	resolveReferences(entities, tables);

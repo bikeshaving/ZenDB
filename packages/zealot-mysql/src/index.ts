@@ -86,6 +86,31 @@ export function createDriver(url: string, options: MySQLOptions = {}): DatabaseA
 			// MySQL: wrap in backticks, double any embedded backticks
 			return `\`${name.replace(/`/g, "``")}\``;
 		},
+
+		async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+			// Use MySQL named lock for migrations
+			// Timeout of 10 seconds to acquire lock
+			const LOCK_NAME = "zealot_migration";
+			const LOCK_TIMEOUT = 10;
+
+			const [lockResult] = await pool.execute(
+				`SELECT GET_LOCK(?, ?)`,
+				[LOCK_NAME, LOCK_TIMEOUT],
+			);
+			const acquired = (lockResult as any[])[0]?.["GET_LOCK(?, ?)"] === 1;
+
+			if (!acquired) {
+				throw new Error(
+					`Failed to acquire migration lock after ${LOCK_TIMEOUT}s. Another migration may be in progress.`,
+				);
+			}
+
+			try {
+				return await fn();
+			} finally {
+				await pool.execute(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
+			}
+		},
 	};
 
 	const close = async (): Promise<void> => {

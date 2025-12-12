@@ -97,6 +97,51 @@ export function createDriver(
 			// PostgreSQL and SQLite: double quotes, doubled to escape
 			return `"${name.replace(/"/g, '""')}"`;
 		},
+
+		async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+			if (dialect === "postgresql") {
+				// PostgreSQL: advisory lock
+				const MIGRATION_LOCK_ID = 1952393421;
+				await sql.unsafe(`SELECT pg_advisory_lock($1)`, [MIGRATION_LOCK_ID]);
+				try {
+					return await fn();
+				} finally {
+					await sql.unsafe(`SELECT pg_advisory_unlock($1)`, [MIGRATION_LOCK_ID]);
+				}
+			} else if (dialect === "mysql") {
+				// MySQL: named lock
+				const LOCK_NAME = "zealot_migration";
+				const LOCK_TIMEOUT = 10;
+				const result = await sql.unsafe(`SELECT GET_LOCK(?, ?)`, [
+					LOCK_NAME,
+					LOCK_TIMEOUT,
+				]);
+				const acquired = (result as any)[0]?.["GET_LOCK(?, ?)"] === 1;
+
+				if (!acquired) {
+					throw new Error(
+						`Failed to acquire migration lock after ${LOCK_TIMEOUT}s. Another migration may be in progress.`,
+					);
+				}
+
+				try {
+					return await fn();
+				} finally {
+					await sql.unsafe(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
+				}
+			} else {
+				// SQLite: exclusive transaction
+				await sql.unsafe("BEGIN EXCLUSIVE", []);
+				try {
+					const result = await fn();
+					await sql.unsafe("COMMIT", []);
+					return result;
+				} catch (error) {
+					await sql.unsafe("ROLLBACK", []);
+					throw error;
+				}
+			}
+		},
 	};
 
 	const close = async (): Promise<void> => {

@@ -67,6 +67,20 @@ export function createDriver(url: string): DatabaseAdapter {
 			// SQLite: wrap in double quotes, double any embedded quotes
 			return `"${name.replace(/"/g, '""')}"`;
 		},
+
+		async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+			// SQLite: BEGIN EXCLUSIVE acquires database-level write lock
+			// This prevents all other connections from reading or writing
+			sqlite.exec("BEGIN EXCLUSIVE");
+			try {
+				const result = await fn();
+				sqlite.exec("COMMIT");
+				return result;
+			} catch (error) {
+				sqlite.exec("ROLLBACK");
+				throw error;
+			}
+		},
 	};
 
 	const close = async (): Promise<void> => {

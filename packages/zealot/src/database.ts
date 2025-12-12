@@ -60,6 +60,19 @@ export interface DatabaseDriver {
 	 * BEGIN/COMMIT/ROLLBACK which works for single-connection drivers.
 	 */
 	beginTransaction?(): Promise<TransactionDriver>;
+
+	/**
+	 * Execute a function while holding an exclusive migration lock.
+	 *
+	 * Each driver implements this using dialect-appropriate locking:
+	 * - PostgreSQL: pg_advisory_lock
+	 * - MySQL: GET_LOCK
+	 * - SQLite: BEGIN EXCLUSIVE (file-level lock)
+	 *
+	 * The lock prevents concurrent migration attempts across processes.
+	 * If not implemented, Database.open() falls back to SQL-based locking.
+	 */
+	withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -345,22 +358,11 @@ export class Database extends EventTarget {
 			throw new Error("Database already opened");
 		}
 
-		// Create table outside transaction (idempotent)
+		// Create table outside lock (idempotent)
 		await this.#ensureMigrationsTable();
 
-		// Use exclusive transaction for migration safety
-		// SQLite: BEGIN IMMEDIATE acquires write lock upfront
-		// PostgreSQL/MySQL: SELECT FOR UPDATE locks the rows
-		const beginSQL = this.#dialect === "sqlite"
-			? "BEGIN IMMEDIATE"
-			: this.#dialect === "mysql"
-				? "START TRANSACTION"
-				: "BEGIN";
-
-		await this.#driver.run(beginSQL, []);
-
-		try {
-			// Re-check version inside lock to prevent race conditions
+		// Run migration logic inside lock
+		const runMigration = async (): Promise<void> => {
 			const currentVersion = await this.#getCurrentVersionLocked();
 
 			if (version > currentVersion) {
@@ -373,11 +375,31 @@ export class Database extends EventTarget {
 
 				await this.#setVersion(version);
 			}
+		};
 
-			await this.#driver.run("COMMIT", []);
-		} catch (error) {
-			await this.#driver.run("ROLLBACK", []);
-			throw error;
+		// Use driver's migration lock if available, otherwise fall back to SQL-based locking
+		if (this.#driver.withMigrationLock) {
+			await this.#driver.withMigrationLock(runMigration);
+		} else {
+			// Fallback: SQL-based transaction locking
+			// SQLite: BEGIN IMMEDIATE acquires write lock upfront
+			// PostgreSQL/MySQL: relies on SELECT FOR UPDATE in #getCurrentVersionLocked
+			const beginSQL =
+				this.#dialect === "sqlite"
+					? "BEGIN IMMEDIATE"
+					: this.#dialect === "mysql"
+						? "START TRANSACTION"
+						: "BEGIN";
+
+			await this.#driver.run(beginSQL, []);
+
+			try {
+				await runMigration();
+				await this.#driver.run("COMMIT", []);
+			} catch (error) {
+				await this.#driver.run("ROLLBACK", []);
+				throw error;
+			}
 		}
 
 		this.#version = version;

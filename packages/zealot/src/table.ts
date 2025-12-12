@@ -6,6 +6,7 @@
  */
 
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
+import {TableDefinitionError} from "./errors.js";
 
 // ============================================================================
 // Wrapper Types
@@ -162,8 +163,19 @@ export interface FieldMeta {
 // Table
 // ============================================================================
 
+/**
+ * Column casing convention for mapping field names to SQL columns.
+ *
+ * - "snake_case": camelCase -> snake_case (default)
+ * - "camelCase": keep as-is
+ * - "none": keep as-is (alias for camelCase)
+ */
+export type ColumnCasing = "snake_case" | "camelCase" | "none";
+
 export interface TableOptions {
 	indexes?: string[][];
+	/** Column casing convention (default: "snake_case") */
+	casing?: ColumnCasing;
 }
 
 export interface ReferenceInfo {
@@ -186,6 +198,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 		indexed: string[];
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
+		casing: ColumnCasing;
 	};
 
 	/** Get field metadata for forms/admin */
@@ -220,8 +233,9 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 ): Table<any> {
 	// Validate table name doesn't contain dots (would break normalization)
 	if (name.includes(".")) {
-		throw new Error(
+		throw new TableDefinitionError(
 			`Invalid table name "${name}": table names cannot contain "." as it conflicts with normalization prefixes`,
+			name,
 		);
 	}
 
@@ -233,13 +247,16 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 		indexed: [] as string[],
 		references: [] as ReferenceInfo[],
 		fields: {} as Record<string, FieldDbMeta>,
+		casing: options.casing ?? ("snake_case" as ColumnCasing),
 	};
 
 	for (const [key, value] of Object.entries(shape)) {
 		// Validate field names don't contain dots (would break normalization)
 		if (key.includes(".")) {
-			throw new Error(
+			throw new TableDefinitionError(
 				`Invalid field name "${key}" in table "${name}": field names cannot contain "." as it conflicts with normalization prefixes`,
+				name,
+				key,
 			);
 		}
 		if (isFieldWrapper(value)) {

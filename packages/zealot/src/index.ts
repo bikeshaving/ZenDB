@@ -11,6 +11,7 @@ export {
 	type Table,
 	type TableOptions,
 	type ReferenceInfo,
+	type ColumnCasing,
 
 	// Field wrappers
 	primary,
@@ -89,3 +90,21 @@ export {
 	type DatabaseOptions,
 	type TaggedQuery,
 } from "./database.js";
+
+export {
+	// Errors
+	ZealotError,
+	ValidationError,
+	TableDefinitionError,
+	MigrationError,
+	MigrationLockError,
+	QueryError,
+	NotFoundError,
+	AlreadyExistsError,
+	ConstraintViolationError,
+	ConnectionError,
+	TransactionError,
+	isZealotError,
+	hasErrorCode,
+	type ZealotErrorCode,
+} from "./errors.js";

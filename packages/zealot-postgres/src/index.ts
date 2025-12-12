@@ -85,6 +85,19 @@ export function createDriver(url: string, options: PostgresOptions = {}): Databa
 			// PostgreSQL: wrap in double quotes, double any embedded quotes
 			return `"${name.replace(/"/g, '""')}"`;
 		},
+
+		async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+			// Use PostgreSQL advisory lock with a fixed lock ID for migrations
+			// 1952393421 = crc32("zealot_migration") for uniqueness
+			const MIGRATION_LOCK_ID = 1952393421;
+
+			await sql`SELECT pg_advisory_lock(${MIGRATION_LOCK_ID})`;
+			try {
+				return await fn();
+			} finally {
+				await sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK_ID})`;
+			}
+		},
 	};
 
 	const close = async (): Promise<void> => {

@@ -1,4 +1,4 @@
-import {test, expect, describe} from "bun:test";
+import {test, expect, describe, beforeEach, spyOn} from "bun:test";
 import {z} from "zod";
 import {table, primary, unique, references} from "./table.js";
 import {
@@ -9,6 +9,7 @@ import {
 	resolveReferences,
 	normalize,
 	normalizeOne,
+	_resetWarnings,
 } from "./normalize.js";
 
 // Test tables (using plain strings - normalization doesn't need UUID validation)
@@ -287,5 +288,48 @@ describe("self-referencing tables", () => {
 		expect(results.length).toBe(2);
 		expect(results[0].name).toBe("Alice");
 		expect(results[1].name).toBe("Bob");
+	});
+});
+
+describe("unregistered table warnings", () => {
+	beforeEach(() => {
+		_resetWarnings();
+	});
+
+	test("warns when joined table not passed to normalize", () => {
+		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+		// Query includes users data but we only pass posts table
+		normalize<any>(rawRows, [posts]);
+
+		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(warnSpy.mock.calls[0][0]).toContain("users");
+		expect(warnSpy.mock.calls[0][0]).toContain("was not passed to all()/one()");
+
+		warnSpy.mockRestore();
+	});
+
+	test("warns only once per table name", () => {
+		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+		// Call normalize multiple times with same missing table
+		normalize<any>(rawRows, [posts]);
+		normalize<any>(rawRows, [posts]);
+		normalize<any>(rawRows, [posts]);
+
+		// Should only warn once
+		expect(warnSpy).toHaveBeenCalledTimes(1);
+
+		warnSpy.mockRestore();
+	});
+
+	test("does not warn when all tables are passed", () => {
+		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+		normalize<any>(rawRows, [posts, users]);
+
+		expect(warnSpy).not.toHaveBeenCalled();
+
+		warnSpy.mockRestore();
 	});
 });
