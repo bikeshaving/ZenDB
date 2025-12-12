@@ -170,6 +170,15 @@ export interface TableOptions {
 // Symbol to identify Table objects
 const TABLE_MARKER = Symbol.for("@b9g/zealot:table");
 
+// Symbol for SQL fragments (same as query.ts - Symbol.for ensures identity)
+const SQL_FRAGMENT = Symbol.for("@b9g/zealot:fragment");
+
+interface ColumnFragment {
+	readonly [SQL_FRAGMENT]: true;
+	readonly sql: string;
+	readonly params: readonly unknown[];
+}
+
 /**
  * Check if a value is a Table object.
  */
@@ -227,6 +236,24 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	pick<K extends keyof z.infer<ZodObject<T>>>(
 		...fields: K[]
 	): Table<Pick<T, K & keyof T>>;
+
+	/**
+	 * Access qualified column names as SQL fragments.
+	 *
+	 * Each property returns a fragment with the fully qualified, quoted column name.
+	 * Useful for ORDER BY, GROUP BY, or disambiguating columns in JOINs.
+	 *
+	 * @example
+	 * db.all(Posts, Users)`
+	 *   JOIN ${Users} ON ${on(Posts, 'authorId')}
+	 *   WHERE ${Posts.cols.published} = ${true}
+	 *   ORDER BY ${Posts.cols.createdAt} DESC
+	 * `
+	 * // → WHERE "posts"."published" = ? ORDER BY "posts"."createdAt" DESC
+	 */
+	readonly cols: {
+		[K in keyof z.infer<ZodObject<T>>]: ColumnFragment;
+	};
 }
 
 type TableShape<T> = {
@@ -312,6 +339,44 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 /**
  * Create a Table object with all methods. Shared between table() and pick().
  */
+/**
+ * Quote an identifier with double quotes (ANSI SQL standard).
+ * MySQL users should enable ANSI_QUOTES mode.
+ */
+function quoteIdentifier(id: string): string {
+	return `"${id.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Create a column fragment proxy for Table.cols access.
+ */
+function createColsProxy(tableName: string, zodShape: Record<string, ZodTypeAny>): Record<string, ColumnFragment> {
+	return new Proxy({} as Record<string, ColumnFragment>, {
+		get(_target, prop: string): ColumnFragment | undefined {
+			if (prop in zodShape) {
+				return {
+					[SQL_FRAGMENT]: true,
+					sql: `${quoteIdentifier(tableName)}.${quoteIdentifier(prop)}`,
+					params: [],
+				};
+			}
+			return undefined;
+		},
+		has(_target, prop: string): boolean {
+			return prop in zodShape;
+		},
+		ownKeys(): string[] {
+			return Object.keys(zodShape);
+		},
+		getOwnPropertyDescriptor(_target, prop: string) {
+			if (prop in zodShape) {
+				return { enumerable: true, configurable: true };
+			}
+			return undefined;
+		},
+	});
+}
+
 function createTableObject(
 	name: string,
 	schema: ZodObject<any>,
@@ -325,12 +390,15 @@ function createTableObject(
 	},
 	indexes: string[][],
 ): Table<any> {
+	const cols = createColsProxy(name, zodShape);
+
 	return {
 		[TABLE_MARKER]: true,
 		name,
 		schema,
 		indexes,
 		_meta: meta,
+		cols,
 
 		fields(): Record<string, FieldMeta> {
 			const result: Record<string, FieldMeta> = {};

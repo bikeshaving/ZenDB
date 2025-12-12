@@ -308,3 +308,59 @@ describe("Table.pick()", () => {
 		expect(Step2.primaryKey()).toBe("id");
 	});
 });
+
+describe("Table.cols", () => {
+	const Users = table("users", {
+		id: primary(z.string().uuid()),
+		email: unique(z.string().email()),
+		name: z.string(),
+		createdAt: z.date(),
+	});
+
+	test("returns SQL fragment for column", () => {
+		const fragment = Users.cols.id;
+
+		expect(fragment.sql).toBe('"users"."id"');
+		expect(fragment.params).toEqual([]);
+	});
+
+	test("quotes table and column names", () => {
+		expect(Users.cols.email.sql).toBe('"users"."email"');
+		expect(Users.cols.name.sql).toBe('"users"."name"');
+		expect(Users.cols.createdAt.sql).toBe('"users"."createdAt"');
+	});
+
+	test("works with picked tables", () => {
+		const UserSummary = Users.pick("id", "name");
+
+		expect(UserSummary.cols.id.sql).toBe('"users"."id"');
+		expect(UserSummary.cols.name.sql).toBe('"users"."name"');
+	});
+
+	test("returns undefined for non-existent columns", () => {
+		expect((Users.cols as any).nonexistent).toBeUndefined();
+	});
+
+	test("fragment can be interpolated in queries", () => {
+		// Import parseTemplate to test interpolation
+		const {parseTemplate} = require("./query.js");
+
+		const strings = [
+			"SELECT * FROM users WHERE ",
+			" = ",
+			" ORDER BY ",
+			" DESC",
+		] as unknown as TemplateStringsArray;
+
+		const result = parseTemplate(
+			strings,
+			[Users.cols.id, "user-123", Users.cols.createdAt],
+			"sqlite",
+		);
+
+		expect(result.sql).toBe(
+			'SELECT * FROM users WHERE "users"."id" = ? ORDER BY "users"."createdAt" DESC',
+		);
+		expect(result.params).toEqual(["user-123"]);
+	});
+});

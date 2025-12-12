@@ -51,6 +51,20 @@ export type SetValues<T extends Table<any>> = {
 // ============================================================================
 
 /**
+ * Quote an identifier with double quotes (ANSI SQL standard).
+ */
+function quoteIdent(id: string): string {
+	return `"${id.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Create a fully qualified column name: "table"."column"
+ */
+function qualifiedColumn(tableName: string, fieldName: string): string {
+	return `${quoteIdent(tableName)}.${quoteIdent(fieldName)}`;
+}
+
+/**
  * Check if a value is an operator object.
  */
 function isOperatorObject(value: unknown): value is ConditionOperators<unknown> {
@@ -127,14 +141,16 @@ function buildCondition(
 /**
  * Generate an AND-joined conditional fragment for WHERE clauses.
  *
+ * Emits fully qualified column names to avoid ambiguity in JOINs.
+ *
  * @example
  * db.all(Posts)`
  *   WHERE ${where(Posts, { published: true, createdAt: { $gt: oneMonthAgo } })}
  * `
- * // Output: published = ? AND createdAt > ?
+ * // Output: "posts"."published" = ? AND "posts"."createdAt" > ?
  */
 export function where<T extends Table<any>>(
-	_table: T,
+	table: T,
 	conditions: WhereConditions<T>,
 ): SQLFragment {
 	const entries = Object.entries(conditions);
@@ -148,7 +164,8 @@ export function where<T extends Table<any>>(
 	for (const [field, value] of entries) {
 		if (value === undefined) continue;
 
-		const condition = buildCondition(field, value);
+		const column = qualifiedColumn(table.name, field);
+		const condition = buildCondition(column, value);
 		parts.push(condition.sql);
 		params.push(...condition.params);
 	}
@@ -163,13 +180,15 @@ export function where<T extends Table<any>>(
 /**
  * Generate assignment fragment for UPDATE SET clauses.
  *
+ * Column names are quoted but not table-qualified (SQL UPDATE syntax).
+ *
  * @example
  * db.exec`
  *   UPDATE posts
  *   SET ${set(Posts, { title: "New Title", updatedAt: new Date() })}
  *   WHERE id = ${id}
  * `
- * // Output: title = ?, updatedAt = ?
+ * // Output: "title" = ?, "updatedAt" = ?
  */
 export function set<T extends Table<any>>(
 	_table: T,
@@ -186,7 +205,7 @@ export function set<T extends Table<any>>(
 	for (const [field, value] of entries) {
 		if (value === undefined) continue;
 
-		parts.push(`${field} = ?`);
+		parts.push(`${quoteIdent(field)} = ?`);
 		params.push(value);
 	}
 
@@ -200,11 +219,13 @@ export function set<T extends Table<any>>(
 /**
  * Generate foreign-key equality fragment for JOIN ON clauses.
  *
+ * Emits fully qualified, quoted column names.
+ *
  * @example
  * db.all(Posts, Users)`
  *   JOIN users ON ${on(Posts, "authorId")}
  * `
- * // Output: users.id = posts.authorId
+ * // Output: "users"."id" = "posts"."authorId"
  */
 export function on<T extends Table<any>>(
 	table: T,
@@ -219,6 +240,8 @@ export function on<T extends Table<any>>(
 		);
 	}
 
-	const refTable = ref.table.name;
-	return createFragment(`${refTable}.${ref.referencedField} = ${table.name}.${field}`, []);
+	const refColumn = qualifiedColumn(ref.table.name, ref.referencedField);
+	const fkColumn = qualifiedColumn(table.name, field);
+
+	return createFragment(`${refColumn} = ${fkColumn}`, []);
 }
