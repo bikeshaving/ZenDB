@@ -1,0 +1,17 @@
+{
+  "name": "@b9g/zealot-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter '@b9g/zealot' build && bun run --filter './packages/zealot-*' build",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@types/bun": "^1.3.4"
+  }
+}
