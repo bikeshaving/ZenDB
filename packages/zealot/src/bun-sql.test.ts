@@ -2,7 +2,7 @@ import {test, expect, describe, afterEach} from "bun:test";
 import {createDriver} from "./bun-sql.js";
 import {Database} from "./database.js";
 
-describe("@b9g/database/bun-sql", () => {
+describe("@b9g/zealot/bun-sql", () => {
 	let cleanup: (() => Promise<void>)[] = [];
 
 	afterEach(async () => {

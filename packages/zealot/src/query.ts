@@ -25,7 +25,7 @@ export interface ParsedQuery {
 // SQL Fragments
 // ============================================================================
 
-const SQL_FRAGMENT = Symbol.for("@b9g/database:fragment");
+const SQL_FRAGMENT = Symbol.for("@b9g/zealot:fragment");
 
 /**
  * A SQL fragment with embedded parameters.

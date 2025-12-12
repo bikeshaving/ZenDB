@@ -698,7 +698,7 @@ export class Database extends EventTarget {
  * Create a database instance with the given driver.
  *
  * @example
- * import { createDatabase } from "@b9g/database";
+ * import { createDatabase } from "@b9g/zealot";
  *
  * const db = createDatabase(sqliteDriver, { dialect: "sqlite" });
  */

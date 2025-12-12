@@ -1,5 +1,5 @@
 /**
- * Bun.SQL adapter for @b9g/database
+ * Bun.SQL adapter for @b9g/zealot
  *
  * Unified driver supporting PostgreSQL, MySQL, and SQLite via Bun's built-in SQL.
  * Zero dependencies - uses native Bun implementation.
@@ -40,8 +40,8 @@ function detectDialect(url: string): SQLDialect {
  * @returns DatabaseAdapter with driver, close function, and detected dialect
  *
  * @example
- * import { createDriver } from "@b9g/database/bun-sql";
- * import { Database } from "@b9g/database";
+ * import { createDriver } from "@b9g/zealot/bun-sql";
+ * import { Database } from "@b9g/zealot";
  *
  * const { driver, close, dialect } = createDriver("postgres://localhost/mydb");
  * const db = new Database(driver, { dialect });

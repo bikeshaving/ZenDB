@@ -1,5 +1,5 @@
 /**
- * @b9g/zealot-better-sqlite3 - better-sqlite3 adapter for @b9g/zealot
+ * @b9g/zealot-sqlite - better-sqlite3 adapter for @b9g/zealot
  *
  * Creates a DatabaseDriver from better-sqlite3 (Node.js).
  * The connection is persistent - call close() when done.
@@ -22,7 +22,7 @@ export const dialect: SQLDialect = "sqlite";
  * @returns DatabaseAdapter with driver and close function
  *
  * @example
- * import { createDriver } from "@b9g/zealot-better-sqlite3";
+ * import { createDriver } from "@b9g/zealot-sqlite";
  * import { Database as DB } from "@b9g/zealot";
  *
  * const { driver, close } = createDriver("file:app.db");

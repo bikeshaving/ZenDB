@@ -1,5 +1,5 @@
 /**
- * @b9g/database - Schema-driven database client
+ * @b9g/zealot - Schema-driven database client
  *
  * Zod schemas define storage, validation, and form fields.
  * Not an ORM - a thin wrapper over SQL.

@@ -1,4 +1,4 @@
-# @b9g/database
+# @b9g/zealot
 
 A schema-driven SQL client for TypeScript. Replaces ORMs (Prisma, Drizzle ORM), query builders (Kysely), and raw client wrappers with a single SQL-first library built on Zod schemas and event-driven migrations.
 
@@ -24,14 +24,14 @@ This separation is intentional — the system is not an ORM because these modes 
 ## Installation
 
 ```bash
-bun add @b9g/database zod
+bun add @b9g/zealot zod
 ```
 
 ## Quick Start
 
 ```typescript
 import {z} from "zod";
-import {table, primary, unique, references, generateDDL, Database} from "@b9g/database";
+import {table, primary, unique, references, generateDDL, Database} from "@b9g/zealot";
 
 // 1. Define tables
 const Users = table("users", {
@@ -88,7 +88,7 @@ await db.update(Users, user.id, {name: "Alice Smith"});
 
 ```typescript
 import {z} from "zod";
-import {table, primary, unique, index, references} from "@b9g/database";
+import {table, primary, unique, index, references} from "@b9g/zealot";
 
 const Users = table("users", {
   id: primary(z.string().uuid()),
@@ -153,7 +153,7 @@ const count = await db.val<number>`SELECT COUNT(*) FROM posts`;
 Type-safe SQL fragments that compose inside tagged templates:
 
 ```typescript
-import {where, set, on} from "@b9g/database";
+import {where, set, on} from "@b9g/zealot";
 
 // WHERE conditions with operator DSL
 const posts = await db.all(Posts)`
@@ -246,7 +246,7 @@ await db.open(2); // Opens at version 2, fires upgradeneeded if needed
 Generate CREATE TABLE from Zod schemas:
 
 ```typescript
-import {generateDDL} from "@b9g/database";
+import {generateDDL} from "@b9g/zealot";
 
 const ddl = generateDDL(Users, {dialect: "postgresql"});
 // CREATE TABLE IF NOT EXISTS "users" (

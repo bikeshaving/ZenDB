@@ -11,7 +11,7 @@ import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
 // Wrapper Types
 // ============================================================================
 
-const DB_FIELD = Symbol.for("@b9g/database:field");
+const DB_FIELD = Symbol.for("@b9g/zealot:field");
 
 interface FieldWrapper<T extends ZodTypeAny = ZodTypeAny> {
 	[DB_FIELD]: true;
