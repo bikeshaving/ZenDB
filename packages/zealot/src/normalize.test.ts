@@ -1,6 +1,6 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, primary, unique, references} from "./table.js";
+import {table, primary, unique, references, index} from "./table.js";
 import {
 	extractEntityData,
 	getPrimaryKeyValue,
@@ -175,6 +175,14 @@ describe("resolveReferences", () => {
 	});
 
 	test("handles null references", () => {
+		// Posts with nullable FK for testing orphan records
+		const postsWithNullableFK = table("posts", {
+			id: primary(z.string()),
+			authorId: z.string().nullable(),
+			title: z.string(),
+			body: z.string(),
+		});
+
 		const rowsWithNull = [
 			{
 				"posts.id": "p1",
@@ -184,11 +192,12 @@ describe("resolveReferences", () => {
 			},
 		];
 
-		const entities = buildEntityMap(rowsWithNull, [posts]);
-		resolveReferences(entities, [posts, users]);
+		const entities = buildEntityMap(rowsWithNull, [postsWithNullableFK]);
+		resolveReferences(entities, [postsWithNullableFK, users]);
 
 		const post = entities.get("posts:p1")!;
-		expect(post.author).toBeNull();
+		// No reference defined in postsWithNullableFK, so no .author property
+		expect(post.authorId).toBeNull();
 	});
 });
 
@@ -504,5 +513,116 @@ describe("unregistered table validation", () => {
 
 	test("does not throw when all tables are passed", () => {
 		expect(() => normalize<any>(rawRows, [posts, users])).not.toThrow();
+	});
+});
+
+describe("type coercion", () => {
+	test("coerces date strings to Date objects", () => {
+		const events = table("events", {
+			id: primary(z.string()),
+			name: z.string(),
+			// z.coerce.date() converts string → Date
+			createdAt: z.coerce.date(),
+		});
+
+		const rows = [
+			{
+				"events.id": "e1",
+				"events.name": "Launch Party",
+				"events.createdAt": "2024-01-15T10:30:00.000Z",
+			},
+		];
+
+		const results = normalize<any>(rows, [events]);
+
+		expect(results[0].createdAt).toBeInstanceOf(Date);
+		expect(results[0].createdAt.toISOString()).toBe("2024-01-15T10:30:00.000Z");
+	});
+
+	test("coerces number strings to numbers", () => {
+		const products = table("products", {
+			id: primary(z.string()),
+			name: z.string(),
+			// z.coerce.number() converts string → number
+			price: z.coerce.number(),
+			quantity: z.coerce.number().int(),
+		});
+
+		const rows = [
+			{
+				"products.id": "p1",
+				"products.name": "Widget",
+				"products.price": "19.99",
+				"products.quantity": "42",
+			},
+		];
+
+		const results = normalize<any>(rows, [products]);
+
+		expect(results[0].price).toBe(19.99);
+		expect(typeof results[0].price).toBe("number");
+		expect(results[0].quantity).toBe(42);
+		expect(typeof results[0].quantity).toBe("number");
+	});
+
+	test("coerces boolean strings/numbers to booleans", () => {
+		const flags = table("flags", {
+			id: primary(z.string()),
+			name: z.string(),
+			// z.coerce.boolean() converts truthy/falsy → boolean
+			enabled: z.coerce.boolean(),
+		});
+
+		const rows = [
+			{
+				"flags.id": "f1",
+				"flags.name": "Feature A",
+				"flags.enabled": 1, // SQLite stores booleans as 0/1
+			},
+			{
+				"flags.id": "f2",
+				"flags.name": "Feature B",
+				"flags.enabled": 0,
+			},
+		];
+
+		const results = normalize<any>(rows, [flags]);
+
+		expect(results[0].enabled).toBe(true);
+		expect(typeof results[0].enabled).toBe("boolean");
+		expect(results[1].enabled).toBe(false);
+	});
+
+	test("coercion works with joins", () => {
+		const authors = table("authors", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const articles = table("articles", {
+			id: primary(z.string()),
+			authorId: references(z.string(), authors, {as: "author"}),
+			title: z.string(),
+			publishedAt: z.coerce.date(),
+			viewCount: z.coerce.number().int(),
+		});
+
+		const rows = [
+			{
+				"articles.id": "a1",
+				"articles.authorId": "u1",
+				"articles.title": "Hello World",
+				"articles.publishedAt": "2024-06-01T00:00:00.000Z",
+				"articles.viewCount": "1234",
+				"authors.id": "u1",
+				"authors.name": "Alice",
+			},
+		];
+
+		const results = normalize<any>(rows, [articles, authors]);
+
+		expect(results[0].publishedAt).toBeInstanceOf(Date);
+		expect(results[0].viewCount).toBe(1234);
+		expect(results[0].author.name).toBe("Alice");
 	});
 });

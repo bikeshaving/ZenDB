@@ -91,6 +91,8 @@ export function entityKey(tableName: string, primaryKey: string): string {
  * Build an entity map from raw rows.
  *
  * Entities are deduplicated - same primary key = same object instance.
+ * Each entity is parsed through its table's schema for type coercion
+ * (e.g., z.coerce.date() converts date strings to Date objects).
  */
 export function buildEntityMap(
 	rows: RawRow[],
@@ -109,7 +111,9 @@ export function buildEntityMap(
 			const key = entityKey(table.name, pk);
 
 			if (!entities.has(key)) {
-				entities.set(key, data);
+				// Parse through schema for type coercion (dates, numbers, etc.)
+				const parsed = table.schema.parse(data);
+				entities.set(key, parsed);
 			}
 		}
 	}
