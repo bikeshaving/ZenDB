@@ -167,6 +167,21 @@ export interface TableOptions {
 	indexes?: string[][];
 }
 
+// Symbol to identify Table objects
+const TABLE_MARKER = Symbol.for("@b9g/zealot:table");
+
+/**
+ * Check if a value is a Table object.
+ */
+export function isTable(value: unknown): value is Table<any> {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		TABLE_MARKER in value &&
+		(value as any)[TABLE_MARKER] === true
+	);
+}
+
 export interface ReferenceInfo {
 	fieldName: string;
 	table: Table<any>;
@@ -176,6 +191,7 @@ export interface ReferenceInfo {
 }
 
 export interface Table<T extends ZodRawShape = ZodRawShape> {
+	readonly [TABLE_MARKER]: true;
 	readonly name: string;
 	readonly schema: ZodObject<T>;
 	readonly indexes: string[][];
@@ -197,6 +213,20 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 
 	/** Get all foreign key references */
 	references(): ReferenceInfo[];
+
+	/**
+	 * Create a partial view of this table with only the specified fields.
+	 *
+	 * Useful for partial selects - the returned table-like object can be
+	 * passed to all(), one(), where(), etc.
+	 *
+	 * @example
+	 * const PostSummary = Posts.pick('id', 'title', 'authorId');
+	 * db.all(PostSummary, Users.pick('id', 'name'))`...`
+	 */
+	pick<K extends keyof z.infer<ZodObject<T>>>(
+		...fields: K[]
+	): Table<Pick<T, K & keyof T>>;
 }
 
 type TableShape<T> = {
@@ -276,10 +306,30 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 
 	const schema = z.object(zodShape as any);
 
+	return createTableObject(name, schema, zodShape, meta, options.indexes ?? []);
+}
+
+/**
+ * Create a Table object with all methods. Shared between table() and pick().
+ */
+function createTableObject(
+	name: string,
+	schema: ZodObject<any>,
+	zodShape: Record<string, ZodTypeAny>,
+	meta: {
+		primary: string | null;
+		unique: string[];
+		indexed: string[];
+		references: ReferenceInfo[];
+		fields: Record<string, FieldDbMeta>;
+	},
+	indexes: string[][],
+): Table<any> {
 	return {
+		[TABLE_MARKER]: true,
 		name,
 		schema,
-		indexes: options.indexes ?? [],
+		indexes,
 		_meta: meta,
 
 		fields(): Record<string, FieldMeta> {
@@ -299,6 +349,49 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 
 		references(): ReferenceInfo[] {
 			return meta.references;
+		},
+
+		pick(...fields: string[]): Table<any> {
+			const fieldSet = new Set(fields);
+
+			// Pick the schema fields
+			const pickObj: Record<string, true> = {};
+			for (const f of fields) {
+				pickObj[f] = true;
+			}
+			const pickedSchema = schema.pick(pickObj);
+
+			// Filter zodShape to only picked fields
+			const pickedZodShape: Record<string, ZodTypeAny> = {};
+			for (const f of fields) {
+				if (f in zodShape) {
+					pickedZodShape[f] = zodShape[f];
+				}
+			}
+
+			// Filter metadata
+			const pickedMeta = {
+				primary: meta.primary && fieldSet.has(meta.primary) ? meta.primary : null,
+				unique: meta.unique.filter((f) => fieldSet.has(f)),
+				indexed: meta.indexed.filter((f) => fieldSet.has(f)),
+				references: meta.references.filter((r) => fieldSet.has(r.fieldName)),
+				fields: Object.fromEntries(
+					Object.entries(meta.fields).filter(([k]) => fieldSet.has(k)),
+				),
+			};
+
+			// Filter indexes to only those with all fields present
+			const pickedIndexes = indexes.filter((idx) =>
+				idx.every((f) => fieldSet.has(f)),
+			);
+
+			return createTableObject(
+				name,
+				pickedSchema,
+				pickedZodShape,
+				pickedMeta,
+				pickedIndexes,
+			);
 		},
 	};
 }

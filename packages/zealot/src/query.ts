@@ -4,7 +4,7 @@
  * Generates SELECT statements with prefixed column aliases for entity normalization.
  */
 
-import type {Table} from "./table.js";
+import {type Table, isTable} from "./table.js";
 
 // ============================================================================
 // Types
@@ -114,8 +114,10 @@ export function buildSelectColumns(
 /**
  * Parse a tagged template into SQL string and params array.
  *
- * Supports SQL fragments - when a value is a SQLFragment, its SQL is
- * injected directly and its params are added to the parameter list.
+ * Supports:
+ * - SQL fragments: their SQL is injected directly, params added to list
+ * - Table objects: interpolated as quoted table names
+ * - Other values: become parameterized placeholders
  *
  * @example
  * parseTemplate`WHERE id = ${userId} AND active = ${true}`
@@ -124,6 +126,10 @@ export function buildSelectColumns(
  * @example
  * parseTemplate`WHERE ${where(Users, { role: "admin" })}`
  * // { sql: "WHERE role = ?", params: ["admin"] }
+ *
+ * @example
+ * parseTemplate`FROM ${Posts} JOIN ${Users} ON ...`
+ * // { sql: 'FROM "posts" JOIN "users" ON ...', params: [] }
  */
 export function parseTemplate(
 	strings: TemplateStringsArray,
@@ -146,6 +152,9 @@ export function parseTemplate(
 					fragmentSQL = fragmentSQL.replace("?", placeholder(params.length, dialect));
 				}
 				sql += fragmentSQL;
+			} else if (isTable(value)) {
+				// Inject quoted table name
+				sql += quoteIdent(value.name, dialect);
 			} else {
 				params.push(value);
 				sql += placeholder(params.length, dialect);

@@ -191,3 +191,81 @@ describe("rawQuery", () => {
 		expect(params).toEqual([]);
 	});
 });
+
+describe("table interpolation", () => {
+	test("interpolates table as quoted name - sqlite", () => {
+		const strings = ["FROM ", " WHERE id = ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [posts, "123"], "sqlite");
+
+		expect(result.sql).toBe('FROM "posts" WHERE id = ?');
+		expect(result.params).toEqual(["123"]);
+	});
+
+	test("interpolates table as quoted name - postgresql", () => {
+		const strings = ["FROM ", " WHERE id = ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [posts, "123"], "postgresql");
+
+		expect(result.sql).toBe('FROM "posts" WHERE id = $1');
+		expect(result.params).toEqual(["123"]);
+	});
+
+	test("interpolates table as quoted name - mysql", () => {
+		const strings = ["FROM ", " WHERE id = ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [posts, "123"], "mysql");
+
+		expect(result.sql).toBe("FROM `posts` WHERE id = ?");
+		expect(result.params).toEqual(["123"]);
+	});
+
+	test("multiple tables in template", () => {
+		const strings = [
+			"FROM ",
+			" JOIN ",
+			" ON ",
+			".id = ",
+			".authorId",
+		] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [posts, users, users, posts], "sqlite");
+
+		expect(result.sql).toBe(
+			'FROM "posts" JOIN "users" ON "users".id = "posts".authorId',
+		);
+		expect(result.params).toEqual([]);
+	});
+
+	test("picked table interpolates with same name", () => {
+		const PostSummary = posts.pick("id", "title");
+		const strings = ["FROM ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [PostSummary], "sqlite");
+
+		expect(result.sql).toBe('FROM "posts"');
+	});
+});
+
+describe("buildSelectColumns with partial tables", () => {
+	test("picks only selected columns", () => {
+		const UserSummary = users.pick("id", "name");
+		const cols = buildSelectColumns([UserSummary], "sqlite");
+
+		expect(cols).toContain('"users"."id" AS "users.id"');
+		expect(cols).toContain('"users"."name" AS "users.name"');
+		expect(cols).not.toContain("email");
+	});
+
+	test("multiple partial tables", () => {
+		const PostSummary = posts.pick("id", "title", "authorId");
+		const UserSummary = users.pick("id", "name");
+		const cols = buildSelectColumns([PostSummary, UserSummary], "sqlite");
+
+		// Post columns
+		expect(cols).toContain('"posts"."id" AS "posts.id"');
+		expect(cols).toContain('"posts"."title" AS "posts.title"');
+		expect(cols).toContain('"posts"."authorId" AS "posts.authorId"');
+		expect(cols).not.toContain('"posts"."body"');
+
+		// User columns
+		expect(cols).toContain('"users"."id" AS "users.id"');
+		expect(cols).toContain('"users"."name" AS "users.name"');
+		expect(cols).not.toContain('"users"."email"');
+	});
+});

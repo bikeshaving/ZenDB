@@ -8,6 +8,7 @@
 export {
 	// Table definition
 	table,
+	isTable,
 	type Table,
 	type TableOptions,
 	type ReferenceInfo,

@@ -1,6 +1,6 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, primary, unique, index} from "./table.js";
+import {table, primary, unique, index, references, isTable} from "./table.js";
 
 describe("table", () => {
 	test("basic table definition", () => {
@@ -193,5 +193,118 @@ describe("type inference", () => {
 		type UserDoc = z.infer<typeof users.schema>;
 		const user: UserDoc = {id: "123", name: "Alice"};
 		expect(user.name).toBe("Alice");
+	});
+});
+
+describe("isTable", () => {
+	test("returns true for table objects", () => {
+		const users = table("users", {
+			id: primary(z.string().uuid()),
+			name: z.string(),
+		});
+
+		expect(isTable(users)).toBe(true);
+	});
+
+	test("returns false for non-table objects", () => {
+		expect(isTable(null)).toBe(false);
+		expect(isTable(undefined)).toBe(false);
+		expect(isTable({})).toBe(false);
+		expect(isTable({name: "users"})).toBe(false);
+		expect(isTable("users")).toBe(false);
+	});
+});
+
+describe("Table.pick()", () => {
+	const Users = table("users", {
+		id: primary(z.string().uuid()),
+		email: unique(z.string().email()),
+		name: z.string(),
+		bio: z.string().optional(),
+	});
+
+	const Posts = table("posts", {
+		id: primary(z.string().uuid()),
+		authorId: references(z.string().uuid(), Users, {as: "author"}),
+		title: z.string(),
+		body: z.string(),
+		published: z.boolean().default(false),
+	});
+
+	test("creates partial table with picked fields", () => {
+		const UserSummary = Users.pick("id", "name");
+
+		expect(UserSummary.name).toBe("users");
+		expect(Object.keys(UserSummary.schema.shape)).toEqual(["id", "name"]);
+	});
+
+	test("partial table is still a table", () => {
+		const UserSummary = Users.pick("id", "name");
+		expect(isTable(UserSummary)).toBe(true);
+	});
+
+	test("preserves primary key if picked", () => {
+		const WithPK = Users.pick("id", "name");
+		expect(WithPK.primaryKey()).toBe("id");
+
+		const WithoutPK = Users.pick("name", "email");
+		expect(WithoutPK.primaryKey()).toBeNull();
+	});
+
+	test("preserves unique fields if picked", () => {
+		const WithUnique = Users.pick("id", "email");
+		expect(WithUnique._meta.unique).toEqual(["email"]);
+
+		const WithoutUnique = Users.pick("id", "name");
+		expect(WithoutUnique._meta.unique).toEqual([]);
+	});
+
+	test("preserves references if FK field picked", () => {
+		const PostWithRef = Posts.pick("id", "title", "authorId");
+		expect(PostWithRef.references().length).toBe(1);
+		expect(PostWithRef.references()[0].fieldName).toBe("authorId");
+		expect(PostWithRef.references()[0].as).toBe("author");
+
+		const PostWithoutRef = Posts.pick("id", "title");
+		expect(PostWithoutRef.references().length).toBe(0);
+	});
+
+	test("schema validates correctly", () => {
+		const UserSummary = Users.pick("id", "name");
+		const validId = "550e8400-e29b-41d4-a716-446655440000";
+
+		// Valid data
+		expect(() =>
+			UserSummary.schema.parse({id: validId, name: "Alice"}),
+		).not.toThrow();
+
+		// Missing required field
+		expect(() => UserSummary.schema.parse({id: validId})).toThrow();
+
+		// Extra field is stripped (Zod default behavior)
+		const result = UserSummary.schema.parse({
+			id: validId,
+			name: "Alice",
+			email: "alice@example.com",
+		});
+		expect(result).toEqual({id: validId, name: "Alice"});
+	});
+
+	test("fields() returns only picked fields", () => {
+		const UserSummary = Users.pick("id", "email");
+		const fields = UserSummary.fields();
+
+		expect(Object.keys(fields)).toEqual(["id", "email"]);
+		expect(fields.id.primaryKey).toBe(true);
+		expect(fields.email.unique).toBe(true);
+		expect(fields.email.type).toBe("email");
+	});
+
+	test("can pick() a picked table", () => {
+		const Step1 = Users.pick("id", "name", "email");
+		const Step2 = Step1.pick("id", "name");
+
+		expect(Object.keys(Step2.schema.shape)).toEqual(["id", "name"]);
+		expect(Step2.primaryKey()).toBe("id");
 	});
 });
