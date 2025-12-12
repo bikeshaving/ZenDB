@@ -34,9 +34,9 @@ describe("where()", () => {
 		expect(fragment.params).toEqual([true, "Hello"]);
 	});
 
-	test("camelCase to snake_case conversion", () => {
+	test("preserves field names as-is", () => {
 		const fragment = where(Posts, {viewCount: 100});
-		expect(fragment.sql).toBe("view_count = ?");
+		expect(fragment.sql).toBe("viewCount = ?");
 		expect(fragment.params).toEqual([100]);
 	});
 
@@ -54,25 +54,25 @@ describe("where()", () => {
 
 	test("$lt operator", () => {
 		const fragment = where(Posts, {viewCount: {$lt: 100}});
-		expect(fragment.sql).toBe("view_count < ?");
+		expect(fragment.sql).toBe("viewCount < ?");
 		expect(fragment.params).toEqual([100]);
 	});
 
 	test("$gt operator", () => {
 		const fragment = where(Posts, {viewCount: {$gt: 50}});
-		expect(fragment.sql).toBe("view_count > ?");
+		expect(fragment.sql).toBe("viewCount > ?");
 		expect(fragment.params).toEqual([50]);
 	});
 
 	test("$lte operator", () => {
 		const fragment = where(Posts, {viewCount: {$lte: 100}});
-		expect(fragment.sql).toBe("view_count <= ?");
+		expect(fragment.sql).toBe("viewCount <= ?");
 		expect(fragment.params).toEqual([100]);
 	});
 
 	test("$gte operator", () => {
 		const fragment = where(Posts, {viewCount: {$gte: 50}});
-		expect(fragment.sql).toBe("view_count >= ?");
+		expect(fragment.sql).toBe("viewCount >= ?");
 		expect(fragment.params).toEqual([50]);
 	});
 
@@ -102,7 +102,7 @@ describe("where()", () => {
 
 	test("multiple operators on same field", () => {
 		const fragment = where(Posts, {viewCount: {$gte: 10, $lte: 100}});
-		expect(fragment.sql).toBe("view_count >= ? AND view_count <= ?");
+		expect(fragment.sql).toBe("viewCount >= ? AND viewCount <= ?");
 		expect(fragment.params).toEqual([10, 100]);
 	});
 
@@ -132,9 +132,9 @@ describe("set()", () => {
 		expect(fragment.params).toEqual(["New Title", true]);
 	});
 
-	test("camelCase to snake_case conversion", () => {
+	test("preserves field names as-is", () => {
 		const fragment = set(Posts, {viewCount: 42});
-		expect(fragment.sql).toBe("view_count = ?");
+		expect(fragment.sql).toBe("viewCount = ?");
 		expect(fragment.params).toEqual([42]);
 	});
 
@@ -158,7 +158,7 @@ describe("set()", () => {
 describe("on()", () => {
 	test("generates FK equality", () => {
 		const fragment = on(Posts, "authorId");
-		expect(fragment.sql).toBe("users.id = posts.author_id");
+		expect(fragment.sql).toBe("users.id = posts.authorId");
 		expect(fragment.params).toEqual([]);
 	});
 
@@ -234,70 +234,3 @@ describe("fragment interpolation in parseTemplate", () => {
 	});
 });
 
-describe("table-level casing configuration", () => {
-	// Tables with camelCase casing
-	const UsersCamel = table(
-		"users",
-		{
-			id: primary(z.string().uuid()),
-			email: z.string().email(),
-			createdAt: z.date(),
-		},
-		{casing: "camelCase"},
-	);
-
-	const PostsCamel = table(
-		"posts",
-		{
-			id: primary(z.string().uuid()),
-			authorId: references(z.string().uuid(), UsersCamel, {as: "author"}),
-			viewCount: z.number().int().default(0),
-		},
-		{casing: "camelCase"},
-	);
-
-	test("default casing is snake_case", () => {
-		// Posts table has default casing
-		expect(Posts._meta.casing).toBe("snake_case");
-	});
-
-	test("table can specify camelCase casing", () => {
-		expect(PostsCamel._meta.casing).toBe("camelCase");
-	});
-
-	describe("where() respects table casing", () => {
-		test("snake_case table converts camelCase fields", () => {
-			const fragment = where(Posts, {viewCount: 100});
-			expect(fragment.sql).toBe("view_count = ?");
-		});
-
-		test("camelCase table keeps field names as-is", () => {
-			const fragment = where(PostsCamel, {viewCount: 100});
-			expect(fragment.sql).toBe("viewCount = ?");
-		});
-	});
-
-	describe("set() respects table casing", () => {
-		test("snake_case table converts camelCase fields", () => {
-			const fragment = set(Posts, {viewCount: 42});
-			expect(fragment.sql).toBe("view_count = ?");
-		});
-
-		test("camelCase table keeps field names as-is", () => {
-			const fragment = set(PostsCamel, {viewCount: 42});
-			expect(fragment.sql).toBe("viewCount = ?");
-		});
-	});
-
-	describe("on() respects table casing", () => {
-		test("snake_case table converts FK column names", () => {
-			const fragment = on(Posts, "authorId");
-			expect(fragment.sql).toBe("users.id = posts.author_id");
-		});
-
-		test("camelCase table keeps FK column names as-is", () => {
-			const fragment = on(PostsCamel, "authorId");
-			expect(fragment.sql).toBe("users.id = posts.authorId");
-		});
-	});
-});

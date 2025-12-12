@@ -11,7 +11,6 @@ export {
 	type Table,
 	type TableOptions,
 	type ReferenceInfo,
-	type ColumnCasing,
 
 	// Field wrappers
 	primary,

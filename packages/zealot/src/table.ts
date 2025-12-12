@@ -163,19 +163,8 @@ export interface FieldMeta {
 // Table
 // ============================================================================
 
-/**
- * Column casing convention for mapping field names to SQL columns.
- *
- * - "snake_case": camelCase -> snake_case (default)
- * - "camelCase": keep as-is
- * - "none": keep as-is (alias for camelCase)
- */
-export type ColumnCasing = "snake_case" | "camelCase" | "none";
-
 export interface TableOptions {
 	indexes?: string[][];
-	/** Column casing convention (default: "snake_case") */
-	casing?: ColumnCasing;
 }
 
 export interface ReferenceInfo {
@@ -198,7 +187,6 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 		indexed: string[];
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
-		casing: ColumnCasing;
 	};
 
 	/** Get field metadata for forms/admin */
@@ -247,7 +235,6 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 		indexed: [] as string[],
 		references: [] as ReferenceInfo[],
 		fields: {} as Record<string, FieldDbMeta>,
-		casing: options.casing ?? ("snake_case" as ColumnCasing),
 	};
 
 	for (const [key, value] of Object.entries(shape)) {

@@ -5,7 +5,7 @@
  * All fragments are composable inside tagged templates.
  */
 
-import type {Table, Infer, ColumnCasing} from "./table.js";
+import type {Table, Infer} from "./table.js";
 import {createFragment, type SQLFragment} from "./query.js";
 
 // ============================================================================
@@ -49,23 +49,6 @@ export type SetValues<T extends Table<any>> = {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/**
- * Convert a field name to snake_case for SQL.
- */
-function toSnakeCase(str: string): string {
-	return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
-/**
- * Convert a field name to a column name based on the casing convention.
- */
-function toColumnName(field: string, casing: ColumnCasing): string {
-	if (casing === "snake_case") {
-		return toSnakeCase(field);
-	}
-	return field; // camelCase or none
-}
 
 /**
  * Check if a value is an operator object.
@@ -148,19 +131,12 @@ function buildCondition(
  * db.all(Posts)`
  *   WHERE ${where(Posts, { published: true, createdAt: { $gt: oneMonthAgo } })}
  * `
- * // Output: published = ? AND created_at > ?
- *
- * @example
- * // With camelCase columns (set via table options)
- * const Posts = table("posts", {...}, { casing: "camelCase" });
- * where(Posts, { createdAt: { $gt: oneMonthAgo } })
- * // Output: createdAt > ?
+ * // Output: published = ? AND createdAt > ?
  */
 export function where<T extends Table<any>>(
-	table: T,
+	_table: T,
 	conditions: WhereConditions<T>,
 ): SQLFragment {
-	const casing = table._meta.casing;
 	const entries = Object.entries(conditions);
 	if (entries.length === 0) {
 		return createFragment("1 = 1", []);
@@ -172,8 +148,7 @@ export function where<T extends Table<any>>(
 	for (const [field, value] of entries) {
 		if (value === undefined) continue;
 
-		const column = toColumnName(field, casing);
-		const condition = buildCondition(column, value);
+		const condition = buildCondition(field, value);
 		parts.push(condition.sql);
 		params.push(...condition.params);
 	}
@@ -194,19 +169,12 @@ export function where<T extends Table<any>>(
  *   SET ${set(Posts, { title: "New Title", updatedAt: new Date() })}
  *   WHERE id = ${id}
  * `
- * // Output: title = ?, updated_at = ?
- *
- * @example
- * // With camelCase columns (set via table options)
- * const Posts = table("posts", {...}, { casing: "camelCase" });
- * set(Posts, { updatedAt: new Date() })
- * // Output: updatedAt = ?
+ * // Output: title = ?, updatedAt = ?
  */
 export function set<T extends Table<any>>(
-	table: T,
+	_table: T,
 	values: SetValues<T>,
 ): SQLFragment {
-	const casing = table._meta.casing;
 	const entries = Object.entries(values);
 	if (entries.length === 0) {
 		throw new Error("set() requires at least one field");
@@ -218,8 +186,7 @@ export function set<T extends Table<any>>(
 	for (const [field, value] of entries) {
 		if (value === undefined) continue;
 
-		const column = toColumnName(field, casing);
-		parts.push(`${column} = ?`);
+		parts.push(`${field} = ?`);
 		params.push(value);
 	}
 
@@ -237,19 +204,12 @@ export function set<T extends Table<any>>(
  * db.all(Posts, Users)`
  *   JOIN users ON ${on(Posts, "authorId")}
  * `
- * // Output: users.id = posts.author_id
- *
- * @example
- * // With camelCase columns (set via table options)
- * const Posts = table("posts", {...}, { casing: "camelCase" });
- * on(Posts, "authorId")
  * // Output: users.id = posts.authorId
  */
 export function on<T extends Table<any>>(
 	table: T,
 	field: keyof Infer<T> & string,
 ): SQLFragment {
-	const casing = table._meta.casing;
 	const refs = table.references();
 	const ref = refs.find((r) => r.fieldName === field);
 
@@ -259,9 +219,6 @@ export function on<T extends Table<any>>(
 		);
 	}
 
-	const fkColumn = toColumnName(field, casing);
 	const refTable = ref.table.name;
-	const refColumn = toColumnName(ref.referencedField, ref.table._meta.casing);
-
-	return createFragment(`${refTable}.${refColumn} = ${table.name}.${fkColumn}`, []);
+	return createFragment(`${refTable}.${ref.referencedField} = ${table.name}.${field}`, []);
 }
