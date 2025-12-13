@@ -32,6 +32,7 @@ bun add @b9g/zealot zod
 ```typescript
 import {z} from "zod";
 import {table, primary, unique, references, generateDDL, Database} from "@b9g/zealot";
+// Note: where(), set(), on(), values() are methods on Table objects, not imports
 
 // 1. Define tables
 const Users = table("users", {
@@ -73,8 +74,8 @@ const user = await db.insert(Users, {
 
 // 4. Query with normalization
 const posts = await db.all(Posts, Users)`
-  JOIN users ON users.id = posts.author_id
-  WHERE published = ${true}
+  JOIN users ON ${Posts.on("authorId")}
+  WHERE ${Posts.where({published: true})}
 `;
 
 posts[0].author.name;              // "Alice" — resolved from JOIN
@@ -120,10 +121,13 @@ const Posts = table("posts", {...}, {
 });
 ```
 
-**Column casing**: By default, camelCase field names convert to snake_case columns. Override per-table:
+**Partial selects** with `pick()`:
 ```typescript
-const Users = table("users", {...}, {casing: "camelCase"});
-// createdAt field → createdAt column (no conversion)
+const UserSummary = Users.pick("id", "name");
+const posts = await db.all(Posts, UserSummary)`
+  JOIN users ON ${Posts.on("authorId")}
+`;
+// posts[0].author has only id and name
 ```
 
 **Table identity**: A table definition is a singleton value. Importing it from multiple modules does not create duplicates — normalization and references rely on identity, not name.
@@ -135,8 +139,8 @@ Tagged templates with automatic parameterization:
 ```typescript
 // Normalized queries — entities with resolved references
 const posts = await db.all(Posts, Users)`
-  JOIN users ON users.id = posts.author_id
-  WHERE published = ${true}
+  JOIN users ON ${Posts.on("authorId")}
+  WHERE ${Posts.where({published: true})}
 `;
 
 // Single entity
@@ -156,31 +160,43 @@ const count = await db.val<number>`SELECT COUNT(*) FROM posts`;
 
 ## Fragment Helpers
 
-Type-safe SQL fragments that compose inside tagged templates:
+Type-safe SQL fragments as methods on Table objects:
 
 ```typescript
-import {where, set, on} from "@b9g/zealot";
-
 // WHERE conditions with operator DSL
 const posts = await db.all(Posts)`
-  WHERE ${where(Posts, {published: true, viewCount: {$gte: 100}})}
+  WHERE ${Posts.where({published: true, viewCount: {$gte: 100}})}
 `;
-// → WHERE published = ? AND view_count >= ?
+// → WHERE "posts"."published" = ? AND "posts"."viewCount" >= ?
 
 // UPDATE with set()
 await db.exec`
   UPDATE posts
-  SET ${set(Posts, {title: "New Title", updatedAt: new Date()})}
+  SET ${Posts.set({title: "New Title", updatedAt: new Date()})}
   WHERE id = ${postId}
 `;
-// → UPDATE posts SET title = ?, updated_at = ? WHERE id = ?
+// → UPDATE posts SET "title" = ?, "updatedAt" = ? WHERE id = ?
 
 // JOIN with on()
 const posts = await db.all(Posts, Users)`
-  JOIN users ON ${on(Posts, "authorId")}
+  JOIN users ON ${Posts.on("authorId")}
   WHERE published = ${true}
 `;
-// → JOIN users ON users.id = posts.author_id
+// → JOIN users ON "users"."id" = "posts"."authorId"
+
+// Bulk INSERT with values()
+await db.exec`
+  INSERT INTO posts (id, title, published)
+  VALUES ${Posts.values(rows, ["id", "title", "published"])}
+`;
+// → VALUES (?, ?, ?), (?, ?, ?)
+
+// Qualified column names with cols
+const posts = await db.all(Posts, Users)`
+  JOIN users ON ${Posts.on("authorId")}
+  ORDER BY ${Posts.cols.createdAt} DESC
+`;
+// → ORDER BY "posts"."createdAt" DESC
 ```
 
 **Operators:** `$eq`, `$neq`, `$lt`, `$gt`, `$lte`, `$gte`, `$like`, `$in`, `$isNull`
@@ -190,19 +206,22 @@ Operators are intentionally limited to simple, single-column predicates. `OR`, s
 ## CRUD Helpers
 
 ```typescript
-// Insert with Zod validation
+// Insert with Zod validation (uses RETURNING to get actual row)
 const user = await db.insert(Users, {
   id: crypto.randomUUID(),
   email: "alice@example.com",
   name: "Alice",
 });
+// Returns actual row from DB, including DB-computed defaults
 
-// Update by primary key
-await db.update(Users, userId, {name: "Bob"});
+// Update by primary key (uses RETURNING)
+const updated = await db.update(Users, userId, {name: "Bob"});
 
 // Delete by primary key
 await db.delete(Users, userId);
 ```
+
+**RETURNING support:** `insert()` and `update()` use `RETURNING *` on SQLite and PostgreSQL to return the actual row from the database, including DB-computed defaults and triggers. MySQL falls back to a separate SELECT.
 
 ## Transactions
 
