@@ -7,8 +7,8 @@
  * Requires: postgres
  */
 
-import type {DatabaseAdapter, DatabaseDriver} from "../database.js";
-import type {SQLDialect} from "../query.js";
+import type {DatabaseAdapter, DatabaseDriver} from "./database.js";
+import type {SQLDialect} from "./query.js";
 import postgres from "postgres";
 
 export type {DatabaseAdapter};

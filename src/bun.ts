@@ -6,8 +6,8 @@
  */
 
 import {SQL} from "bun";
-import type {DatabaseAdapter, DatabaseDriver} from "../database.js";
-import type {SQLDialect} from "../query.js";
+import type {DatabaseAdapter, DatabaseDriver} from "./database.js";
+import type {SQLDialect} from "./query.js";
 
 export type {DatabaseAdapter};
 

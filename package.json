@@ -11,20 +11,20 @@
       "import": "./dist/index.js"
     },
     "./bun": {
-      "types": "./dist/drivers/bun.d.ts",
-      "import": "./dist/drivers/bun.js"
+      "types": "./dist/bun.d.ts",
+      "import": "./dist/bun.js"
     },
     "./sqlite": {
-      "types": "./dist/drivers/sqlite.d.ts",
-      "import": "./dist/drivers/sqlite.js"
+      "types": "./dist/sqlite.d.ts",
+      "import": "./dist/sqlite.js"
     },
     "./postgres": {
-      "types": "./dist/drivers/postgres.d.ts",
-      "import": "./dist/drivers/postgres.js"
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
     },
     "./mysql": {
-      "types": "./dist/drivers/mysql.d.ts",
-      "import": "./dist/drivers/mysql.js"
+      "types": "./dist/mysql.d.ts",
+      "import": "./dist/mysql.js"
     }
   },
   "scripts": {
