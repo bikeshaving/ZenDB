@@ -200,9 +200,16 @@ export class Transaction {
 		const columnList = columns.map((c) => this.#quoteIdent(c)).join(", ");
 		const placeholders = columns.map((_, i) => this.#placeholder(i + 1)).join(", ");
 
+		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
+		if (this.#dialect !== "mysql") {
+			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
+			return table.schema.parse(row) as Infer<T>;
+		}
+
+		// MySQL fallback: INSERT then SELECT
 		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders})`;
 		await this.#driver.run(sql, values);
-
 		return validated as Infer<T>;
 	}
 
@@ -231,16 +238,22 @@ export class Transaction {
 			.join(", ");
 
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(values.length + 1)}`;
-		const whereParams = [id];
 
+		// Use RETURNING for SQLite/PostgreSQL
+		if (this.#dialect !== "mysql") {
+			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
+			const row = await this.#driver.get<Record<string, unknown>>(sql, [...values, id]);
+			if (!row) return null;
+			return table.schema.parse(row) as Infer<T>;
+		}
+
+		// MySQL fallback: UPDATE then SELECT
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		await this.#driver.run(sql, [...values, ...whereParams]);
+		await this.#driver.run(sql, [...values, id]);
 
 		const selectSql = `SELECT * FROM ${tableName} WHERE ${whereClause}`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, whereParams);
-
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
 		if (!row) return null;
-
 		return table.schema.parse(row) as Infer<T>;
 	}
 
@@ -502,6 +515,8 @@ export class Database extends EventTarget {
 	/**
 	 * Insert a new entity.
 	 *
+	 * Uses RETURNING to get the actual inserted row (with DB defaults).
+	 *
 	 * @example
 	 * const user = await db.insert(users, {
 	 *   id: crypto.randomUUID(),
@@ -523,14 +538,23 @@ export class Database extends EventTarget {
 			.map((_, i) => this.#placeholder(i + 1))
 			.join(", ");
 
+		// Use RETURNING for SQLite/PostgreSQL to get actual row (with DB defaults)
+		if (this.#dialect !== "mysql") {
+			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
+			return table.schema.parse(row) as Infer<T>;
+		}
+
+		// MySQL fallback: INSERT then SELECT
 		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders})`;
 		await this.#driver.run(sql, values);
-
 		return validated as Infer<T>;
 	}
 
 	/**
 	 * Update an entity by primary key.
+	 *
+	 * Uses RETURNING to get the updated row in a single query.
 	 *
 	 * @example
 	 * const user = await db.update(users, userId, { name: "Bob" });
@@ -560,19 +584,22 @@ export class Database extends EventTarget {
 			.join(", ");
 
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(values.length + 1)}`;
-		const whereParams = [id];
 
+		// Use RETURNING for SQLite/PostgreSQL
+		if (this.#dialect !== "mysql") {
+			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
+			const row = await this.#driver.get<Record<string, unknown>>(sql, [...values, id]);
+			if (!row) return null;
+			return table.schema.parse(row) as Infer<T>;
+		}
+
+		// MySQL fallback: UPDATE then SELECT
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		await this.#driver.run(sql, [...values, ...whereParams]);
+		await this.#driver.run(sql, [...values, id]);
 
 		const selectSql = `SELECT * FROM ${tableName} WHERE ${whereClause}`;
-		const row = await this.#driver.get<Record<string, unknown>>(
-			selectSql,
-			whereParams,
-		);
-
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
 		if (!row) return null;
-
 		return table.schema.parse(row) as Infer<T>;
 	}
 
