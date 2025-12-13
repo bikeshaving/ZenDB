@@ -383,8 +383,9 @@ const fields = Users.fields();
 //   role: { name: "role", type: "select", options: ["user", "admin"], default: "user" },
 // }
 
-const pk = Users.primaryKey();   // "id"
-const refs = Posts.references(); // [{fieldName: "authorId", table: Users, as: "author"}]
+const pkName = Users._meta.primary;   // "id" (field name)
+const pkFragment = Users.primary;     // ColumnFragment: "users"."id"
+const refs = Posts.references();      // [{fieldName: "authorId", table: Users, as: "author"}]
 ```
 
 ## Performance

@@ -282,8 +282,14 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	/** Get field metadata for forms/admin */
 	fields(): Record<string, FieldMeta>;
 
-	/** Get primary key field name */
-	primaryKey(): string | null;
+	/**
+	 * Fully qualified primary key column as SQL fragment.
+	 *
+	 * @example
+	 * db.all(Posts)`GROUP BY ${Posts.primary}`
+	 * // → GROUP BY "posts"."id"
+	 */
+	readonly primary: ColumnFragment | null;
 
 	/** Get all foreign key references */
 	references(): ReferenceInfo[];
@@ -304,6 +310,26 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * db.all(Posts)`WHERE ${Posts.deleted()}`
 	 */
 	deleted(): SQLFragment;
+
+	/**
+	 * Generate safe IN clause with proper parameterization.
+	 *
+	 * Prevents SQL injection and handles empty arrays correctly.
+	 *
+	 * @throws Error if field doesn't exist in table
+	 *
+	 * @example
+	 * db.all(Posts)`WHERE ${Posts.in("id", postIds)}`
+	 * // Generates: "posts"."id" IN (?, ?, ?)
+	 *
+	 * // Empty array returns FALSE
+	 * db.all(Posts)`WHERE ${Posts.in("id", [])}`
+	 * // Generates: 1 = 0
+	 */
+	in<K extends keyof z.infer<ZodObject<T>>>(
+		field: K,
+		values: unknown[],
+	): SQLFragment;
 
 	/**
 	 * Create a partial view of this table with only the specified fields.
@@ -377,21 +403,21 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	on(field: keyof z.infer<ZodObject<T>> & string): SQLFragment;
 
 	/**
-	 * Generate value tuples fragment for INSERT statements.
+	 * Generate column list and value tuples for INSERT statements.
 	 *
-	 * Each row is validated against the table schema. The columns array
-	 * determines the order of values and must match the SQL column list.
+	 * Columns are inferred from the first row's keys. All rows must have
+	 * the same columns. Each row is validated against the table schema.
 	 *
 	 * @example
 	 * db.exec`
-	 *   INSERT INTO posts (id, title) VALUES ${Posts.values(rows, ["id", "title"])}
+	 *   INSERT INTO posts ${Posts.values([
+	 *     {id: "1", title: "First"},
+	 *     {id: "2", title: "Second"},
+	 *   ])}
 	 * `
-	 * // → (?, ?), (?, ?)
+	 * // → INSERT INTO posts (id, title) VALUES (?, ?), (?, ?)
 	 */
-	values(
-		rows: Partial<z.infer<ZodObject<T>>>[],
-		columns: (keyof z.infer<ZodObject<T>> & string)[],
-	): SQLFragment;
+	values(rows: Partial<z.infer<ZodObject<T>>>[]): SQLFragment;
 }
 
 /**
@@ -471,7 +497,7 @@ export function table<T extends Record<string, ZodTypeAny | FieldWrapper>>(
 				meta.references.push({
 					fieldName: key,
 					table: ref.table,
-					referencedField: ref.field ?? ref.table.primaryKey() ?? "id",
+					referencedField: ref.field ?? ref.table._meta.primary ?? "id",
 					as: ref.as,
 					onDelete: ref.onDelete,
 				});
@@ -625,6 +651,15 @@ function createTableObject(
 ): Table<any> {
 	const cols = createColsProxy(name, zodShape);
 
+	// Create primary key fragment
+	const primary: ColumnFragment | null = meta.primary
+		? {
+				[SQL_FRAGMENT]: true,
+				sql: `${quoteIdentifier(name)}.${quoteIdentifier(meta.primary)}`,
+				params: [],
+			}
+		: null;
+
 	return {
 		[TABLE_MARKER]: true,
 		name,
@@ -632,6 +667,7 @@ function createTableObject(
 		indexes,
 		_meta: meta,
 		cols,
+		primary,
 
 		fields(): Record<string, FieldMeta> {
 			const result: Record<string, FieldMeta> = {};
@@ -642,10 +678,6 @@ function createTableObject(
 			}
 
 			return result;
-		},
-
-		primaryKey(): string | null {
-			return meta.primary;
 		},
 
 		references(): ReferenceInfo[] {
@@ -663,6 +695,26 @@ function createTableObject(
 				`${quoteIdentifier(name)}.${quoteIdentifier(softDeleteField)} IS NOT NULL`,
 				[],
 			);
+		},
+
+		in(field: string, values: unknown[]): SQLFragment {
+			// Validate field exists
+			if (!(field in zodShape)) {
+				throw new Error(
+					`Field "${field}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`,
+				);
+			}
+
+			// Handle empty array - return always-false condition
+			if (values.length === 0) {
+				return createFragment("1 = 0", []);
+			}
+
+			// Generate IN clause with placeholders
+			const placeholders = values.map(() => "?").join(", ");
+			const sql = `${quoteIdentifier(name)}.${quoteIdentifier(field)} IN (${placeholders})`;
+
+			return createFragment(sql, values);
 		},
 
 		pick(...fields: any[]): PartialTable<any> {
@@ -777,11 +829,13 @@ function createTableObject(
 			return createFragment(`${refColumn} = ${fkColumn}`, []);
 		},
 
-		values(rows: Record<string, unknown>[], columns: string[]): SQLFragment {
+		values(rows: Record<string, unknown>[]): SQLFragment {
 			if (rows.length === 0) {
 				throw new Error("values() requires at least one row");
 			}
 
+			// Infer columns from first row
+			const columns = Object.keys(rows[0]);
 			if (columns.length === 0) {
 				throw new Error("values() requires at least one column");
 			}
@@ -795,6 +849,11 @@ function createTableObject(
 				const rowPlaceholders: string[] = [];
 
 				for (const col of columns) {
+					if (!(col in row)) {
+						throw new Error(
+							`All rows must have the same columns. Row is missing column "${col}"`,
+						);
+					}
 					rowPlaceholders.push("?");
 					params.push((validated as Record<string, unknown>)[col]);
 				}
@@ -802,7 +861,12 @@ function createTableObject(
 				tuples.push(`(${rowPlaceholders.join(", ")})`);
 			}
 
-			return createFragment(tuples.join(", "), params);
+			// Include column list and VALUES keyword
+			const columnList = columns.map((c) => quoteIdentifier(c)).join(", ");
+			return createFragment(
+				`(${columnList}) VALUES ${tuples.join(", ")}`,
+				params,
+			);
 		},
 	};
 }
@@ -932,7 +996,7 @@ function extractFieldMeta(
 		meta.reference = {
 			table: dbMeta.reference.table.name,
 			field:
-				dbMeta.reference.field ?? dbMeta.reference.table.primaryKey() ?? "id",
+				dbMeta.reference.field ?? dbMeta.reference.table._meta.primary ?? "id",
 			as: dbMeta.reference.as,
 		};
 	}

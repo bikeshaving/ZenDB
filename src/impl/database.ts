@@ -209,7 +209,7 @@ export class Transaction {
 		// Convenience overload: get by primary key
 		if (id !== undefined) {
 			const table = tables as T;
-			const pk = table.primaryKey();
+			const pk = table._meta.primary;
 			if (!pk) {
 				return Promise.reject(
 					new Error(`Table ${table.name} has no primary key defined`),
@@ -261,7 +261,7 @@ export class Transaction {
 		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
 	): Promise<Infer<T> | null> {
-		const pk = table.primaryKey();
+		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -283,7 +283,7 @@ export class Transaction {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table.primaryKey();
+		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -301,7 +301,7 @@ export class Transaction {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table.primaryKey();
+		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -566,7 +566,7 @@ export class Database extends EventTarget {
 		// Convenience overload: get by primary key
 		if (id !== undefined) {
 			const table = tables as T;
-			const pk = table.primaryKey();
+			const pk = table._meta.primary;
 			if (!pk) {
 				return Promise.reject(
 					new Error(`Table ${table.name} has no primary key defined`),
@@ -656,7 +656,7 @@ export class Database extends EventTarget {
 		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
 	): Promise<Infer<T> | null> {
-		const pk = table.primaryKey();
+		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -710,7 +710,7 @@ export class Database extends EventTarget {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table.primaryKey();
+		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -734,7 +734,7 @@ export class Database extends EventTarget {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table.primaryKey();
+		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}

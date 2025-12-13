@@ -69,7 +69,10 @@ describe("table", () => {
 			email: z.string().email(),
 		});
 
-		expect(users.primaryKey()).toBe("id");
+		expect(users._meta.primary).toBe("id");
+		expect(users.primary).not.toBeNull();
+		expect(users.primary!.sql).toBe('"users"."id"');
+		expect(users.primary!.params).toEqual([]);
 	});
 
 	test("handles optional and nullable fields", () => {
@@ -246,10 +249,12 @@ describe("Table.pick()", () => {
 
 	test("preserves primary key if picked", () => {
 		const WithPK = Users.pick("id", "name");
-		expect(WithPK.primaryKey()).toBe("id");
+		expect(WithPK._meta.primary).toBe("id");
+		expect(WithPK.primary).not.toBeNull();
 
 		const WithoutPK = Users.pick("name", "email");
-		expect(WithoutPK.primaryKey()).toBeNull();
+		expect(WithoutPK._meta.primary).toBeNull();
+		expect(WithoutPK.primary).toBeNull();
 	});
 
 	test("preserves unique fields if picked", () => {
@@ -306,7 +311,7 @@ describe("Table.pick()", () => {
 		const Step2 = Step1.pick("id", "name");
 
 		expect(Object.keys(Step2.schema.shape)).toEqual(["id", "name"]);
-		expect(Step2.primaryKey()).toBe("id");
+		expect(Step2._meta.primary).toBe("id");
 	});
 });
 

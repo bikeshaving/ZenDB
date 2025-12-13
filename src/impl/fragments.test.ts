@@ -177,12 +177,9 @@ describe("Table.values()", () => {
 	const uuid2 = "550e8400-e29b-41d4-a716-446655440002";
 	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
 
-	test("single row with specified columns", () => {
-		const fragment = Posts.values(
-			[{id: uuid1, title: "Hello"}],
-			["id", "title"],
-		);
-		expect(fragment.sql).toBe("(?, ?)");
+	test("single row with inferred columns", () => {
+		const fragment = Posts.values([{id: uuid1, title: "Hello"}]);
+		expect(fragment.sql).toBe('("id", "title") VALUES (?, ?)');
 		expect(fragment.params).toEqual([uuid1, "Hello"]);
 	});
 
@@ -192,8 +189,8 @@ describe("Table.values()", () => {
 			{id: uuid2, title: "Second"},
 			{id: uuid3, title: "Third"},
 		];
-		const fragment = Posts.values(rows, ["id", "title"]);
-		expect(fragment.sql).toBe("(?, ?), (?, ?), (?, ?)");
+		const fragment = Posts.values(rows);
+		expect(fragment.sql).toBe('("id", "title") VALUES (?, ?), (?, ?), (?, ?)');
 		expect(fragment.params).toEqual([
 			uuid1,
 			"First",
@@ -204,35 +201,39 @@ describe("Table.values()", () => {
 		]);
 	});
 
-	test("respects column order", () => {
-		const fragment = Posts.values(
-			[{id: uuid1, title: "Hello"}],
-			["title", "id"],
-		);
-		expect(fragment.sql).toBe("(?, ?)");
+	test("columns inferred from first row keys", () => {
+		const fragment = Posts.values([{title: "Hello", id: uuid1}]);
+		expect(fragment.sql).toBe('("title", "id") VALUES (?, ?)');
+		// Order based on Object.keys() of first row
 		expect(fragment.params).toEqual(["Hello", uuid1]);
 	});
 
 	test("validates rows against schema", () => {
 		// viewCount must be an integer
 		expect(() =>
-			Posts.values([{id: uuid1, viewCount: "not a number"}] as any, [
-				"id",
-				"viewCount",
-			]),
+			Posts.values([{id: uuid1, viewCount: "not a number"}] as any),
 		).toThrow();
 	});
 
 	test("throws on empty rows", () => {
-		expect(() => Posts.values([], ["id", "title"])).toThrow(
+		expect(() => Posts.values([])).toThrow(
 			"values() requires at least one row",
 		);
 	});
 
-	test("throws on empty columns", () => {
-		expect(() => Posts.values([{id: uuid1}], [])).toThrow(
+	test("throws on empty object", () => {
+		expect(() => Posts.values([{}])).toThrow(
 			"values() requires at least one column",
 		);
+	});
+
+	test("throws if rows have mismatched columns", () => {
+		expect(() =>
+			Posts.values([
+				{id: uuid1, title: "First"},
+				{id: uuid2}, // Missing title
+			]),
+		).toThrow("All rows must have the same columns");
 	});
 
 	test("works in INSERT template", () => {
@@ -241,17 +242,17 @@ describe("Table.values()", () => {
 			{id: uuid2, title: "Second", published: false},
 		];
 		const strings = [
-			"INSERT INTO posts (id, title, published) VALUES ",
+			"INSERT INTO posts ",
 			"",
 		] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(
 			strings,
-			[Posts.values(rows, ["id", "title", "published"])],
+			[Posts.values(rows)],
 			"sqlite",
 		);
 
 		expect(sql).toBe(
-			"INSERT INTO posts (id, title, published) VALUES (?, ?, ?), (?, ?, ?)",
+			'INSERT INTO posts ("id", "title", "published") VALUES (?, ?, ?), (?, ?, ?)',
 		);
 		expect(params).toEqual([uuid1, "First", true, uuid2, "Second", false]);
 	});
@@ -262,17 +263,83 @@ describe("Table.values()", () => {
 			{id: uuid2, title: "Second"},
 		];
 		const strings = [
-			"INSERT INTO posts (id, title) VALUES ",
+			"INSERT INTO posts ",
 			"",
 		] as unknown as TemplateStringsArray;
 		const {sql, params} = parseTemplate(
 			strings,
-			[Posts.values(rows, ["id", "title"])],
+			[Posts.values(rows)],
 			"postgresql",
 		);
 
-		expect(sql).toBe("INSERT INTO posts (id, title) VALUES ($1, $2), ($3, $4)");
+		expect(sql).toBe('INSERT INTO posts ("id", "title") VALUES ($1, $2), ($3, $4)');
 		expect(params).toEqual([uuid1, "First", uuid2, "Second"]);
+	});
+});
+
+describe("Table.in()", () => {
+	const uuid1 = "550e8400-e29b-41d4-a716-446655440001";
+	const uuid2 = "550e8400-e29b-41d4-a716-446655440002";
+	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
+
+	test("generates IN clause with single value", () => {
+		const fragment = Posts.in("id", [uuid1]);
+		expect(fragment.sql).toBe('"posts"."id" IN (?)');
+		expect(fragment.params).toEqual([uuid1]);
+	});
+
+	test("generates IN clause with multiple values", () => {
+		const fragment = Posts.in("id", [uuid1, uuid2, uuid3]);
+		expect(fragment.sql).toBe('"posts"."id" IN (?, ?, ?)');
+		expect(fragment.params).toEqual([uuid1, uuid2, uuid3]);
+	});
+
+	test("handles empty array with always-false condition", () => {
+		const fragment = Posts.in("id", []);
+		expect(fragment.sql).toBe("1 = 0");
+		expect(fragment.params).toEqual([]);
+	});
+
+	test("works with different field types", () => {
+		const fragment = Posts.in("title", ["First", "Second"]);
+		expect(fragment.sql).toBe('"posts"."title" IN (?, ?)');
+		expect(fragment.params).toEqual(["First", "Second"]);
+	});
+
+	test("throws on invalid field", () => {
+		expect(() => Posts.in("nonexistent" as any, [uuid1])).toThrow(
+			'Field "nonexistent" does not exist in table "posts"',
+		);
+	});
+
+	test("works in WHERE template", () => {
+		const ids = [uuid1, uuid2];
+		const strings = [
+			"WHERE ",
+			" AND published = ",
+			"",
+		] as unknown as TemplateStringsArray;
+		const {sql, params} = parseTemplate(
+			strings,
+			[Posts.in("id", ids), true],
+			"sqlite",
+		);
+
+		expect(sql).toBe('WHERE "posts"."id" IN (?, ?) AND published = ?');
+		expect(params).toEqual([uuid1, uuid2, true]);
+	});
+
+	test("postgresql placeholders", () => {
+		const ids = [uuid1, uuid2];
+		const strings = ["", ""] as unknown as TemplateStringsArray;
+		const {sql, params} = parseTemplate(
+			strings,
+			[Posts.in("id", ids)],
+			"postgresql",
+		);
+
+		expect(sql).toBe('"posts"."id" IN ($1, $2)');
+		expect(params).toEqual([uuid1, uuid2]);
 	});
 });
 

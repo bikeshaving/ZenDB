@@ -318,7 +318,7 @@ export function getPrimaryKeyValue(
 	entity: Record<string, unknown>,
 	table: Table<any>,
 ): string | null {
-	const pk = table.primaryKey();
+	const pk = table._meta.primary;
 
 	if (pk === null) {
 		return null;
