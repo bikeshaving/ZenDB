@@ -280,15 +280,15 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * Access qualified column names as SQL fragments.
 	 *
 	 * Each property returns a fragment with the fully qualified, quoted column name.
-	 * Useful for ORDER BY, GROUP BY, or disambiguating columns in JOINs.
+	 * Useful for JOINs, ORDER BY, GROUP BY, or disambiguating columns.
 	 *
 	 * @example
 	 * db.all(Posts, Users)`
-	 *   JOIN ${Users} ON ${Posts.on('authorId')}
+	 *   JOIN users ON ${Users.cols.id} = ${Posts.cols.authorId}
 	 *   WHERE ${Posts.cols.published} = ${true}
 	 *   ORDER BY ${Posts.cols.createdAt} DESC
 	 * `
-	 * // → WHERE "posts"."published" = ? ORDER BY "posts"."createdAt" DESC
+	 * // → JOIN users ON "users"."id" = "posts"."authorId" WHERE "posts"."published" = ? ORDER BY "posts"."createdAt" DESC
 	 */
 	readonly cols: {
 		[K in keyof z.infer<ZodObject<T>>]: ColumnFragment;
@@ -329,7 +329,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * db.all(Posts, Users)`
 	 *   JOIN users ON ${Posts.on("authorId")}
 	 * `
-	 * // → "users"."id" = "posts"."authorId"
+	 * // → JOIN users ON "users"."id" = "posts"."authorId"
 	 */
 	on(field: keyof z.infer<ZodObject<T>> & string): SQLFragment;
 

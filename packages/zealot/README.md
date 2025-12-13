@@ -144,7 +144,7 @@ const posts = await db.all(Posts, Users)`
 `;
 
 // Single entity
-const post = await db.one(Posts)`WHERE id = ${postId}`;
+const post = await db.get(Posts)`WHERE id = ${postId}`;
 
 // Raw queries (no normalization)
 const counts = await db.query<{count: number}>`
@@ -304,7 +304,7 @@ const ddl = generateDDL(Posts);
 
 Normalization is driven by table metadata, not query shape — SQL stays unrestricted.
 
-The `all()`/`one()` methods:
+The `all()`/`get()` methods:
 1. Generate SELECT with prefixed column aliases (`posts.id AS "posts.id"`)
 2. Parse rows into per-table entities
 3. Deduplicate by primary key (same PK = same object instance)

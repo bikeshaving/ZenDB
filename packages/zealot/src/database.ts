@@ -178,7 +178,7 @@ export class Transaction {
 		};
 	}
 
-	one<T extends Table<any>[]>(...tables: T): TaggedQuery<Infer<T[0]> | null> {
+	get<T extends Table<any>[]>(...tables: T): TaggedQuery<Infer<T[0]> | null> {
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const query = createQuery(tables, this.#dialect);
 			const {sql, params} = query(strings, ...values);
@@ -492,12 +492,12 @@ export class Database extends EventTarget {
 	 * Query a single entity.
 	 *
 	 * @example
-	 * const post = await db.one(posts, users)`
+	 * const post = await db.get(posts, users)`
 	 *   JOIN users ON users.id = posts.author_id
 	 *   WHERE posts.id = ${postId}
 	 * `;
 	 */
-	one<T extends Table<any>[]>(
+	get<T extends Table<any>[]>(
 		...tables: T
 	): TaggedQuery<Infer<T[0]> | null> {
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {

@@ -90,7 +90,7 @@ describe("Database", () => {
 		});
 	});
 
-	describe("one()", () => {
+	describe("get()", () => {
 		test("returns single entity", async () => {
 			(driver.get as any).mockImplementation(async () => ({
 				"posts.id": POST_ID,
@@ -100,7 +100,7 @@ describe("Database", () => {
 				"posts.published": true,
 			}));
 
-			const post = await db.one(posts)`WHERE "posts"."id" = ${POST_ID}`;
+			const post = await db.get(posts)`WHERE "posts"."id" = ${POST_ID}`;
 
 			expect(post).not.toBeNull();
 			expect(post!.title).toBe("Test Post");
@@ -109,7 +109,7 @@ describe("Database", () => {
 		test("returns null for no match", async () => {
 			(driver.get as any).mockImplementation(async () => null);
 
-			const post = await db.one(posts)`WHERE "posts"."id" = ${"nonexistent"}`;
+			const post = await db.get(posts)`WHERE "posts"."id" = ${"nonexistent"}`;
 
 			expect(post).toBeNull();
 		});
