@@ -1,5 +1,7 @@
 # @b9g/zealot
 
+Zod-first SQL client and standard for TypeScript databases.
+
 A schema-driven SQL client for TypeScript. Replaces ORMs (Prisma, Drizzle ORM), query builders (Kysely), and raw client wrappers with a single SQL-first library built on Zod schemas and event-driven migrations.
 
 **Not an ORM** — a thin wrapper over SQL that uses Zod schemas to define storage, validation and metadata in one place.
@@ -37,33 +39,33 @@ Zealot provides drivers as subpath exports with optional peer dependencies:
 
 ```typescript
 // Bun.SQL (built-in, works with SQLite/PostgreSQL/MySQL)
-import { createDriver } from "@b9g/zealot/bun";
-const { driver, close, dialect } = createDriver("sqlite://app.db");
+import BunDriver from "@b9g/zealot/bun";
+const driver = new BunDriver("sqlite://app.db");
 
 // better-sqlite3 (Node.js SQLite)
-import { createDriver, dialect } from "@b9g/zealot/sqlite";
-const { driver, close } = createDriver("file:app.db");
+import SQLiteDriver from "@b9g/zealot/sqlite";
+const driver = new SQLiteDriver("file:app.db");
 
 // postgres.js
-import { createDriver, dialect } from "@b9g/zealot/postgres";
-const { driver, close } = createDriver("postgresql://localhost/mydb");
+import PostgresDriver from "@b9g/zealot/postgres";
+const driver = new PostgresDriver("postgresql://localhost/mydb");
 
 // mysql2
-import { createDriver, dialect } from "@b9g/zealot/mysql";
-const { driver, close } = createDriver("mysql://localhost/mydb");
+import MySQLDriver from "@b9g/zealot/mysql";
+const driver = new MySQLDriver("mysql://localhost/mydb");
 ```
 
-Each driver exports `createDriver()` and `dialect` (except Bun which auto-detects).
+Each driver is a class with a `dialect` property. Bun auto-detects dialect from the connection URL.
 
 ## Quick Start
 
 ```typescript
 import {z} from "zod";
 import {table, primary, unique, references, generateDDL, Database} from "@b9g/zealot";
-import {createDriver, dialect} from "@b9g/zealot/sqlite"; // or /postgres, /mysql, /bun
-// Note: where(), set(), on(), values() are methods on Table objects, not imports
+import SQLiteDriver from "@b9g/zealot/sqlite"; // or PostgresDriver, MySQLDriver, BunDriver
+// Note: where(), set(), on(), values(), in() are methods on Table objects, not imports
 
-const {driver, close} = createDriver("file:app.db");
+const driver = new SQLiteDriver("file:app.db");
 
 // 1. Define tables
 const Users = table("users", {
@@ -80,7 +82,7 @@ const Posts = table("posts", {
 });
 
 // 2. Create database with migrations
-const db = new Database(driver, {dialect});
+const db = new Database(driver);
 
 db.addEventListener("upgradeneeded", (e) => {
   e.waitUntil((async () => {
@@ -147,6 +149,26 @@ const Posts = table("posts", {
 - `unique(schema)` — Unique constraint
 - `index(schema)` — Create an index
 - `references(schema, table, {as, field?, onDelete?})` — Foreign key with resolved property name
+- `softDelete(schema)` — Soft delete timestamp field
+
+**Soft delete:**
+```typescript
+const Users = table("users", {
+  id: primary(z.string().uuid()),
+  name: z.string(),
+  deletedAt: softDelete(z.date().nullable().default(null)),
+});
+
+// Soft delete a record (sets deletedAt to current timestamp)
+await db.softDelete(Users, userId);
+
+// Hard delete (permanent removal)
+await db.delete(Users, userId);
+
+// Filter out soft-deleted records in queries
+const activeUsers = await db.all(Users)`WHERE NOT ${Users.deleted()}`;
+// → WHERE NOT "users"."deletedAt" IS NOT NULL
+```
 
 **Compound indexes** via table options:
 ```typescript
@@ -226,10 +248,9 @@ const posts = await db.all([Posts, Users])`
 
 // Bulk INSERT with values()
 await db.exec`
-  INSERT INTO posts (id, title, published)
-  VALUES ${Posts.values(rows, ["id", "title", "published"])}
+  INSERT INTO posts ${Posts.values(rows)}
 `;
-// → VALUES (?, ?, ?), (?, ?, ?)
+// → INSERT INTO posts ("id", "title", "published") VALUES (?, ?, ?), (?, ?, ?)
 
 // Qualified column names with cols
 const posts = await db.all([Posts, Users])`
@@ -237,6 +258,15 @@ const posts = await db.all([Posts, Users])`
   ORDER BY ${Posts.cols.createdAt} DESC
 `;
 // → ORDER BY "posts"."createdAt" DESC
+
+// Safe IN clause with in()
+const postIds = ["id1", "id2", "id3"];
+const posts = await db.all(Posts)`WHERE ${Posts.in("id", postIds)}`;
+// → WHERE "posts"."id" IN (?, ?, ?)
+
+// Empty arrays handled correctly
+const posts = await db.all(Posts)`WHERE ${Posts.in("id", [])}`;
+// → WHERE 1 = 0
 ```
 
 **Operators:** `$eq`, `$neq`, `$lt`, `$gt`, `$lte`, `$gte`, `$like`, `$in`, `$isNull`
@@ -259,6 +289,9 @@ const updated = await db.update(Users, userId, {name: "Bob"});
 
 // Delete by primary key
 await db.delete(Users, userId);
+
+// Soft delete (sets deletedAt timestamp, requires softDelete() field)
+await db.softDelete(Users, userId);
 ```
 
 **RETURNING support:** `insert()` and `update()` use `RETURNING *` on SQLite and PostgreSQL to return the actual row from the database, including DB-computed defaults and triggers. MySQL falls back to a separate SELECT.
