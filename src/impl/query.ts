@@ -560,6 +560,7 @@ export function resolveReferences(
 	tables: Table<any>[],
 ): void {
 	// Forward references (belongs-to)
+	// Enumerable: true (for serialization), writable: false (for immutability)
 	for (const table of tables) {
 		const refs = table.references();
 		if (refs.length === 0) continue;
@@ -571,15 +572,16 @@ export function resolveReferences(
 
 			for (const ref of refs) {
 				const foreignKeyValue = entity[ref.fieldName];
-				if (foreignKeyValue === null || foreignKeyValue === undefined) {
-					entity[ref.as] = null;
-					continue;
-				}
+				const refEntity = foreignKeyValue === null || foreignKeyValue === undefined
+					? null
+					: entities.get(entityKey(ref.table.name, String(foreignKeyValue))) ?? null;
 
-				const refKey = entityKey(ref.table.name, String(foreignKeyValue));
-				const refEntity = entities.get(refKey);
-
-				entity[ref.as] = refEntity ?? null;
+				Object.defineProperty(entity, ref.as, {
+					value: refEntity,
+					enumerable: true,
+					writable: false,
+					configurable: true,
+				});
 			}
 		}
 	}
@@ -617,6 +619,7 @@ export function resolveReferences(
 	}
 
 	// Populate reverse relationships using index
+	// Enumerable: false (prevents circular JSON), writable: false (immutable)
 	for (const table of tables) {
 		const refs = table.references();
 		if (refs.length === 0) continue;
@@ -636,7 +639,44 @@ export function resolveReferences(
 				if (pk === null || pk === undefined) continue;
 
 				const pkStr = String(pk);
-				entity[ref.reverseAs] = fkIndex.get(pkStr) ?? [];
+				Object.defineProperty(entity, ref.reverseAs, {
+					value: fkIndex.get(pkStr) ?? [],
+					enumerable: false,
+					writable: false,
+					configurable: true,
+				});
+			}
+		}
+	}
+}
+
+/**
+ * Apply derived properties to entities.
+ *
+ * Derived properties are non-enumerable lazy getters that transform already-fetched data.
+ * They must be pure functions (no I/O, no side effects).
+ */
+export function applyDerivedProperties(
+	entities: EntityMap,
+	tables: Table<any>[],
+): void {
+	for (const table of tables) {
+		const derive = table._meta.derive;
+		if (!derive) continue;
+
+		const prefix = `${table.name}:`;
+
+		for (const [key, entity] of entities) {
+			if (!key.startsWith(prefix)) continue;
+
+			for (const [propName, deriveFn] of Object.entries(derive)) {
+				Object.defineProperty(entity, propName, {
+					get() {
+						return deriveFn(this);
+					},
+					enumerable: false,
+					configurable: true,
+				});
 			}
 		}
 	}
@@ -744,6 +784,7 @@ export function normalize<T>(rows: RawRow[], tables: Table<any>[]): T[] {
 
 	const entities = buildEntityMap(rows, tables);
 	resolveReferences(entities, tables);
+	applyDerivedProperties(entities, tables);
 
 	const mainTable = tables[0];
 	return extractMainEntities<T>(rows, mainTable, entities);

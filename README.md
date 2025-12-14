@@ -177,6 +177,39 @@ const Posts = table("posts", {...}, {
 });
 ```
 
+**Derived properties** for client-side transformations:
+```typescript
+const Posts = table("posts", {
+  id: primary(z.string()),
+  title: z.string(),
+  authorId: references(z.string(), Users, {
+    as: "author",
+    reverseAs: "posts"
+  }),
+}, {
+  derive: {
+    // Pure functions only (no I/O, no side effects)
+    titleUpper: (post) => post.title.toUpperCase(),
+    tags: (post) => post.postTags?.map(pt => pt.tag) ?? [],
+  }
+});
+
+const posts = await db.all([Posts, Users])`
+  JOIN users ON ${Posts.on("authorId")}
+`;
+
+posts[0].titleUpper;  // ✅ "HELLO WORLD"
+Object.keys(posts[0]);  // ["id", "title", "authorId", "author"] (no "titleUpper")
+JSON.stringify(posts[0]);  // ✅ Excludes derived properties (non-enumerable)
+```
+
+Derived properties:
+- Are lazy getters (computed on access, not stored)
+- Are non-enumerable (hidden from `Object.keys()` and `JSON.stringify()`)
+- Must be pure functions (no I/O, no database queries)
+- Only transform data already in the entity
+- Are NOT part of TypeScript type inference
+
 **Partial selects** with `pick()`:
 ```typescript
 const UserSummary = Users.pick("id", "name");
@@ -505,6 +538,50 @@ const tags = results.map(pt => pt.tag);
 const post = results[0].post;
 post.postTags.forEach(pt => console.log(pt.tag.name));
 ```
+
+### Serialization Rules
+
+References and derived properties have specific serialization behavior to prevent circular JSON and distinguish stored vs computed data:
+
+```typescript
+const posts = await db.all([Posts, Users])`
+  JOIN users ON ${Users.on("id")} = ${Posts.cols.authorId}
+`;
+
+const post = posts[0];
+
+// Forward references (belongs-to): enumerable and immutable
+Object.keys(post);  // ["id", "title", "authorId", "author"]
+JSON.stringify(post);  // ✅ Includes "author"
+post.author = {...};  // ❌ TypeError (immutable)
+
+// Reverse references (has-many): non-enumerable and immutable
+const author = post.author;
+Object.keys(author);  // ["id", "name"] (no "posts")
+JSON.stringify(author);  // ✅ Excludes "posts" (prevents circular JSON)
+author.posts;  // ✅ Accessible (just hidden from enumeration)
+author.posts = [];  // ❌ TypeError (immutable)
+
+// Circular references are safe:
+JSON.stringify(post);  // ✅ No error
+// {
+//   "id": "p1",
+//   "title": "Hello",
+//   "authorId": "u1",
+//   "author": {"id": "u1", "name": "Alice"}  // No "posts" = no cycle
+// }
+
+// Explicit inclusion when needed:
+const explicit = {...author, posts: author.posts};
+JSON.stringify(explicit);  // ✅ Now includes posts
+```
+
+**Why this design:**
+- Forward refs are safe to serialize (no cycles by themselves)
+- Reverse refs create cycles when paired with forward refs
+- Non-enumerable reverse refs prevent accidental circular JSON errors
+- Both are immutable to prevent confusion (these are query results, not mutable objects)
+- Explicit spread syntax when you need reverse refs in output
 
 ## Type Inference
 

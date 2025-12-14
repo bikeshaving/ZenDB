@@ -1340,3 +1340,389 @@ describe("reverse relationship validation", () => {
 		).toThrow(/reference property "title".*collides/i);
 	});
 });
+
+// ============================================================================
+// Enumerability and Serialization
+// ============================================================================
+
+describe("enumerability and serialization", () => {
+	const users = table("users", {
+		id: primary(z.string()),
+		name: z.string(),
+	});
+
+	const posts = table("posts", {
+		id: primary(z.string()),
+		title: z.string(),
+		authorId: references(z.string(), users, {
+			as: "author",
+			reverseAs: "posts",
+		}),
+	});
+
+	const tags = table("tags", {
+		id: primary(z.string()),
+		name: z.string(),
+	});
+
+	const postTags = table("postTags", {
+		id: primary(z.string()),
+		postId: references(z.string(), posts, {as: "post"}),
+		tagId: references(z.string(), tags, {as: "tag"}),
+	});
+
+	const postsWithDerived = table("posts", {
+		id: primary(z.string()),
+		title: z.string(),
+		authorId: references(z.string(), users, {
+			as: "author",
+			reverseAs: "posts",
+		}),
+	}, {
+		derive: {
+			titleUpper: (post: any) => post.title.toUpperCase(),
+		},
+	});
+
+	test("forward references are enumerable", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const post = result[0];
+
+		expect(post.author).toEqual({id: "u1", name: "Alice"});
+		expect(Object.keys(post)).toContain("author");
+
+		const descriptors = Object.getOwnPropertyDescriptor(post, "author");
+		expect(descriptors?.enumerable).toBe(true);
+	});
+
+	test("forward references are immutable", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const post = result[0];
+
+		expect(() => {
+			post.author = {id: "u2", name: "Bob"};
+		}).toThrow();
+
+		const descriptors = Object.getOwnPropertyDescriptor(post, "author");
+		expect(descriptors?.writable).toBe(false);
+	});
+
+	test("reverse references are non-enumerable", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "World",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const post = result[0];
+		const author = post.author;
+
+		expect(author.posts).toHaveLength(2);
+		expect(author.posts[0].id).toBe("p1");
+		expect(author.posts[1].id).toBe("p2");
+		expect(Object.keys(author)).not.toContain("posts");
+
+		const descriptors = Object.getOwnPropertyDescriptor(author, "posts");
+		expect(descriptors?.enumerable).toBe(false);
+	});
+
+	test("reverse references are immutable", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const author = result[0].author;
+
+		expect(() => {
+			author.posts = [];
+		}).toThrow();
+
+		const descriptors = Object.getOwnPropertyDescriptor(author, "posts");
+		expect(descriptors?.writable).toBe(false);
+	});
+
+	test("forward refs serialize with JSON.stringify", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const post = result[0];
+
+		const json = JSON.stringify(post);
+		const parsed = JSON.parse(json);
+
+		expect(parsed.author).toEqual({id: "u1", name: "Alice"});
+	});
+
+	test("reverse refs don't serialize with JSON.stringify", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "World",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const author = result[0].author;
+
+		const json = JSON.stringify(author);
+		const parsed = JSON.parse(json);
+
+		expect(parsed.posts).toBeUndefined();
+		expect(parsed).toEqual({id: "u1", name: "Alice"});
+	});
+
+	test("reverse refs prevent circular JSON when paired with forward refs", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const post = result[0];
+
+		// This would cause infinite recursion if reverse refs were enumerable
+		// because post.author.posts[0].author.posts[0]... would be circular
+		expect(() => JSON.stringify(post)).not.toThrow();
+
+		const json = JSON.stringify(post);
+		const parsed = JSON.parse(json);
+
+		// Forward ref is serialized
+		expect(parsed.author).toEqual({id: "u1", name: "Alice"});
+		// But reverse ref is not, preventing the cycle
+		expect(parsed.author.posts).toBeUndefined();
+	});
+
+	test("spread operator includes forward refs but not reverse refs", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const post = result[0];
+		const author = post.author;
+
+		const spreadPost = {...post};
+		const spreadAuthor = {...author};
+
+		// Forward ref is included
+		expect(spreadPost.author).toEqual({id: "u1", name: "Alice"});
+
+		// Reverse ref is not included
+		expect(spreadAuthor.posts).toBeUndefined();
+	});
+
+	test("derived properties are non-enumerable", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "hello",
+				"posts.authorId": "u1",
+			},
+		];
+
+		const result = normalize<any>(rows, [postsWithDerived]);
+		const post = result[0];
+
+		expect(post.titleUpper).toBe("HELLO");
+		expect(Object.keys(post)).not.toContain("titleUpper");
+
+		const descriptors = Object.getOwnPropertyDescriptor(post, "titleUpper");
+		expect(descriptors?.enumerable).toBe(false);
+	});
+
+	test("derived properties are lazy getters", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "hello",
+				"posts.authorId": "u1",
+			},
+		];
+
+		const result = normalize<any>(rows, [postsWithDerived]);
+		const post = result[0];
+
+		const descriptors = Object.getOwnPropertyDescriptor(post, "titleUpper");
+		expect(descriptors?.get).toBeInstanceOf(Function);
+		expect(descriptors?.set).toBeUndefined();
+	});
+
+	test("derived properties don't serialize with JSON.stringify", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "hello",
+				"posts.authorId": "u1",
+			},
+		];
+
+		const result = normalize<any>(rows, [postsWithDerived]);
+		const post = result[0];
+
+		const json = JSON.stringify(post);
+		const parsed = JSON.parse(json);
+
+		expect(parsed.titleUpper).toBeUndefined();
+		expect(parsed.title).toBe("hello");
+	});
+
+	test("derived properties can be explicitly included in objects", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "hello",
+				"posts.authorId": "u1",
+			},
+		];
+
+		const result = normalize<any>(rows, [postsWithDerived]);
+		const post = result[0];
+
+		const explicit = {...post, titleUpper: post.titleUpper};
+
+		expect(explicit.titleUpper).toBe("HELLO");
+		expect(JSON.stringify(explicit)).toContain("HELLO");
+	});
+
+	test("reverse refs can be explicitly included in objects", () => {
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+			{
+				"posts.id": "p2",
+				"posts.title": "World",
+				"posts.authorId": "u1",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [posts, users]);
+		const author = result[0].author;
+
+		const explicit = {...author, posts: author.posts};
+
+		expect(explicit.posts).toHaveLength(2);
+		expect(JSON.stringify(explicit)).toContain("Hello");
+	});
+
+	test("null forward refs are enumerable", () => {
+		const postsNullable = table("posts", {
+			id: primary(z.string()),
+			title: z.string(),
+			authorId: references(z.string().nullable(), users, {
+				as: "author",
+				reverseAs: "posts",
+			}),
+		});
+
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.title": "Hello",
+				"posts.authorId": null,
+			},
+		];
+
+		const result = normalize<any>(rows, [postsNullable, users]);
+		const post = result[0];
+
+		expect(post.author).toBeNull();
+		expect(Object.keys(post)).toContain("author");
+
+		const descriptors = Object.getOwnPropertyDescriptor(post, "author");
+		expect(descriptors?.enumerable).toBe(true);
+	});
+
+	test("empty reverse refs are non-enumerable", () => {
+		const rows = [
+			{
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+		];
+
+		const result = normalize<any>(rows, [users, posts]);
+		const user = result[0];
+
+		expect(user.posts).toEqual([]);
+		expect(Object.keys(user)).not.toContain("posts");
+
+		const descriptors = Object.getOwnPropertyDescriptor(user, "posts");
+		expect(descriptors?.enumerable).toBe(false);
+	});
+});

@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.pick()` for partial table selects
 - Foreign key references with automatic property resolution (forward and reverse)
 - Reverse relationships (`reverseAs`) for has-many associations with indexed resolution
+- Derived properties (`derive` option) for client-side transformations with lazy getters
 
 **Query API:**
 - `db.all()` - Query with entity normalization
@@ -81,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Infer<Table>` - Row type extraction
 - `Insert<Table>` - Insert payload type (optional/default fields excluded)
 - Nominal type branding for `SQLFragment` vs `DDLFragment`
+
+**Serialization:**
+- Forward references (belongs-to) are enumerable and immutable
+- Reverse references (has-many) are non-enumerable and immutable
+- Derived properties are non-enumerable lazy getters
+- Safe JSON.stringify() with no circular reference errors
+- Explicit spread syntax when reverse refs or derived properties needed in output
 
 **Metadata System:**
 - `setDBMeta()` / `getDBMeta()` - Public API for custom field wrappers

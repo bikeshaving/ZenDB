@@ -304,6 +304,30 @@ export interface FieldMeta {
 
 export interface TableOptions {
 	indexes?: string[][];
+	/**
+	 * Derived views - client-side transformations of already-fetched data.
+	 *
+	 * Derived properties:
+	 * - Are NOT stored in the database
+	 * - Are NOT part of TypeScript type inference
+	 * - Are lazy getters (computed on access)
+	 * - Are non-enumerable (don't appear in Object.keys() or JSON.stringify())
+	 * - Must be pure functions (no I/O, no side effects)
+	 * - Only transform data already in the entity
+	 *
+	 * @example
+	 * table("posts", schema, {
+	 *   derive: {
+	 *     tags: (post) => post.postTags?.map(pt => pt.tag) ?? []
+	 *   }
+	 * });
+	 *
+	 * // Usage:
+	 * post.tags  // ✅ Returns array of tags (lazy getter)
+	 * JSON.stringify(post)  // ✅ Doesn't include tags (non-enumerable)
+	 * {...post, tags: post.tags}  // ✅ Explicit when needed
+	 */
+	derive?: Record<string, (entity: any) => any>;
 }
 
 // Symbol to identify Table objects
@@ -402,6 +426,8 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 		softDeleteField: string | null;
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
+		/** Derived property functions (non-enumerable getters on entities) */
+		derive?: Record<string, (entity: any) => any>;
 		/** True if this is a partial table created via pick() */
 		isPartial?: boolean;
 	};
@@ -807,7 +833,7 @@ export function table<T extends Record<string, ZodTypeAny>>(
 
 	const schema = z.object(zodShape as any);
 
-	return createTableObject(name, schema, zodShape, meta, options.indexes ?? []);
+	return createTableObject(name, schema, zodShape, meta, options);
 }
 
 /**
@@ -945,7 +971,7 @@ function createTableObject(
 		references: ReferenceInfo[];
 		fields: Record<string, FieldDbMeta>;
 	},
-	indexes: string[][],
+	options: TableOptions,
 ): Table<any> {
 	const cols = createColsProxy(name, zodShape);
 
@@ -958,12 +984,24 @@ function createTableObject(
 			}
 		: null;
 
-	return {
+	// Validate derived properties don't collide with schema fields
+	if (options.derive) {
+		for (const key of Object.keys(options.derive)) {
+			if (key in zodShape) {
+				throw new TableDefinitionError(
+					`Table "${name}": derived property "${key}" collides with existing schema field. Choose a different name.`,
+					name,
+				);
+			}
+		}
+	}
+
+	const table: Table<any> = {
 		[TABLE_MARKER]: true,
 		name,
 		schema,
-		indexes,
-		_meta: meta,
+		indexes: options.indexes ?? [],
+		_meta: {...meta, derive: options.derive},
 		cols,
 		primary,
 
@@ -1051,7 +1089,7 @@ function createTableObject(
 			};
 
 			// Filter indexes to only those with all fields present
-			const pickedIndexes = indexes.filter((idx) =>
+			const pickedIndexes = (options.indexes ?? []).filter((idx) =>
 				idx.every((f) => fieldSet.has(f)),
 			);
 
@@ -1060,7 +1098,7 @@ function createTableObject(
 				pickedSchema,
 				pickedZodShape,
 				pickedMeta,
-				pickedIndexes,
+				{indexes: pickedIndexes},  // Don't inherit derive - partial tables shouldn't have derived fields
 			) as PartialTable<any>;
 		},
 
@@ -1207,6 +1245,8 @@ function createTableObject(
 			);
 		},
 	};
+
+	return table;
 }
 
 // ============================================================================
