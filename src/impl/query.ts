@@ -68,6 +68,55 @@ export function createFragment(
 }
 
 // ============================================================================
+// DDL Fragments
+// ============================================================================
+
+const DDL_FRAGMENT = Symbol.for("@b9g/zealot:ddl-fragment");
+
+/**
+ * A DDL fragment that gets transformed based on the driver's dialect.
+ *
+ * Unlike SQLFragment which is already SQL text, DDLFragment is an abstract
+ * representation that gets converted to SQL when passed through a template.
+ */
+export interface DDLFragment {
+	readonly [DDL_FRAGMENT]: true;
+	readonly type: "create-table" | "alter-table-add-column" | "create-index" | "update";
+	readonly table: Table<any>;
+	readonly options?: Record<string, any>;
+}
+
+/**
+ * Check if a value is a DDL fragment.
+ */
+export function isDDLFragment(value: unknown): value is DDLFragment {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		DDL_FRAGMENT in value &&
+		(value as any)[DDL_FRAGMENT] === true
+	);
+}
+
+/**
+ * Create a DDL fragment.
+ *
+ * @internal Used by Table.ddl(), ensureColumn(), etc.
+ */
+export function createDDLFragment(
+	type: DDLFragment["type"],
+	table: Table<any>,
+	options?: Record<string, any>,
+): DDLFragment {
+	return {
+		[DDL_FRAGMENT]: true,
+		type,
+		table,
+		options,
+	};
+}
+
+// ============================================================================
 // Query Building
 // ============================================================================
 
@@ -119,6 +168,7 @@ export function buildSelectColumns(
  *
  * Supports:
  * - SQL fragments: their SQL is injected directly, params added to list
+ * - DDL fragments: transformed to SQL based on dialect
  * - Table objects: interpolated as quoted table names
  * - Other values: become parameterized placeholders
  *
@@ -133,6 +183,10 @@ export function buildSelectColumns(
  * @example
  * parseTemplate`FROM ${Posts} JOIN ${Users} ON ...`
  * // { sql: 'FROM "posts" JOIN "users" ON ...', params: [] }
+ *
+ * @example
+ * parseTemplate`${Posts.ddl()}`
+ * // { sql: 'CREATE TABLE IF NOT EXISTS "posts" (...)', params: [] }
  */
 export function parseTemplate(
 	strings: TemplateStringsArray,
@@ -146,7 +200,10 @@ export function parseTemplate(
 		sql += strings[i];
 		if (i < values.length) {
 			const value = values[i];
-			if (isSQLFragment(value)) {
+			if (isDDLFragment(value)) {
+				// Transform DDL fragment to SQL based on dialect
+				sql += transformDDLFragment(value, dialect);
+			} else if (isSQLFragment(value)) {
 				// Inject fragment SQL, replacing ? placeholders with dialect-appropriate ones
 				let fragmentSQL = value.sql;
 				for (const param of value.params) {
@@ -169,6 +226,59 @@ export function parseTemplate(
 	}
 
 	return {sql: sql.trim(), params};
+}
+
+/**
+ * Transform a DDL fragment to SQL based on the dialect.
+ * @internal
+ */
+function transformDDLFragment(fragment: DDLFragment, dialect: SQLDialect): string {
+	// Lazy import to avoid circular dependencies
+	const {generateDDL, generateColumnDDL} = require("./ddl.js");
+	const table = fragment.table;
+	const options = fragment.options || {};
+
+	switch (fragment.type) {
+		case "create-table":
+			return generateDDL(table, {...options, dialect});
+
+		case "alter-table-add-column": {
+			const {fieldName} = options;
+			const zodShape = table.schema.shape;
+			const meta = table._meta;
+
+			const columnDef = generateColumnDDL(
+				fieldName,
+				zodShape[fieldName],
+				meta.fields[fieldName] || {},
+				dialect,
+			);
+
+			const ifNotExists = dialect === "sqlite" || dialect === "postgresql" ? "IF NOT EXISTS " : "";
+			const quote = dialect === "mysql" ? "`" : '"';
+
+			return `ALTER TABLE ${quote}${table.name}${quote} ADD COLUMN ${ifNotExists}${columnDef}`;
+		}
+
+		case "create-index": {
+			const {fields, name: indexName} = options;
+			const finalIndexName = indexName || `idx_${table.name}_${fields.join("_")}`;
+			const quote = dialect === "mysql" ? "`" : '"';
+			const quotedColumns = fields.map((f: string) => `${quote}${f}${quote}`).join(", ");
+
+			return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${table.name}${quote}(${quotedColumns})`;
+		}
+
+		case "update": {
+			const {fromField, toField} = options;
+			const quote = dialect === "mysql" ? "`" : '"';
+
+			return `UPDATE ${quote}${table.name}${quote} SET ${quote}${toField}${quote} = ${quote}${fromField}${quote} WHERE ${quote}${toField}${quote} IS NULL`;
+		}
+
+		default:
+			throw new Error(`Unknown DDL fragment type: ${(fragment as any).type}`);
+	}
 }
 
 /**

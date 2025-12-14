@@ -46,6 +46,8 @@ export {
 	type SQLDialect,
 	// SQL fragments
 	type SQLFragment,
+	// DDL fragments
+	type DDLFragment,
 } from "./impl/query.js";
 
 export {

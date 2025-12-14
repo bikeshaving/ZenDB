@@ -7,7 +7,7 @@
 
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
 import {TableDefinitionError} from "./errors.js";
-import {createFragment, type SQLFragment} from "./query.js";
+import {createFragment, type SQLFragment, createDDLFragment, type DDLFragment} from "./query.js";
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
@@ -512,21 +512,21 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * inspecting the actual database. Does not check if table exists or validate
 	 * against current database state.
 	 *
-	 * **Dialect-dependent**: Output varies by SQL dialect. Specify the target
-	 * dialect explicitly or use the driver's default. The same table definition
-	 * will produce different SQL for SQLite vs PostgreSQL vs MySQL.
+	 * **Dialect-aware**: Returns an abstract DDL fragment that gets transformed
+	 * to dialect-specific SQL when passed through `db.exec()`. The driver's
+	 * dialect is automatically used - no need to specify it manually.
 	 *
-	 * @param options - DDL generation options (dialect, ifNotExists)
-	 * @returns SQL CREATE TABLE statement (dialect-specific)
+	 * @param options - DDL generation options (ifNotExists)
+	 * @returns DDL fragment (transformed to SQL based on driver dialect)
 	 *
 	 * @example
-	 * // In migrations
+	 * // In migrations - dialect automatically detected from driver
 	 * await db.exec`${Posts.ddl()}`;
 	 *
 	 * // With options
-	 * await db.exec`${Posts.ddl({ dialect: "postgresql", ifNotExists: true })}`;
+	 * await db.exec`${Posts.ddl({ ifNotExists: true })}`;
 	 */
-	ddl(options?: {dialect?: "sqlite" | "postgresql" | "mysql"; ifNotExists?: boolean}): string;
+	ddl(options?: {ifNotExists?: boolean}): DDLFragment;
 
 	/**
 	 * Generate idempotent ALTER TABLE statement to add a column if it doesn't exist.
@@ -540,9 +540,11 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *
 	 * **Pure function**: Generates SQL from schema without inspecting the database.
 	 *
+	 * **Dialect-aware**: Returns an abstract DDL fragment that gets transformed
+	 * to dialect-specific SQL when passed through `db.exec()`.
+	 *
 	 * @param fieldName - Name of field from table schema
-	 * @param options - Dialect for SQL generation
-	 * @returns SQL ALTER TABLE ADD COLUMN statement
+	 * @returns DDL fragment (transformed to SQL based on driver dialect)
 	 *
 	 * @example
 	 * // Add new field to schema:
@@ -558,7 +560,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * }
 	 * // → ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0
 	 */
-	ensureColumn(fieldName: keyof z.infer<ZodObject<T>> & string, options?: {dialect?: "sqlite" | "postgresql" | "mysql"}): string;
+	ensureColumn(fieldName: keyof z.infer<ZodObject<T>> & string): DDLFragment;
 
 	/**
 	 * Generate idempotent CREATE INDEX statement.
@@ -576,9 +578,12 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * columns, different uniqueness), behavior is database-dependent (may fail or be
 	 * silently ignored).
 	 *
+	 * **Dialect-aware**: Returns an abstract DDL fragment that gets transformed
+	 * to dialect-specific SQL when passed through `db.exec()`.
+	 *
 	 * @param fields - Array of field names to index
-	 * @param options - Index name and dialect
-	 * @returns SQL CREATE INDEX statement
+	 * @param options - Index name
+	 * @returns DDL fragment (transformed to SQL based on driver dialect)
 	 *
 	 * @example
 	 * if (e.oldVersion < 3) {
@@ -590,7 +595,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * // With explicit name
 	 * await db.exec`${Posts.ensureIndex(["authorId"], { name: "posts_author_idx" })}`;
 	 */
-	ensureIndex(fields: (keyof z.infer<ZodObject<T>> & string)[], options?: {name?: string; dialect?: "sqlite" | "postgresql" | "mysql"}): string;
+	ensureIndex(fields: (keyof z.infer<ZodObject<T>> & string)[], options?: {name?: string}): DDLFragment;
 
 	/**
 	 * Generate UPDATE statement to copy data from one column to another.
@@ -606,6 +611,9 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *
 	 * **Pure function**: Generates SQL from schema without inspecting the database.
 	 *
+	 * **Dialect-aware**: Returns an abstract DDL fragment that gets transformed
+	 * to dialect-specific SQL when passed through `db.exec()`.
+	 *
 	 * Useful for safe column renames in migrations:
 	 * 1. Add new column to schema
 	 * 2. copyColumn() to migrate data
@@ -613,7 +621,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *
 	 * @param fromField - Source column name (may not exist in current schema)
 	 * @param toField - Destination field from table schema
-	 * @returns SQL UPDATE statement
+	 * @returns DDL fragment (transformed to SQL based on driver dialect)
 	 *
 	 * @example
 	 * // Schema now has emailAddress instead of email
@@ -629,7 +637,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * }
 	 * // → UPDATE users SET emailAddress = email WHERE emailAddress IS NULL
 	 */
-	copyColumn(fromField: string, toField: keyof z.infer<ZodObject<T>> & string): string;
+	copyColumn(fromField: string, toField: keyof z.infer<ZodObject<T>> & string): DDLFragment;
 
 	/**
 	 * Generate column list and value tuples for INSERT statements.
@@ -1066,15 +1074,11 @@ function createTableObject(
 			return createFragment(`${refColumn} = ${fkColumn}`, []);
 		},
 
-		ddl(options?: {dialect?: "sqlite" | "postgresql" | "mysql"; ifNotExists?: boolean}): string {
-			// Dynamic import to avoid circular dependency (ddl.ts imports Table from table.ts)
-			const {generateDDL} = require("./ddl.js");
-			return generateDDL(this as Table<any>, options);
+		ddl(options?: {ifNotExists?: boolean}): DDLFragment {
+			return createDDLFragment("create-table", this as Table<any>, options);
 		},
 
-		ensureColumn(fieldName: string, options?: {dialect?: "sqlite" | "postgresql" | "mysql"}): string {
-			const {dialect = "sqlite"} = options || {};
-
+		ensureColumn(fieldName: string): DDLFragment {
 			// Validate field exists in schema
 			if (!(fieldName in zodShape)) {
 				throw new Error(
@@ -1082,20 +1086,10 @@ function createTableObject(
 				);
 			}
 
-			// Use ddl.ts to generate the column definition
-			const {generateColumnDDL} = require("./ddl.js");
-			const columnDef = generateColumnDDL(fieldName, zodShape[fieldName], meta.fields[fieldName] || {}, dialect);
-
-			// SQLite and PostgreSQL support IF NOT EXISTS
-			const ifNotExists = dialect === "sqlite" || dialect === "postgresql" ? "IF NOT EXISTS " : "";
-			const quote = dialect === "mysql" ? "`" : '"';
-
-			return `ALTER TABLE ${quote}${name}${quote} ADD COLUMN ${ifNotExists}${columnDef}`;
+			return createDDLFragment("alter-table-add-column", this as Table<any>, {fieldName});
 		},
 
-		ensureIndex(fields: string[], options?: {name?: string; dialect?: "sqlite" | "postgresql" | "mysql"}): string {
-			const {dialect = "sqlite", name: indexName} = options || {};
-
+		ensureIndex(fields: string[], options?: {name?: string}): DDLFragment {
 			// Validate all fields exist
 			for (const field of fields) {
 				if (!(field in zodShape)) {
@@ -1105,15 +1099,10 @@ function createTableObject(
 				}
 			}
 
-			// Generate index name if not provided
-			const finalIndexName = indexName || `idx_${name}_${fields.join("_")}`;
-			const quote = dialect === "mysql" ? "`" : '"';
-			const quotedColumns = fields.map(f => `${quote}${f}${quote}`).join(", ");
-
-			return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${name}${quote}(${quotedColumns})`;
+			return createDDLFragment("create-index", this as Table<any>, {...options, fields});
 		},
 
-		copyColumn(fromField: string, toField: string): string {
+		copyColumn(fromField: string, toField: string): DDLFragment {
 			// Validate toField exists in schema
 			if (!(toField in zodShape)) {
 				throw new Error(
@@ -1122,8 +1111,7 @@ function createTableObject(
 			}
 
 			// Note: fromField might not exist in current schema (it's the old column)
-			// Generate UPDATE with WHERE IS NULL for idempotency
-			return `UPDATE ${quoteIdentifier(name)} SET ${quoteIdentifier(toField)} = ${quoteIdentifier(fromField)} WHERE ${quoteIdentifier(toField)} IS NULL`;
+			return createDDLFragment("update", this as Table<any>, {fromField, toField});
 		},
 
 		values(rows: Record<string, unknown>[]): SQLFragment {
