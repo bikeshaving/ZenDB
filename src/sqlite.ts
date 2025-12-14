@@ -8,6 +8,7 @@
  */
 
 import type {Driver} from "./zealot.js";
+import {ConstraintViolationError} from "./zealot.js";
 import Database from "better-sqlite3";
 
 /**
@@ -42,24 +43,62 @@ export default class SQLiteDriver implements Driver {
 		this.#db.pragma("journal_mode = WAL");
 	}
 
+	/**
+	 * Convert SQLite errors to Zealot errors.
+	 */
+	#handleError(error: unknown): never {
+		if (error && typeof error === "object" && "code" in error) {
+			const code = (error as any).code;
+			const message = (error as any).message || String(error);
+
+			// SQLite constraint violations
+			if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_UNIQUE") {
+				// Extract constraint name from message if possible
+				// Example: "UNIQUE constraint failed: users.email"
+				const match = message.match(/constraint failed: (\w+\.\w+)/i);
+				const constraintName = match ? match[1] : undefined;
+				throw new ConstraintViolationError(message, constraintName, {
+					cause: error,
+				});
+			}
+		}
+		throw error;
+	}
+
 	async all<T>(sql: string, params: unknown[]): Promise<T[]> {
-		return this.#db.prepare(sql).all(...params) as T[];
+		try {
+			return this.#db.prepare(sql).all(...params) as T[];
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async get<T>(sql: string, params: unknown[]): Promise<T | null> {
-		return (this.#db.prepare(sql).get(...params) as T) ?? null;
+		try {
+			return (this.#db.prepare(sql).get(...params) as T) ?? null;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async run(sql: string, params: unknown[]): Promise<number> {
-		const result = this.#db.prepare(sql).run(...params);
-		return result.changes;
+		try {
+			const result = this.#db.prepare(sql).run(...params);
+			return result.changes;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async val<T>(sql: string, params: unknown[]): Promise<T> {
-		return this.#db
-			.prepare(sql)
-			.pluck()
-			.get(...params) as T;
+		try {
+			return this.#db
+				.prepare(sql)
+				.pluck()
+				.get(...params) as T;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	escapeIdentifier(name: string): string {
@@ -89,15 +128,19 @@ export default class SQLiteDriver implements Driver {
 		tableName: string,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
-		const placeholders = columns.map(() => "?").join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const placeholders = columns.map(() => "?").join(", ");
 
-		// SQLite supports RETURNING
-		const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-		const row = this.#db.prepare(sql).get(...values) as Record<string, unknown>;
-		return row;
+			// SQLite supports RETURNING
+			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+			const row = this.#db.prepare(sql).get(...values) as Record<string, unknown>;
+			return row;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async update(
@@ -106,18 +149,22 @@ export default class SQLiteDriver implements Driver {
 		id: unknown,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown> | null> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const setClause = columns
-			.map((c) => `${this.escapeIdentifier(c)} = ?`)
-			.join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const setClause = columns
+				.map((c) => `${this.escapeIdentifier(c)} = ?`)
+				.join(", ");
 
-		// SQLite supports RETURNING
-		const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ? RETURNING *`;
-		const row = this.#db.prepare(sql).get(...values, id) as
-			| Record<string, unknown>
-			| undefined;
-		return row ?? null;
+			// SQLite supports RETURNING
+			const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ? RETURNING *`;
+			const row = this.#db.prepare(sql).get(...values, id) as
+				| Record<string, unknown>
+				| undefined;
+			return row ?? null;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {

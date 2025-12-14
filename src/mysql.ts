@@ -8,6 +8,7 @@
  */
 
 import type {Driver} from "./zealot.js";
+import {ConstraintViolationError} from "./zealot.js";
 import mysql from "mysql2/promise";
 
 /**
@@ -54,27 +55,64 @@ export default class MySQLDriver implements Driver {
 		});
 	}
 
+	/**
+	 * Convert MySQL errors to Zealot errors.
+	 */
+	#handleError(error: unknown): never {
+		if (error && typeof error === "object" && "code" in error) {
+			const code = (error as any).code;
+			const message = (error as any).message || String(error);
+
+			// MySQL constraint violations
+			// ER_DUP_ENTRY = duplicate key/unique constraint
+			// ER_NO_REFERENCED_ROW_2 = foreign key constraint (insert)
+			// ER_ROW_IS_REFERENCED_2 = foreign key constraint (delete)
+			if (code === "ER_DUP_ENTRY" || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
+				throw new ConstraintViolationError(message, undefined, {
+					cause: error,
+				});
+			}
+		}
+		throw error;
+	}
+
 	async all<T>(sql: string, params: unknown[]): Promise<T[]> {
-		const [rows] = await this.#pool.execute(sql, params);
-		return rows as T[];
+		try {
+			const [rows] = await this.#pool.execute(sql, params);
+			return rows as T[];
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async get<T>(sql: string, params: unknown[]): Promise<T | null> {
-		const [rows] = await this.#pool.execute(sql, params);
-		return ((rows as unknown[])[0] as T) ?? null;
+		try {
+			const [rows] = await this.#pool.execute(sql, params);
+			return ((rows as unknown[])[0] as T) ?? null;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async run(sql: string, params: unknown[]): Promise<number> {
-		const [result] = await this.#pool.execute(sql, params);
-		return (result as mysql.ResultSetHeader).affectedRows ?? 0;
+		try {
+			const [result] = await this.#pool.execute(sql, params);
+			return (result as mysql.ResultSetHeader).affectedRows ?? 0;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async val<T>(sql: string, params: unknown[]): Promise<T> {
-		const [rows] = await this.#pool.execute(sql, params);
-		const row = (rows as unknown[])[0];
-		if (!row) return null as T;
-		const values = Object.values(row as object);
-		return values[0] as T;
+		try {
+			const [rows] = await this.#pool.execute(sql, params);
+			const row = (rows as unknown[])[0];
+			if (!row) return null as T;
+			const values = Object.values(row as object);
+			return values[0] as T;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	escapeIdentifier(name: string): string {
@@ -106,19 +144,23 @@ export default class MySQLDriver implements Driver {
 		tableName: string,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
-		const placeholders = columns.map(() => "?").join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const placeholders = columns.map(() => "?").join(", ");
 
-		// MySQL doesn't support RETURNING - need to INSERT then SELECT
-		const insertSql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
-		await this.#pool.execute(insertSql, values);
+			// MySQL doesn't support RETURNING - need to INSERT then SELECT
+			const insertSql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
+			await this.#pool.execute(insertSql, values);
 
-		// Get the inserted row using LAST_INSERT_ID() if there's an auto-increment
-		// For now, just return the data as-is (caller should handle defaults)
-		// TODO: This is a limitation - MySQL doesn't give us DB defaults easily
-		return data;
+			// Get the inserted row using LAST_INSERT_ID() if there's an auto-increment
+			// For now, just return the data as-is (caller should handle defaults)
+			// TODO: This is a limitation - MySQL doesn't give us DB defaults easily
+			return data;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async update(
@@ -127,25 +169,29 @@ export default class MySQLDriver implements Driver {
 		id: unknown,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown> | null> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const setClause = columns
-			.map((c) => `${this.escapeIdentifier(c)} = ?`)
-			.join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const setClause = columns
+				.map((c) => `${this.escapeIdentifier(c)} = ?`)
+				.join(", ");
 
-		// MySQL doesn't support RETURNING - need to UPDATE then SELECT
-		const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-		const [result] = await this.#pool.execute(updateSql, [...values, id]);
+			// MySQL doesn't support RETURNING - need to UPDATE then SELECT
+			const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+			const [result] = await this.#pool.execute(updateSql, [...values, id]);
 
-		// Check if row was updated
-		if ((result as mysql.ResultSetHeader).affectedRows === 0) {
-			return null;
+			// Check if row was updated
+			if ((result as mysql.ResultSetHeader).affectedRows === 0) {
+				return null;
+			}
+
+			// SELECT the updated row
+			const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+			const [rows] = await this.#pool.execute(selectSql, [id]);
+			return (rows as unknown[])[0] as Record<string, unknown>;
+		} catch (error) {
+			this.#handleError(error);
 		}
-
-		// SELECT the updated row
-		const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-		const [rows] = await this.#pool.execute(selectSql, [id]);
-		return (rows as unknown[])[0] as Record<string, unknown>;
 	}
 
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {

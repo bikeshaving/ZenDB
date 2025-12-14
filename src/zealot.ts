@@ -21,6 +21,10 @@ export {
 	references,
 	softDelete,
 
+	// Custom field helpers
+	setDBMeta,
+	getDBMeta,
+
 	// Field metadata
 	type FieldMeta,
 	type FieldType,
@@ -36,13 +40,6 @@ export {
 	type WhereConditions,
 	type SetValues,
 } from "./impl/table.js";
-
-export {
-	// DDL generation
-	generateDDL,
-	ddl,
-	type DDLOptions,
-} from "./impl/ddl.js";
 
 export {
 	// SQL dialect

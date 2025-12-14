@@ -194,6 +194,40 @@ function quoteIdent(name: string, dialect: SQLDialect): string {
 }
 
 /**
+ * Generate a single column definition for ALTER TABLE ADD COLUMN.
+ * @internal Used by Table.ensureColumn()
+ */
+export function generateColumnDDL(
+	fieldName: string,
+	zodType: z.ZodType,
+	fieldMeta: Record<string, any>,
+	dialect: SQLDialect = "sqlite",
+): string {
+	const {isOptional, isNullable, hasDefault} = unwrapType(zodType);
+	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(zodType, dialect);
+
+	let def = `${quoteIdent(fieldName, dialect)} ${sqlType}`;
+
+	const nullable = isOptional || isNullable || hasDefault;
+	if (!nullable) {
+		def += " NOT NULL";
+	}
+
+	if (sqlDefault !== undefined) {
+		def += ` DEFAULT ${sqlDefault}`;
+	}
+
+	// Primary key handled at table level for ALTER TABLE
+	// SQLite doesn't allow adding PRIMARY KEY via ALTER TABLE anyway
+
+	if (fieldMeta.unique === true) {
+		def += " UNIQUE";
+	}
+
+	return def;
+}
+
+/**
  * Generate CREATE TABLE DDL from a table definition.
  */
 export function generateDDL<T extends Table<any>>(

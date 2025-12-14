@@ -8,6 +8,7 @@
  */
 
 import type {Driver} from "./zealot.js";
+import {ConstraintViolationError} from "./zealot.js";
 import postgres from "postgres";
 
 /**
@@ -53,27 +54,66 @@ export default class PostgresDriver implements Driver {
 		});
 	}
 
+	/**
+	 * Convert PostgreSQL errors to Zealot errors.
+	 */
+	#handleError(error: unknown): never {
+		if (error && typeof error === "object" && "code" in error) {
+			const code = (error as any).code;
+			const message = (error as any).message || String(error);
+			const constraint = (error as any).constraint_name;
+
+			// PostgreSQL constraint violations
+			// 23505 = unique_violation
+			// 23503 = foreign_key_violation
+			// 23514 = check_violation
+			// 23502 = not_null_violation
+			if (code === "23505" || code === "23503" || code === "23514" || code === "23502") {
+				throw new ConstraintViolationError(message, constraint, {
+					cause: error,
+				});
+			}
+		}
+		throw error;
+	}
+
 	async all<T>(query: string, params: unknown[]): Promise<T[]> {
-		const result = await this.#sql.unsafe<T[]>(query, params as any[]);
-		return result;
+		try {
+			const result = await this.#sql.unsafe<T[]>(query, params as any[]);
+			return result;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async get<T>(query: string, params: unknown[]): Promise<T | null> {
-		const result = await this.#sql.unsafe<T[]>(query, params as any[]);
-		return result[0] ?? null;
+		try {
+			const result = await this.#sql.unsafe<T[]>(query, params as any[]);
+			return result[0] ?? null;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async run(query: string, params: unknown[]): Promise<number> {
-		const result = await this.#sql.unsafe(query, params as any[]);
-		return result.count;
+		try {
+			const result = await this.#sql.unsafe(query, params as any[]);
+			return result.count;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async val<T>(query: string, params: unknown[]): Promise<T> {
-		const result = await this.#sql.unsafe(query, params as any[]);
-		const row = result[0];
-		if (!row) return null as T;
-		const values = Object.values(row as object);
-		return values[0] as T;
+		try {
+			const result = await this.#sql.unsafe(query, params as any[]);
+			const row = result[0];
+			if (!row) return null as T;
+			const values = Object.values(row as object);
+			return values[0] as T;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	escapeIdentifier(name: string): string {
@@ -104,15 +144,19 @@ export default class PostgresDriver implements Driver {
 		tableName: string,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
-		const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
 
-		// PostgreSQL supports RETURNING
-		const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-		const result = await this.#sql.unsafe(sql, values as any[]);
-		return result[0] as Record<string, unknown>;
+			// PostgreSQL supports RETURNING
+			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+			const result = await this.#sql.unsafe(sql, values as any[]);
+			return result[0] as Record<string, unknown>;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async update(
@@ -121,16 +165,20 @@ export default class PostgresDriver implements Driver {
 		id: unknown,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown> | null> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const setClause = columns
-			.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
-			.join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const setClause = columns
+				.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
+				.join(", ");
 
-		// PostgreSQL supports RETURNING
-		const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
-		const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
-		return result[0] ?? null;
+			// PostgreSQL supports RETURNING
+			const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
+			const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
+			return result[0] ?? null;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {

@@ -61,9 +61,9 @@ Each driver is a class with a `dialect` property. Bun auto-detects dialect from 
 
 ```typescript
 import {z} from "zod";
-import {table, primary, unique, references, generateDDL, Database} from "@b9g/zealot";
+import {table, primary, unique, references, Database} from "@b9g/zealot";
 import SQLiteDriver from "@b9g/zealot/sqlite"; // or PostgresDriver, MySQLDriver, BunDriver
-// Note: where(), set(), on(), values(), in() are methods on Table objects, not imports
+// Note: where(), set(), on(), values(), in(), ddl() are methods on Table objects, not imports
 
 const driver = new SQLiteDriver("file:app.db");
 
@@ -87,8 +87,8 @@ const db = new Database(driver);
 db.addEventListener("upgradeneeded", (e) => {
   e.waitUntil((async () => {
     if (e.oldVersion < 1) {
-      await db.exec`${generateDDL(Users)}`;
-      await db.exec`${generateDDL(Posts)}`;
+      await db.exec`${Users.ddl()}`;
+      await db.exec`${Posts.ddl()}`;
     }
     if (e.oldVersion < 2) {
       await db.exec`ALTER TABLE users ADD COLUMN avatar TEXT`;
@@ -319,16 +319,19 @@ IndexedDB-style event-based migrations:
 db.addEventListener("upgradeneeded", (e) => {
   e.waitUntil((async () => {
     if (e.oldVersion < 1) {
-      await db.exec`${generateDDL(Users)}`;
-      await db.exec`${generateDDL(Posts)}`;
+      await db.exec`${Users.ddl()}`;
+      await db.exec`${Posts.ddl()}`;
     }
     if (e.oldVersion < 2) {
-      await db.exec`ALTER TABLE users ADD COLUMN avatar TEXT`;
+      await db.exec`${Posts.ensureColumn("views")}`;
+    }
+    if (e.oldVersion < 3) {
+      await db.exec`${Posts.ensureIndex(["authorId", "createdAt"])}`;
     }
   })());
 });
 
-await db.open(2); // Opens at version 2, fires upgradeneeded if needed
+await db.open(3); // Opens at version 3, fires upgradeneeded if needed
 ```
 
 **Migration rules:**
@@ -339,14 +342,64 @@ await db.open(2); // Opens at version 2, fires upgradeneeded if needed
 
 **Why EventTarget?** Web standard pattern (like IndexedDB's `onupgradeneeded`). Third-party code can subscribe to lifecycle events without changing constructor signatures, enabling plugins for logging, tracing, and instrumentation.
 
+### Safe Migration Helpers
+
+Zealot provides idempotent helpers that encourage safe, additive-only migrations:
+
+```typescript
+// Add a new column (reads from schema)
+const Posts = table("posts", {
+  id: primary(z.string()),
+  title: z.string(),
+  views: z.number().default(0), // NEW - add to schema
+});
+
+if (e.oldVersion < 2) {
+  await db.exec`${Posts.ensureColumn("views")}`;
+}
+// → ALTER TABLE "posts" ADD COLUMN IF NOT EXISTS "views" REAL DEFAULT 0
+
+// Add an index
+if (e.oldVersion < 3) {
+  await db.exec`${Posts.ensureIndex(["authorId", "createdAt"])}`;
+}
+// → CREATE INDEX IF NOT EXISTS "idx_posts_authorId_createdAt" ON "posts"("authorId", "createdAt")
+
+// Safe column rename (additive, non-destructive)
+const Users = table("users", {
+  emailAddress: z.string().email(), // renamed from "email"
+});
+
+if (e.oldVersion < 4) {
+  await db.exec`${Users.ensureColumn("emailAddress")}`;
+  await db.exec`${Users.copyColumn("email", "emailAddress")}`;
+  // Keep old "email" column for backwards compat
+  // Drop it in a later migration if needed (manual SQL)
+}
+// → UPDATE "users" SET "emailAddress" = "email" WHERE "emailAddress" IS NULL
+```
+
+**Helper methods:**
+- `table.ensureColumn(fieldName, options?)` - Idempotent ALTER TABLE ADD COLUMN
+- `table.ensureIndex(fields, options?)` - Idempotent CREATE INDEX
+- `table.copyColumn(from, to)` - Copy data between columns (for safe renames)
+
+All helpers read from your table schema (single source of truth) and are safe to run multiple times (idempotent).
+
+**Destructive operations** (DROP COLUMN, etc.) are not provided - write raw SQL if truly needed:
+```typescript
+// Manual destructive operation
+if (e.oldVersion < 5) {
+  await db.exec`ALTER TABLE users DROP COLUMN deprecated_field`;
+}
+```
+
 ## DDL Generation
 
 Generate CREATE TABLE from Zod schemas:
 
 ```typescript
-import {generateDDL} from "@b9g/zealot";
-
-const ddl = generateDDL(Users, {dialect: "postgresql"});
+const ddl = Users.ddl({ dialect: "postgresql" });
 // CREATE TABLE IF NOT EXISTS "users" (
 //   "id" TEXT NOT NULL PRIMARY KEY,
 //   "email" TEXT NOT NULL UNIQUE,
@@ -359,7 +412,7 @@ const ddl = generateDDL(Users, {dialect: "postgresql"});
 Foreign key constraints are generated automatically:
 
 ```typescript
-const ddl = generateDDL(Posts);
+const ddl = Posts.ddl();
 // FOREIGN KEY ("author_id") REFERENCES "users"("id") ON DELETE CASCADE
 ```
 

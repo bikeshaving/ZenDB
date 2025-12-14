@@ -7,6 +7,7 @@
 
 import {SQL} from "bun";
 import type {Driver, SQLDialect} from "./zealot.js";
+import {ConstraintViolationError} from "./zealot.js";
 
 /**
  * Detect SQL dialect from URL.
@@ -55,30 +56,84 @@ export default class BunDriver implements Driver {
 		this.#sql = new SQL(url, options as any);
 	}
 
+	/**
+	 * Convert database errors to Zealot errors.
+	 */
+	#handleError(error: unknown): never {
+		if (error && typeof error === "object" && "code" in error) {
+			const code = (error as any).code;
+			const message = (error as any).message || String(error);
+			const constraint = (error as any).constraint_name;
+
+			// Handle constraint violations based on dialect
+			if (this.dialect === "sqlite") {
+				// SQLite errors
+				if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_UNIQUE") {
+					const match = message.match(/constraint failed: (\w+\.\w+)/i);
+					const constraintName = match ? match[1] : undefined;
+					throw new ConstraintViolationError(message, constraintName, {
+						cause: error,
+					});
+				}
+			} else if (this.dialect === "postgresql") {
+				// PostgreSQL errors (23xxx = integrity constraint violation)
+				if (code === "23505" || code === "23503" || code === "23514" || code === "23502") {
+					throw new ConstraintViolationError(message, constraint, {
+						cause: error,
+					});
+				}
+			} else if (this.dialect === "mysql") {
+				// MySQL errors
+				if (code === "ER_DUP_ENTRY" || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
+					throw new ConstraintViolationError(message, undefined, {
+						cause: error,
+					});
+				}
+			}
+		}
+		throw error;
+	}
+
 	async all<T>(query: string, params: unknown[]): Promise<T[]> {
-		const result = await this.#sql.unsafe(query, params as any[]);
-		return result as T[];
+		try {
+			const result = await this.#sql.unsafe(query, params as any[]);
+			return result as T[];
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async get<T>(query: string, params: unknown[]): Promise<T | null> {
-		const result = await this.#sql.unsafe(query, params as any[]);
-		return (result[0] as T) ?? null;
+		try {
+			const result = await this.#sql.unsafe(query, params as any[]);
+			return (result[0] as T) ?? null;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async run(query: string, params: unknown[]): Promise<number> {
-		const result = await this.#sql.unsafe(query, params as any[]);
-		// Bun.SQL: .count for postgres/sqlite, .affectedRows for mysql
-		return (
-			(result as any).count ?? (result as any).affectedRows ?? result.length
-		);
+		try {
+			const result = await this.#sql.unsafe(query, params as any[]);
+			// Bun.SQL: .count for postgres/sqlite, .affectedRows for mysql
+			return (
+				(result as any).count ?? (result as any).affectedRows ?? result.length
+			);
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	async val<T>(query: string, params: unknown[]): Promise<T> {
-		const result = await this.#sql.unsafe(query, params as any[]);
-		if (result.length === 0) return null as T;
-		const row = result[0] as Record<string, unknown>;
-		const firstKey = Object.keys(row)[0];
-		return row[firstKey] as T;
+		try {
+			const result = await this.#sql.unsafe(query, params as any[]);
+			if (result.length === 0) return null as T;
+			const row = result[0] as Record<string, unknown>;
+			const firstKey = Object.keys(row)[0];
+			return row[firstKey] as T;
+		} catch (error) {
+			this.#handleError(error);
+		}
 	}
 
 	escapeIdentifier(name: string): string {
@@ -112,28 +167,32 @@ export default class BunDriver implements Driver {
 		tableName: string,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
-		const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
+			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
 
-		if (this.dialect === "mysql") {
-			// MySQL: no RETURNING support
-			const placeholders = columns.map(() => "?").join(", ");
-			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
-			await this.#sql.unsafe(sql, values as any[]);
-			return data;
-		} else if (this.dialect === "postgresql") {
-			// PostgreSQL: use $1, $2, etc. with RETURNING
-			const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-			const result = await this.#sql.unsafe(sql, values as any[]);
-			return result[0] as Record<string, unknown>;
-		} else {
-			// SQLite: use ? with RETURNING
-			const placeholders = columns.map(() => "?").join(", ");
-			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-			const result = await this.#sql.unsafe(sql, values as any[]);
-			return result[0] as Record<string, unknown>;
+			if (this.dialect === "mysql") {
+				// MySQL: no RETURNING support
+				const placeholders = columns.map(() => "?").join(", ");
+				const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
+				await this.#sql.unsafe(sql, values as any[]);
+				return data;
+			} else if (this.dialect === "postgresql") {
+				// PostgreSQL: use $1, $2, etc. with RETURNING
+				const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+				const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+				const result = await this.#sql.unsafe(sql, values as any[]);
+				return result[0] as Record<string, unknown>;
+			} else {
+				// SQLite: use ? with RETURNING
+				const placeholders = columns.map(() => "?").join(", ");
+				const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+				const result = await this.#sql.unsafe(sql, values as any[]);
+				return result[0] as Record<string, unknown>;
+			}
+		} catch (error) {
+			this.#handleError(error);
 		}
 	}
 
@@ -143,44 +202,48 @@ export default class BunDriver implements Driver {
 		id: unknown,
 		data: Record<string, unknown>,
 	): Promise<Record<string, unknown> | null> {
-		const columns = Object.keys(data);
-		const values = Object.values(data);
+		try {
+			const columns = Object.keys(data);
+			const values = Object.values(data);
 
-		if (this.dialect === "mysql") {
-			// MySQL: no RETURNING support
-			const setClause = columns
-				.map((c) => `${this.escapeIdentifier(c)} = ?`)
-				.join(", ");
-			const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-			const result = await this.#sql.unsafe(updateSql, [
-				...values,
-				id,
-			] as any[]);
+			if (this.dialect === "mysql") {
+				// MySQL: no RETURNING support
+				const setClause = columns
+					.map((c) => `${this.escapeIdentifier(c)} = ?`)
+					.join(", ");
+				const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+				const result = await this.#sql.unsafe(updateSql, [
+					...values,
+					id,
+				] as any[]);
 
-			if ((result as any).affectedRows === 0) {
-				return null;
+				if ((result as any).affectedRows === 0) {
+					return null;
+				}
+
+				// SELECT the updated row
+				const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+				const rows = await this.#sql.unsafe(selectSql, [id] as any[]);
+				return rows[0] as Record<string, unknown>;
+			} else if (this.dialect === "postgresql") {
+				// PostgreSQL: use $1, $2, etc. with RETURNING
+				const setClause = columns
+					.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
+					.join(", ");
+				const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
+				const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
+				return result[0] ?? null;
+			} else {
+				// SQLite: use ? with RETURNING
+				const setClause = columns
+					.map((c) => `${this.escapeIdentifier(c)} = ?`)
+					.join(", ");
+				const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ? RETURNING *`;
+				const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
+				return result[0] ?? null;
 			}
-
-			// SELECT the updated row
-			const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
-			const rows = await this.#sql.unsafe(selectSql, [id] as any[]);
-			return rows[0] as Record<string, unknown>;
-		} else if (this.dialect === "postgresql") {
-			// PostgreSQL: use $1, $2, etc. with RETURNING
-			const setClause = columns
-				.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
-				.join(", ");
-			const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
-			const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
-			return result[0] ?? null;
-		} else {
-			// SQLite: use ? with RETURNING
-			const setClause = columns
-				.map((c) => `${this.escapeIdentifier(c)} = ?`)
-				.join(", ");
-			const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ? RETURNING *`;
-			const result = await this.#sql.unsafe(sql, [...values, id] as any[]);
-			return result[0] ?? null;
+		} catch (error) {
+			this.#handleError(error);
 		}
 	}
 

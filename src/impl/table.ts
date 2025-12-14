@@ -78,7 +78,7 @@ const DB_META_NAMESPACE = "db" as const;
 /**
  * Helper to safely get database metadata from a schema.
  */
-function getDbMeta(schema: ZodTypeAny): Record<string, any> {
+export function getDBMeta(schema: ZodTypeAny): Record<string, any> {
 	try {
 		const meta = typeof (schema as any).meta === "function" ? (schema as any).meta() : {};
 		return meta?.[DB_META_NAMESPACE] ?? {};
@@ -91,7 +91,7 @@ function getDbMeta(schema: ZodTypeAny): Record<string, any> {
 /**
  * Helper to set database metadata on a schema, preserving user metadata.
  */
-function setDbMeta<T extends ZodTypeAny>(
+export function setDBMeta<T extends ZodTypeAny>(
 	schema: T,
 	dbMeta: Record<string, any>,
 ): T {
@@ -133,7 +133,7 @@ export interface FieldDbMeta {
  * id: primary(z.string().uuid())
  */
 export function primary<T extends ZodTypeAny>(schema: T): T {
-	return setDbMeta(schema, {primary: true});
+	return setDBMeta(schema, {primary: true});
 }
 
 /**
@@ -143,7 +143,7 @@ export function primary<T extends ZodTypeAny>(schema: T): T {
  * email: unique(z.string().email())
  */
 export function unique<T extends ZodTypeAny>(schema: T): T {
-	return setDbMeta(schema, {unique: true});
+	return setDBMeta(schema, {unique: true});
 }
 
 /**
@@ -153,7 +153,7 @@ export function unique<T extends ZodTypeAny>(schema: T): T {
  * createdAt: index(z.date())
  */
 export function index<T extends ZodTypeAny>(schema: T): T {
-	return setDbMeta(schema, {indexed: true});
+	return setDBMeta(schema, {indexed: true});
 }
 
 /**
@@ -164,7 +164,7 @@ export function index<T extends ZodTypeAny>(schema: T): T {
  * deletedAt: softDelete(z.date().nullable())
  */
 export function softDelete<T extends ZodTypeAny>(schema: T): T {
-	return setDbMeta(schema, {softDelete: true});
+	return setDBMeta(schema, {softDelete: true});
 }
 
 /**
@@ -183,7 +183,7 @@ export function references<T extends ZodTypeAny>(
 		onDelete?: "cascade" | "set null" | "restrict";
 	},
 ): T {
-	return setDbMeta(schema, {
+	return setDBMeta(schema, {
 		reference: {
 			table,
 			field: options.field,
@@ -467,6 +467,93 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	on(field: keyof z.infer<ZodObject<T>> & string): SQLFragment;
 
 	/**
+	 * Generate CREATE TABLE DDL for this table.
+	 *
+	 * @param options - DDL generation options (dialect, ifNotExists)
+	 * @returns SQL CREATE TABLE statement
+	 *
+	 * @example
+	 * // In migrations
+	 * await db.exec`${Posts.ddl()}`;
+	 *
+	 * // With options
+	 * await db.exec`${Posts.ddl({ dialect: "postgresql", ifNotExists: true })}`;
+	 */
+	ddl(options?: {dialect?: "sqlite" | "postgresql" | "mysql"; ifNotExists?: boolean}): string;
+
+	/**
+	 * Generate idempotent ALTER TABLE statement to add a column if it doesn't exist.
+	 * Reads column definition from table schema.
+	 *
+	 * Safe for additive migrations - won't error if column already exists.
+	 *
+	 * @param fieldName - Name of field from table schema
+	 * @param options - Dialect for SQL generation
+	 * @returns SQL ALTER TABLE ADD COLUMN statement
+	 *
+	 * @example
+	 * // Add new field to schema:
+	 * const Posts = table("posts", {
+	 *   id: primary(z.string()),
+	 *   title: z.string(),
+	 *   views: z.number().default(0), // NEW
+	 * });
+	 *
+	 * // In migration:
+	 * if (e.oldVersion < 2) {
+	 *   await db.exec`${Posts.ensureColumn("views")}`;
+	 * }
+	 * // → ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0
+	 */
+	ensureColumn(fieldName: keyof z.infer<ZodObject<T>> & string, options?: {dialect?: "sqlite" | "postgresql" | "mysql"}): string;
+
+	/**
+	 * Generate idempotent CREATE INDEX statement.
+	 *
+	 * Safe for additive migrations - won't error if index already exists.
+	 *
+	 * @param fields - Array of field names to index
+	 * @param options - Index name and dialect
+	 * @returns SQL CREATE INDEX statement
+	 *
+	 * @example
+	 * if (e.oldVersion < 3) {
+	 *   await db.exec`${Posts.ensureIndex(["authorId", "createdAt"])}`;
+	 * }
+	 * // → CREATE INDEX IF NOT EXISTS idx_posts_authorId_createdAt ON posts(authorId, createdAt)
+	 */
+	ensureIndex(fields: (keyof z.infer<ZodObject<T>> & string)[], options?: {name?: string; dialect?: "sqlite" | "postgresql" | "mysql"}): string;
+
+	/**
+	 * Generate UPDATE statement to copy data from one column to another.
+	 * Idempotent - only copies if destination is NULL.
+	 *
+	 * Useful for safe column renames in migrations:
+	 * 1. Add new column to schema
+	 * 2. copyColumn() to migrate data
+	 * 3. Drop old column in future migration (manual)
+	 *
+	 * @param fromField - Source column name (may not exist in current schema)
+	 * @param toField - Destination field from table schema
+	 * @returns SQL UPDATE statement
+	 *
+	 * @example
+	 * // Schema now has emailAddress instead of email
+	 * const Users = table("users", {
+	 *   id: primary(z.string()),
+	 *   emailAddress: z.string().email(), // renamed from "email"
+	 * });
+	 *
+	 * if (e.oldVersion < 4) {
+	 *   await db.exec`${Users.ensureColumn("emailAddress")}`;
+	 *   await db.exec`${Users.copyColumn("email", "emailAddress")}`;
+	 *   // Keep "email" for backwards compat, drop in later migration if needed
+	 * }
+	 * // → UPDATE users SET emailAddress = email WHERE emailAddress IS NULL
+	 */
+	copyColumn(fromField: string, toField: keyof z.infer<ZodObject<T>> & string): string;
+
+	/**
 	 * Generate column list and value tuples for INSERT statements.
 	 *
 	 * Columns are inferred from the first row's keys. All rows must have
@@ -533,7 +620,7 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		zodShape[key] = fieldSchema;
 
 		// Read database metadata from namespaced .meta()
-		const fieldDbMeta = getDbMeta(fieldSchema);
+		const fieldDbMeta = getDBMeta(fieldSchema);
 		const dbMeta: FieldDbMeta = {};
 
 		if (fieldDbMeta.primary) {
@@ -899,6 +986,66 @@ function createTableObject(
 			const fkColumn = qualifiedColumn(name, field);
 
 			return createFragment(`${refColumn} = ${fkColumn}`, []);
+		},
+
+		ddl(options?: {dialect?: "sqlite" | "postgresql" | "mysql"; ifNotExists?: boolean}): string {
+			// Dynamic import to avoid circular dependency (ddl.ts imports Table from table.ts)
+			const {generateDDL} = require("./ddl.js");
+			return generateDDL(this as Table<any>, options);
+		},
+
+		ensureColumn(fieldName: string, options?: {dialect?: "sqlite" | "postgresql" | "mysql"}): string {
+			const {dialect = "sqlite"} = options || {};
+
+			// Validate field exists in schema
+			if (!(fieldName in zodShape)) {
+				throw new Error(
+					`Field "${fieldName}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`
+				);
+			}
+
+			// Use ddl.ts to generate the column definition
+			const {generateColumnDDL} = require("./ddl.js");
+			const columnDef = generateColumnDDL(fieldName, zodShape[fieldName], meta.fields[fieldName] || {}, dialect);
+
+			// SQLite and PostgreSQL support IF NOT EXISTS
+			const ifNotExists = dialect === "sqlite" || dialect === "postgresql" ? "IF NOT EXISTS " : "";
+			const quote = dialect === "mysql" ? "`" : '"';
+
+			return `ALTER TABLE ${quote}${name}${quote} ADD COLUMN ${ifNotExists}${columnDef}`;
+		},
+
+		ensureIndex(fields: string[], options?: {name?: string; dialect?: "sqlite" | "postgresql" | "mysql"}): string {
+			const {dialect = "sqlite", name: indexName} = options || {};
+
+			// Validate all fields exist
+			for (const field of fields) {
+				if (!(field in zodShape)) {
+					throw new Error(
+						`Field "${field}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`
+					);
+				}
+			}
+
+			// Generate index name if not provided
+			const finalIndexName = indexName || `idx_${name}_${fields.join("_")}`;
+			const quote = dialect === "mysql" ? "`" : '"';
+			const quotedColumns = fields.map(f => `${quote}${f}${quote}`).join(", ");
+
+			return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${name}${quote}(${quotedColumns})`;
+		},
+
+		copyColumn(fromField: string, toField: string): string {
+			// Validate toField exists in schema
+			if (!(toField in zodShape)) {
+				throw new Error(
+					`Destination field "${toField}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`
+				);
+			}
+
+			// Note: fromField might not exist in current schema (it's the old column)
+			// Generate UPDATE with WHERE IS NULL for idempotency
+			return `UPDATE ${quoteIdentifier(name)} SET ${quoteIdentifier(toField)} = ${quoteIdentifier(fromField)} WHERE ${quoteIdentifier(toField)} IS NULL`;
 		},
 
 		values(rows: Record<string, unknown>[]): SQLFragment {
