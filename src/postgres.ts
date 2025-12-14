@@ -206,4 +206,14 @@ export default class PostgresDriver implements Driver {
 			await this.#sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK_ID})`;
 		}
 	}
+
+	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+		try {
+			const explainSQL = `EXPLAIN ${query}`;
+			const result = await this.#sql.unsafe<Record<string, unknown>[]>(explainSQL, params as any[]);
+			return result;
+		} catch (error) {
+			this.#handleError(error);
+		}
+	}
 }

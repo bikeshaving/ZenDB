@@ -251,4 +251,14 @@ export default class MySQLDriver implements Driver {
 			await this.#pool.execute(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
 		}
 	}
+
+	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+		try {
+			const explainSQL = `EXPLAIN ${query}`;
+			const [rows] = await this.#pool.execute(explainSQL, params);
+			return rows as Record<string, unknown>[];
+		} catch (error) {
+			this.#handleError(error);
+		}
+	}
 }

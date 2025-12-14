@@ -196,4 +196,13 @@ export default class SQLiteDriver implements Driver {
 			throw error;
 		}
 	}
+
+	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+		try {
+			const explainSQL = `EXPLAIN QUERY PLAN ${query}`;
+			return this.#db.prepare(explainSQL).all(...params) as Record<string, unknown>[];
+		} catch (error) {
+			this.#handleError(error);
+		}
+	}
 }

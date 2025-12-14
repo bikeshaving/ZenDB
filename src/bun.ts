@@ -361,4 +361,16 @@ export default class BunDriver implements Driver {
 			}
 		}
 	}
+
+	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+		try {
+			const explainSQL = this.dialect === "sqlite"
+				? `EXPLAIN QUERY PLAN ${query}`
+				: `EXPLAIN ${query}`;
+			const result = await this.#sql.unsafe(explainSQL, params as any[]);
+			return result as Record<string, unknown>[];
+		} catch (error) {
+			this.#handleError(error);
+		}
+	}
 }

@@ -32,11 +32,14 @@ const SQL_FRAGMENT = Symbol.for("@b9g/zealot:fragment");
  *
  * When interpolated in a tagged template, the SQL is injected directly
  * and params are added to the parameter list.
+ *
+ * **Debugging**: Call `.toString()` to see the SQL with placeholder positions.
  */
 export interface SQLFragment {
 	readonly [SQL_FRAGMENT]: true;
 	readonly sql: string;
 	readonly params: readonly unknown[];
+	toString(): string;
 }
 
 /**
@@ -64,6 +67,9 @@ export function createFragment(
 		[SQL_FRAGMENT]: true,
 		sql,
 		params,
+		toString() {
+			return `SQLFragment { sql: ${JSON.stringify(sql)}, params: ${JSON.stringify(params)} }`;
+		},
 	};
 }
 
@@ -78,12 +84,16 @@ const DDL_FRAGMENT = Symbol.for("@b9g/zealot:ddl-fragment");
  *
  * Unlike SQLFragment which is already SQL text, DDLFragment is an abstract
  * representation that gets converted to SQL when passed through a template.
+ *
+ * **Debugging**: Call `.toString()` to see the fragment type and table name.
+ * The actual SQL is only generated when passed through `db.exec()`.
  */
 export interface DDLFragment {
 	readonly [DDL_FRAGMENT]: true;
 	readonly type: "create-table" | "alter-table-add-column" | "create-index" | "update";
 	readonly table: Table<any>;
 	readonly options?: Record<string, any>;
+	toString(): string;
 }
 
 /**
@@ -117,6 +127,10 @@ export function createDDLFragment(
 		type,
 		table,
 		options,
+		toString() {
+			const optStr = options ? `, options: ${JSON.stringify(options)}` : "";
+			return `DDLFragment { type: "${type}", table: "${table.name}"${optStr} }`;
+		},
 	};
 }
 

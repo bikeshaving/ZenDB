@@ -117,6 +117,19 @@ export interface Driver {
 	 * - SQLite: BEGIN EXCLUSIVE
 	 */
 	withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
+
+	/**
+	 * Run EXPLAIN on a query to see the database's query plan.
+	 *
+	 * Optional — implement using dialect-appropriate EXPLAIN syntax:
+	 * - SQLite: EXPLAIN QUERY PLAN
+	 * - PostgreSQL/MySQL: EXPLAIN
+	 *
+	 * @param query - The SQL query to explain
+	 * @param params - Query parameters
+	 * @returns Array of query plan rows (structure varies by database)
+	 */
+	explain?(query: string, params: unknown[]): Promise<Record<string, unknown>[]>;
 }
 
 // ============================================================================
@@ -370,6 +383,40 @@ export class Transaction {
 	): Promise<T> {
 		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.val<T>(sql, params);
+	}
+
+	// ==========================================================================
+	// Debugging
+	// ==========================================================================
+
+	/**
+	 * Print the generated SQL and parameters without executing.
+	 * Useful for debugging query composition and fragment expansion.
+	 */
+	print(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): {sql: string; params: unknown[]} {
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
+		return {sql, params};
+	}
+
+	/**
+	 * Run EXPLAIN on a query to see the database's query plan.
+	 * Helps optimize queries by showing index usage, join order, etc.
+	 *
+	 * @throws Error if driver doesn't implement explain()
+	 */
+	async explain(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Promise<Record<string, unknown>[]> {
+		if (!this.#driver.explain) {
+			throw new Error(`Driver ${this.#driver.dialect} does not support EXPLAIN`);
+		}
+
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
+		return this.#driver.explain(sql, params);
 	}
 
 	// ==========================================================================
@@ -831,6 +878,69 @@ export class Database extends EventTarget {
 	): Promise<T> {
 		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.val<T>(sql, params);
+	}
+
+	// ==========================================================================
+	// Debugging
+	// ==========================================================================
+
+	/**
+	 * Print the generated SQL and parameters without executing.
+	 * Useful for debugging query composition and fragment expansion.
+	 *
+	 * @returns Object with sql string and params array
+	 *
+	 * @example
+	 * const query = db.print`
+	 *   SELECT * FROM ${Posts}
+	 *   WHERE ${Posts.where({ published: true })}
+	 * `;
+	 * console.log(query.sql);     // SELECT * FROM "posts" WHERE "posts"."published" = $1
+	 * console.log(query.params);  // [true]
+	 *
+	 * @example
+	 * // Inspect DDL generation
+	 * const ddl = db.print`${Posts.ddl()}`;
+	 * console.log(ddl.sql);  // CREATE TABLE IF NOT EXISTS "posts" (...)
+	 */
+	print(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): {sql: string; params: unknown[]} {
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
+		return {sql, params};
+	}
+
+	/**
+	 * Run EXPLAIN on a query to see the database's query plan.
+	 * Helps optimize queries by showing index usage, join order, etc.
+	 *
+	 * **Dialect differences**:
+	 * - SQLite: Uses `EXPLAIN QUERY PLAN`
+	 * - PostgreSQL/MySQL: Uses `EXPLAIN`
+	 *
+	 * @returns Array of query plan rows (structure varies by database)
+	 * @throws Error if driver doesn't implement explain()
+	 *
+	 * @example
+	 * const plan = await db.explain`
+	 *   SELECT * FROM ${Posts}
+	 *   WHERE ${Posts.where({ authorId: userId })}
+	 * `;
+	 * console.log(plan);
+	 * // SQLite: [{ detail: "SEARCH posts USING INDEX idx_posts_authorId (authorId=?)" }]
+	 * // PostgreSQL: [{ "QUERY PLAN": "Index Scan using idx_posts_authorId on posts" }]
+	 */
+	async explain(
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	): Promise<Record<string, unknown>[]> {
+		if (!this.#driver.explain) {
+			throw new Error(`Driver ${this.#driver.dialect} does not support EXPLAIN`);
+		}
+
+		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
+		return this.#driver.explain(sql, params);
 	}
 
 	// ==========================================================================
