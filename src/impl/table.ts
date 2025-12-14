@@ -207,11 +207,32 @@ export function softDelete<T extends ZodTypeAny>(schema: T): T {
 }
 
 /**
- * Define a foreign key reference.
+ * Define a foreign key reference with optional reverse relationship.
+ *
+ * **Forward reference** (`as`): Populates the referenced entity on this table's rows.
+ * **Reverse reference** (`reverseAs`): Populates an array of referencing entities on the target table.
+ *
+ * **Important**: Reverse relationships are runtime materializations only - they are NOT part of
+ * the schema's type inference. They only reflect data already in the query result set.
  *
  * @example
- * authorId: references(z.string().uuid(), users, { as: "author" })
- * authorId: references(z.string().uuid(), users, { field: "id", as: "author" })
+ * // Forward reference only
+ * authorId: references(z.string().uuid(), Users, { as: "author" })
+ *
+ * @example
+ * // With reverse relationship
+ * authorId: references(z.string().uuid(), Users, {
+ *   as: "author",      // post.author = User
+ *   reverseAs: "posts" // user.posts = Post[]
+ * })
+ *
+ * @example
+ * // Specify referenced field explicitly
+ * authorId: references(z.string().uuid(), Users, {
+ *   field: "id",
+ *   as: "author",
+ *   reverseAs: "posts"
+ * })
  */
 export function references<T extends ZodTypeAny>(
 	schema: T,
@@ -219,6 +240,7 @@ export function references<T extends ZodTypeAny>(
 	options: {
 		field?: string;
 		as: string;
+		reverseAs?: string;
 		onDelete?: "cascade" | "set null" | "restrict";
 	},
 ): T {
@@ -227,6 +249,7 @@ export function references<T extends ZodTypeAny>(
 			table,
 			field: options.field,
 			as: options.as,
+			reverseAs: options.reverseAs,
 			onDelete: options.onDelete,
 		},
 	});
@@ -312,6 +335,7 @@ export interface ReferenceInfo {
 	table: Table<any>;
 	referencedField: string;
 	as: string;
+	reverseAs?: string;
 	onDelete?: "cascade" | "set null" | "restrict";
 }
 
@@ -745,11 +769,34 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		}
 		if (fieldDbMeta.reference) {
 			const ref = fieldDbMeta.reference;
+
+			// Validate 'as' doesn't collide with existing fields in THIS table
+			if (ref.as in shape) {
+				throw new TableDefinitionError(
+					`Table "${name}": reference property "${ref.as}" (from field "${key}") collides with existing schema field. Choose a different 'as' name.`,
+					name,
+					key,
+				);
+			}
+
+			// Validate 'reverseAs' doesn't collide with existing fields in TARGET table
+			if (ref.reverseAs) {
+				const targetShape = ref.table.schema.shape;
+				if (ref.reverseAs in targetShape) {
+					throw new TableDefinitionError(
+						`Table "${name}": reverse reference property "${ref.reverseAs}" (from field "${key}") collides with existing field in target table "${ref.table.name}". Choose a different 'reverseAs' name.`,
+						name,
+						key,
+					);
+				}
+			}
+
 			meta.references.push({
 				fieldName: key,
 				table: ref.table,
 				referencedField: ref.field ?? ref.table._meta.primary ?? "id",
 				as: ref.as,
+				reverseAs: ref.reverseAs,
 				onDelete: ref.onDelete,
 			});
 			dbMeta.reference = ref;

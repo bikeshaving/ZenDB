@@ -544,12 +544,22 @@ export function buildEntityMap(
 /**
  * Resolve references for all entities in the map.
  *
- * Walks each table's references() and adds resolved entities as properties.
+ * Resolves both forward references (belongs-to) and reverse references (has-many).
+ *
+ * **Forward references** (`as`): Populates referenced entity as a single object.
+ * **Reverse references** (`reverseAs`): Populates array of referencing entities.
+ *
+ * **Performance**: Uses indexing to avoid O(n²) scans - builds index once per table,
+ * then attaches in O(n).
+ *
+ * **Ordering**: Reverse relationship arrays follow query result order, which is
+ * database-dependent unless you specify ORDER BY in your SQL.
  */
 export function resolveReferences(
 	entities: EntityMap,
 	tables: Table<any>[],
 ): void {
+	// Forward references (belongs-to)
 	for (const table of tables) {
 		const refs = table.references();
 		if (refs.length === 0) continue;
@@ -570,6 +580,63 @@ export function resolveReferences(
 				const refEntity = entities.get(refKey);
 
 				entity[ref.as] = refEntity ?? null;
+			}
+		}
+	}
+
+	// Reverse references (has-many) - indexed to avoid O(n²)
+	// Build index: Map<tableName:fieldName, Map<foreignKeyValue, entity[]>>
+	const reverseIndex = new Map<string, Map<string, any[]>>();
+
+	for (const table of tables) {
+		const refs = table.references();
+		if (refs.length === 0) continue;
+
+		for (const ref of refs) {
+			if (!ref.reverseAs) continue;
+
+			const indexKey = `${table.name}:${ref.fieldName}`;
+			const fkIndex = new Map<string, any[]>();
+
+			const prefix = `${table.name}:`;
+			for (const [key, entity] of entities) {
+				if (!key.startsWith(prefix)) continue;
+
+				const fkValue = entity[ref.fieldName];
+				if (fkValue === null || fkValue === undefined) continue;
+
+				const fkStr = String(fkValue);
+				if (!fkIndex.has(fkStr)) {
+					fkIndex.set(fkStr, []);
+				}
+				fkIndex.get(fkStr)!.push(entity);
+			}
+
+			reverseIndex.set(indexKey, fkIndex);
+		}
+	}
+
+	// Populate reverse relationships using index
+	for (const table of tables) {
+		const refs = table.references();
+		if (refs.length === 0) continue;
+
+		for (const ref of refs) {
+			if (!ref.reverseAs) continue;
+
+			const indexKey = `${table.name}:${ref.fieldName}`;
+			const fkIndex = reverseIndex.get(indexKey);
+			if (!fkIndex) continue;
+
+			const targetPrefix = `${ref.table.name}:`;
+			for (const [key, entity] of entities) {
+				if (!key.startsWith(targetPrefix)) continue;
+
+				const pk = entity[ref.table._meta.primary!];
+				if (pk === null || pk === undefined) continue;
+
+				const pkStr = String(pk);
+				entity[ref.reverseAs] = fkIndex.get(pkStr) ?? [];
 			}
 		}
 	}

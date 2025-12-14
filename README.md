@@ -434,20 +434,76 @@ The `all()`/`get()` methods:
 1. Generate SELECT with prefixed column aliases (`posts.id AS "posts.id"`)
 2. Parse rows into per-table entities
 3. Deduplicate by primary key (same PK = same object instance)
-4. Resolve `references()` to actual entity objects
+4. Resolve `references()` to actual entity objects (forward and reverse)
+
+### Forward References (belongs-to)
 
 ```typescript
-// Input rows from SQL:
-[
-  {"posts.id": "p1", "posts.authorId": "u1", "users.id": "u1", "users.name": "Alice"},
-  {"posts.id": "p2", "posts.authorId": "u1", "users.id": "u1", "users.name": "Alice"},
-]
+const Posts = table("posts", {
+  id: primary(z.string()),
+  authorId: references(z.string(), Users, {as: "author"}),
+  title: z.string(),
+});
 
-// Output after normalization:
-[
-  {id: "p1", authorId: "u1", author: {id: "u1", name: "Alice"}},
-  {id: "p2", authorId: "u1", author: /* same object as above */},
-]
+const posts = await db.all([Posts, Users])`
+  JOIN users ON ${Users.on("id")} = ${Posts.cols.authorId}
+`;
+// posts[0].author = {id: "u1", name: "Alice"}
+```
+
+### Reverse References (has-many)
+
+Use `reverseAs` to populate arrays of referencing entities:
+
+```typescript
+const Posts = table("posts", {
+  id: primary(z.string()),
+  authorId: references(z.string(), Users, {
+    as: "author",
+    reverseAs: "posts" // Populate author.posts = Post[]
+  }),
+  title: z.string(),
+});
+
+const posts = await db.all([Posts, Users])`
+  JOIN users ON ${Users.on("id")} = ${Posts.cols.authorId}
+`;
+// posts[0].author.posts = [{id: "p1", ...}, {id: "p2", ...}]
+```
+
+**Important:** Reverse relationships are runtime-only materializations. They are NOT part of TypeScript type inference and only reflect data in the current query result set. No automatic JOINs, lazy loading, or cascade fetching.
+
+### Many-to-Many
+
+```typescript
+const Posts = table("posts", {
+  id: primary(z.string()),
+  title: z.string(),
+});
+
+const Tags = table("tags", {
+  id: primary(z.string()),
+  name: z.string(),
+});
+
+const PostTags = table("post_tags", {
+  id: primary(z.string()),
+  postId: references(z.string(), Posts, {as: "post", reverseAs: "postTags"}),
+  tagId: references(z.string(), Tags, {as: "tag", reverseAs: "postTags"}),
+});
+
+const results = await db.all([PostTags, Posts, Tags])`
+  JOIN posts ON ${Posts.on("id")} = ${PostTags.cols.postId}
+  JOIN tags ON ${Tags.on("id")} = ${PostTags.cols.tagId}
+  WHERE ${Posts.where({id: postId})}
+`;
+
+// Access through join table:
+const tags = results.map(pt => pt.tag);
+
+// Or access via reverse relationship:
+const post = results[0].post;
+post.postTags.forEach(pt => console.log(pt.tag.name));
 ```
 
 ## Type Inference

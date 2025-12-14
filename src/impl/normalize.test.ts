@@ -631,3 +631,280 @@ describe("type coercion", () => {
 		expect(results[0].author.name).toBe("Alice");
 	});
 });
+
+describe("reverse relationships (has-many)", () => {
+	test("populates reverse relationship array", () => {
+		const authors = table("authors", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const books = table("books", {
+			id: primary(z.string()),
+			authorId: references(z.string(), authors, {
+				as: "author",
+				reverseAs: "books",
+			}),
+			title: z.string(),
+		});
+
+		const rows = [
+			{
+				"books.id": "b1",
+				"books.authorId": "a1",
+				"books.title": "Book One",
+				"authors.id": "a1",
+				"authors.name": "Alice",
+			},
+			{
+				"books.id": "b2",
+				"books.authorId": "a1",
+				"books.title": "Book Two",
+				"authors.id": "a1",
+				"authors.name": "Alice",
+			},
+		];
+
+		const results = normalize<any>(rows, [books, authors]);
+
+		// Forward reference works
+		expect(results[0].author.name).toBe("Alice");
+		expect(results[1].author.name).toBe("Alice");
+		// Same instance
+		expect(results[0].author).toBe(results[1].author);
+
+		// Reverse reference populated
+		const author = results[0].author;
+		expect(author.books).toBeInstanceOf(Array);
+		expect(author.books.length).toBe(2);
+		expect(author.books[0].title).toBe("Book One");
+		expect(author.books[1].title).toBe("Book Two");
+	});
+
+	test("empty array when no referencing entities", () => {
+		const authors = table("authors", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const books = table("books", {
+			id: primary(z.string()),
+			authorId: references(z.string(), authors, {
+				as: "author",
+				reverseAs: "books",
+			}),
+			title: z.string(),
+		});
+
+		const rows = [
+			{
+				"books.id": "b1",
+				"books.authorId": "a1",
+				"books.title": "Book One",
+				"authors.id": "a1",
+				"authors.name": "Alice",
+			},
+			{
+				"authors.id": "a2",
+				"authors.name": "Bob",
+			},
+		];
+
+		const entities = buildEntityMap(rows, [books, authors]);
+		resolveReferences(entities, [books, authors]);
+
+		const alice = entities.get("authors:a1");
+		const bob = entities.get("authors:a2");
+
+		expect(alice).toBeDefined();
+		expect(bob).toBeDefined();
+		expect((alice as any).books.length).toBe(1);
+		expect((bob as any).books.length).toBe(0); // Empty array
+	});
+
+	test("handles null foreign keys", () => {
+		const authors = table("authors", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const books = table("books", {
+			id: primary(z.string()),
+			authorId: references(z.string().nullable(), authors, {
+				as: "author",
+				reverseAs: "books",
+			}),
+			title: z.string(),
+		});
+
+		const rows = [
+			{
+				"books.id": "b1",
+				"books.authorId": "a1",
+				"books.title": "Book One",
+				"authors.id": "a1",
+				"authors.name": "Alice",
+			},
+			{
+				"books.id": "b2",
+				"books.authorId": null,
+				"books.title": "Book Two (anonymous)",
+			},
+		];
+
+		const results = normalize<any>(rows, [books, authors]);
+
+		expect(results[0].author.name).toBe("Alice");
+		expect(results[1].author).toBeNull();
+
+		// Reverse: only b1 appears in alice.books
+		const alice = results[0].author;
+		expect(alice.books.length).toBe(1);
+		expect(alice.books[0].title).toBe("Book One");
+	});
+
+	test("multiple reverse relationships on same table", () => {
+		const users = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const posts = table("posts", {
+			id: primary(z.string()),
+			authorId: references(z.string(), users, {
+				as: "author",
+				reverseAs: "authoredPosts",
+			}),
+			editorId: references(z.string().nullable(), users, {
+				as: "editor",
+				reverseAs: "editedPosts",
+			}),
+			title: z.string(),
+		});
+
+		const rows = [
+			{
+				"posts.id": "p1",
+				"posts.authorId": "u1",
+				"posts.editorId": "u2",
+				"posts.title": "Post One",
+				"users.id": "u1",
+				"users.name": "Alice",
+			},
+			{
+				"posts.id": "p2",
+				"posts.authorId": "u1",
+				"posts.editorId": null,
+				"posts.title": "Post Two",
+			},
+			{
+				"users.id": "u2",
+				"users.name": "Bob",
+			},
+		];
+
+		const entities = buildEntityMap(rows, [posts, users]);
+		resolveReferences(entities, [posts, users]);
+
+		const alice = entities.get("users:u1");
+		const bob = entities.get("users:u2");
+
+		expect((alice as any).authoredPosts.length).toBe(2);
+		expect((alice as any).editedPosts.length).toBe(0);
+
+		expect((bob as any).authoredPosts.length).toBe(0);
+		expect((bob as any).editedPosts.length).toBe(1);
+		expect((bob as any).editedPosts[0].title).toBe("Post One");
+	});
+
+	test("works with many-to-many through join table", () => {
+		const posts = table("posts", {
+			id: primary(z.string()),
+			title: z.string(),
+		});
+
+		const tags = table("tags", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		const postTags = table("post_tags", {
+			id: primary(z.string()), // Add primary key for join table
+			postId: references(z.string(), posts, {as: "post", reverseAs: "postTags"}),
+			tagId: references(z.string(), tags, {as: "tag", reverseAs: "postTags"}),
+		});
+
+		const rows = [
+			{
+				"post_tags.id": "pt1",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t1",
+				"posts.id": "p1",
+				"posts.title": "My Post",
+				"tags.id": "t1",
+				"tags.name": "javascript",
+			},
+			{
+				"post_tags.id": "pt2",
+				"post_tags.postId": "p1",
+				"post_tags.tagId": "t2",
+				"posts.id": "p1",
+				"posts.title": "My Post",
+				"tags.id": "t2",
+				"tags.name": "typescript",
+			},
+		];
+
+		const results = normalize<any>(rows, [postTags, posts, tags]);
+
+		// PostTags have forward refs
+		expect(results[0].post.title).toBe("My Post");
+		expect(results[0].tag.name).toBe("javascript");
+		expect(results[1].tag.name).toBe("typescript");
+
+		// Reverse: post.postTags and tag.postTags
+		const post = results[0].post;
+		const jsTag = results[0].tag;
+		const tsTag = results[1].tag;
+
+		expect(post.postTags.length).toBe(2);
+		expect(jsTag.postTags.length).toBe(1);
+		expect(tsTag.postTags.length).toBe(1);
+	});
+});
+
+describe("reverse relationship validation", () => {
+	test("throws when reverseAs collides with target table field", () => {
+		const users = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		expect(() =>
+			table("posts", {
+				id: primary(z.string()),
+				authorId: references(z.string(), users, {
+					as: "author",
+					reverseAs: "name", // Collides with users.name!
+				}),
+			}),
+		).toThrow(/reverse reference property "name".*collides/i);
+	});
+
+	test("throws when as collides with source table field", () => {
+		const users = table("users", {
+			id: primary(z.string()),
+			name: z.string(),
+		});
+
+		expect(() =>
+			table("posts", {
+				id: primary(z.string()),
+				title: z.string(),
+				authorId: references(z.string(), users, {
+					as: "title", // Collides with posts.title!
+				}),
+			}),
+		).toThrow(/reference property "title".*collides/i);
+	});
+});

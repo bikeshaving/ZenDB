@@ -15,15 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bun.SQL driver with automatic dialect detection
 - Standard Schema v1.0 support for validation library interoperability
 - IndexedDB-style event-driven migrations with forward-only versioning
-- Entity normalization with Apollo-style reference resolution
+- Entity normalization with Apollo-style reference resolution (forward and reverse)
 - Type-safe query fragments with tagged templates
+- Reverse relationships (has-many) with O(n) indexed resolution
 
 **Table Definitions:**
 - `table()` - Define tables from Zod schemas
 - Field wrappers: `primary()`, `unique()`, `index()`, `references()`, `softDelete()`
 - Compound indexes via table options
 - `.pick()` for partial table selects
-- Foreign key references with automatic property resolution
+- Foreign key references with automatic property resolution (forward and reverse)
+- Reverse relationships (`reverseAs`) for has-many associations with indexed resolution
 
 **Query API:**
 - `db.all()` - Query with entity normalization
