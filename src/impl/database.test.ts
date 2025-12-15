@@ -294,6 +294,168 @@ describe("Database", () => {
 
 	});
 
+	describe("read path JSON decoding", () => {
+		test("db.get() by primary key decodes JSON strings", async () => {
+			const Settings = table("settings", {
+				id: z.string().db.primary(),
+				config: z.object({theme: z.string(), fontSize: z.number()}),
+				tags: z.array(z.string()),
+			});
+
+			// Mock driver.get to return JSON strings (as SQLite would store them)
+			(driver.get as any).mockImplementation(async () => ({
+				id: "s1",
+				config: '{"theme":"dark","fontSize":14}',
+				tags: '["admin","premium"]',
+			}));
+
+			const result = await db.get(Settings, "s1");
+
+			expect(result).not.toBeNull();
+			expect(result!.config).toEqual({theme: "dark", fontSize: 14});
+			expect(result!.tags).toEqual(["admin", "premium"]);
+		});
+
+		test("db.all() decodes JSON strings in buildEntityMap", async () => {
+			const Settings = table("settings", {
+				id: z.string().db.primary(),
+				config: z.object({theme: z.string()}),
+				tags: z.array(z.string()),
+			});
+
+			// Mock driver.all to return JSON strings (as SQLite would store them)
+			(driver.all as any).mockImplementation(async () => [
+				{
+					"settings.id": "s1",
+					"settings.config": '{"theme":"dark"}',
+					"settings.tags": '["admin","premium"]',
+				},
+				{
+					"settings.id": "s2",
+					"settings.config": '{"theme":"light"}',
+					"settings.tags": '["user"]',
+				},
+			]);
+
+			const results = await db.all(Settings)`WHERE 1=1`;
+
+			expect(results.length).toBe(2);
+			expect(results[0].config).toEqual({theme: "dark"});
+			expect(results[0].tags).toEqual(["admin", "premium"]);
+			expect(results[1].config).toEqual({theme: "light"});
+			expect(results[1].tags).toEqual(["user"]);
+		});
+
+		test("db.get() with query decodes JSON strings", async () => {
+			const Settings = table("settings", {
+				id: z.string().db.primary(),
+				config: z.object({theme: z.string()}),
+				tags: z.array(z.string()),
+			});
+
+			// Mock driver.get to return JSON strings
+			(driver.get as any).mockImplementation(async () => ({
+				"settings.id": "s1",
+				"settings.config": '{"theme":"dark"}',
+				"settings.tags": '["admin"]',
+			}));
+
+			const result = await db.get(Settings)`WHERE "settings"."id" = ${"s1"}`;
+
+			expect(result).not.toBeNull();
+			expect(result!.config).toEqual({theme: "dark"});
+			expect(result!.tags).toEqual(["admin"]);
+		});
+
+		test("custom decode overrides automatic JSON decoding on read", async () => {
+			const Custom = table("custom", {
+				id: z.string().db.primary(),
+				data: z.array(z.string()).db.encode((arr) => arr.join(",")).db.decode((str: string) => str.split(",")),
+			});
+
+			// Mock driver.get to return CSV string (custom format)
+			(driver.get as any).mockImplementation(async () => ({
+				id: "c1",
+				data: "a,b,c",
+			}));
+
+			const result = await db.get(Custom, "c1");
+
+			expect(result).not.toBeNull();
+			expect(result!.data).toEqual(["a", "b", "c"]);
+		});
+
+		test("nested objects decode correctly", async () => {
+			const Complex = table("complex", {
+				id: z.string().db.primary(),
+				nested: z.object({
+					level1: z.object({
+						level2: z.array(z.object({value: z.number()})),
+					}),
+				}),
+			});
+
+			(driver.get as any).mockImplementation(async () => ({
+				id: "c1",
+				nested: '{"level1":{"level2":[{"value":1},{"value":2}]}}',
+			}));
+
+			const result = await db.get(Complex, "c1");
+
+			expect(result).not.toBeNull();
+			expect(result!.nested.level1.level2).toEqual([{value: 1}, {value: 2}]);
+		});
+
+		test("nullable object fields decode correctly", async () => {
+			const NullableSettings = table("nullable_settings", {
+				id: z.string().db.primary(),
+				config: z.object({theme: z.string()}).nullable(),
+			});
+
+			// Test with JSON string
+			(driver.get as any).mockImplementation(async () => ({
+				id: "s1",
+				config: '{"theme":"dark"}',
+			}));
+
+			let result = await db.get(NullableSettings, "s1");
+			expect(result!.config).toEqual({theme: "dark"});
+
+			// Test with null
+			(driver.get as any).mockImplementation(async () => ({
+				id: "s2",
+				config: null,
+			}));
+
+			result = await db.get(NullableSettings, "s2");
+			expect(result!.config).toBeNull();
+		});
+
+		test("optional object fields decode correctly", async () => {
+			const OptionalSettings = table("optional_settings", {
+				id: z.string().db.primary(),
+				config: z.object({theme: z.string()}).optional(),
+			});
+
+			// Test with JSON string
+			(driver.get as any).mockImplementation(async () => ({
+				id: "s1",
+				config: '{"theme":"dark"}',
+			}));
+
+			let result = await db.get(OptionalSettings, "s1");
+			expect(result!.config).toEqual({theme: "dark"});
+
+			// Test with undefined (field not present)
+			(driver.get as any).mockImplementation(async () => ({
+				id: "s2",
+			}));
+
+			result = await db.get(OptionalSettings, "s2");
+			expect(result!.config).toBeUndefined();
+		});
+	});
+
 	describe("update()", () => {
 		test("updates by primary key", async () => {
 			(driver.get as any).mockImplementation(async () => ({

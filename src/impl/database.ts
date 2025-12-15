@@ -25,7 +25,7 @@ import {
  * Converts app values → DB values using .db.encode() functions.
  * Automatically encodes objects/arrays as JSON unless custom encoding is specified.
  */
-function encodeData<T extends Table<any>>(
+export function encodeData<T extends Table<any>>(
 	table: T,
 	data: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -71,7 +71,7 @@ function encodeData<T extends Table<any>>(
  * Converts DB values → app values using .db.decode() functions.
  * Automatically decodes JSON strings to objects/arrays unless custom decoding is specified.
  */
-function decodeData<T extends Table<any>>(
+export function decodeData<T extends Table<any>>(
 	table: T,
 	data: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
@@ -356,9 +356,11 @@ export class Transaction {
 				.get<
 					Record<string, unknown>
 				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
-				.then((row) =>
-					row ? (validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>) : null,
-				);
+				.then((row) => {
+					if (!row) return null;
+					const decoded = decodeData(table, row);
+					return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+				});
 		}
 
 		// Tagged template query
@@ -759,9 +761,11 @@ export class Database extends EventTarget {
 				.get<
 					Record<string, unknown>
 				>(`SELECT * FROM ${tableName} WHERE ${whereClause}`, [id])
-				.then((row) =>
-					row ? (validateWithStandardSchema<Infer<T>>(table.schema, row) as Infer<T>) : null,
-				);
+				.then((row) => {
+					if (!row) return null;
+					const decoded = decodeData(table, row);
+					return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+				});
 		}
 
 		// Tagged template query

@@ -326,4 +326,63 @@ describe("DDL generation", () => {
 			"FOREIGN KEY (`authorId`) REFERENCES `users`(`id`) ON DELETE CASCADE",
 		);
 	});
+
+	test("explicit column type with .db.type()", () => {
+		const custom = table("custom", {
+			id: z.string().uuid().db.primary(),
+			// Array with custom CSV encoding - explicit TEXT type
+			tags: z.array(z.string())
+				.db.encode((arr) => arr.join(","))
+				.db.decode((str: string) => str.split(","))
+				.db.type("TEXT"),
+		});
+
+		const ddl = generateDDL(custom, {dialect: "postgresql"});
+
+		// Should use TEXT, not JSONB (which would be inferred from z.array())
+		expect(ddl).toContain('"tags" TEXT');
+		expect(ddl).not.toContain("JSONB");
+	});
+
+	test("explicit column type overrides inferred type for object", () => {
+		const custom = table("custom", {
+			id: z.string().uuid().db.primary(),
+			// Object stored as BLOB for some reason
+			data: z.object({foo: z.string()}).db.type("BLOB"),
+		});
+
+		const ddl = generateDDL(custom, {dialect: "sqlite"});
+
+		expect(ddl).toContain('"data" BLOB');
+	});
+
+	test("explicit column type works with default values", () => {
+		const custom = table("custom", {
+			id: z.string().uuid().db.primary(),
+			tags: z.array(z.string())
+				.default([])
+				.db.encode((arr) => arr.join(","))
+				.db.decode((str: string) => str.split(","))
+				.db.type("TEXT"),
+		});
+
+		const ddl = generateDDL(custom, {dialect: "sqlite"});
+
+		expect(ddl).toContain('"tags" TEXT');
+		expect(ddl).toContain("DEFAULT '[]'");
+	});
+
+	test("explicit column type across dialects", () => {
+		const custom = table("custom", {
+			id: z.string().uuid().db.primary(),
+			binary: z.string().db.type("BYTEA"),
+		});
+
+		const pgDdl = generateDDL(custom, {dialect: "postgresql"});
+		const sqliteDdl = generateDDL(custom, {dialect: "sqlite"});
+
+		// Explicit type is used as-is in all dialects
+		expect(pgDdl).toContain('"binary" BYTEA');
+		expect(sqliteDdl).toContain('"binary" BYTEA');
+	});
 });

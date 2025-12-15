@@ -101,6 +101,23 @@ function mapZodToSQL(
 	let sqlType: string;
 	let sqlDefault: string | undefined;
 
+	// If explicit column type is specified via .db.type(), use it
+	if (fieldMeta?.columnType) {
+		sqlType = fieldMeta.columnType;
+		// Still compute default value if present
+		if (hasDefault && defaultValue !== undefined) {
+			// For explicit types, just stringify the default
+			if (typeof defaultValue === "string") {
+				sqlDefault = `'${defaultValue.replace(/'/g, "''")}'`;
+			} else if (typeof defaultValue === "number" || typeof defaultValue === "boolean") {
+				sqlDefault = String(defaultValue);
+			} else {
+				sqlDefault = `'${JSON.stringify(defaultValue).replace(/'/g, "''")}'`;
+			}
+		}
+		return {sqlType, defaultValue: sqlDefault};
+	}
+
 	// Use instanceof checks instead of _def.typeName
 	if (core instanceof z.ZodString) {
 		// Use public maxLength property

@@ -61,22 +61,25 @@ Each driver is a class with a `dialect` property. Bun auto-detects dialect from 
 
 ```typescript
 import {z} from "zod";
-import {table, primary, unique, references, Database} from "@b9g/zealot";
+import {table, extendZod, Database} from "@b9g/zealot";
 import SQLiteDriver from "@b9g/zealot/sqlite"; // or PostgresDriver, MySQLDriver, BunDriver
 // Note: where(), set(), on(), values(), in(), ddl() are methods on Table objects, not imports
 
+// Enable the .db namespace on all Zod types (call once at app startup)
+extendZod(z);
+
 const driver = new SQLiteDriver("file:app.db");
 
-// 1. Define tables
+// 1. Define tables using .db API
 const Users = table("users", {
-  id: primary(z.string().uuid()),
-  email: unique(z.string().email()),
+  id: z.string().uuid().db.primary(),
+  email: z.string().email().db.unique(),
   name: z.string(),
 });
 
 const Posts = table("posts", {
-  id: primary(z.string().uuid()),
-  authorId: references(z.string().uuid(), Users, {as: "author"}),
+  id: z.string().uuid().db.primary(),
+  authorId: z.string().uuid().db.references(Users, {as: "author"}),
   title: z.string(),
   published: z.boolean().default(false),
 });
@@ -125,38 +128,104 @@ await db.update(Users, user.id, {name: "Alice Smith"});
 
 ```typescript
 import {z} from "zod";
-import {table, primary, unique, index, references} from "@b9g/zealot";
+import {table, extendZod} from "@b9g/zealot";
+
+// Enable the .db namespace (call once at app startup)
+extendZod(z);
 
 const Users = table("users", {
-  id: primary(z.string().uuid()),
-  email: unique(z.string().email()),
+  id: z.string().uuid().db.primary(),
+  email: z.string().email().db.unique(),
   name: z.string().max(100),
   role: z.enum(["user", "admin"]).default("user"),
   createdAt: z.date().default(() => new Date()),
 });
 
 const Posts = table("posts", {
-  id: primary(z.string().uuid()),
+  id: z.string().uuid().db.primary(),
   title: z.string(),
   content: z.string().optional(),
-  authorId: references(z.string().uuid(), Users, {as: "author", onDelete: "cascade"}),
+  authorId: z.string().uuid().db.references(Users, {as: "author", onDelete: "cascade"}),
   published: z.boolean().default(false),
 });
 ```
 
-**Field wrappers:**
-- `primary(schema)` — Primary key
-- `unique(schema)` — Unique constraint
-- `index(schema)` — Create an index
-- `references(schema, table, {as, field?, onDelete?})` — Foreign key with resolved property name
-- `softDelete(schema)` — Soft delete timestamp field
+**The `.db` namespace:**
+
+The `.db` property is available on all Zod types after calling `extendZod(z)`. It provides database-specific modifiers:
+
+- `.db.primary()` — Primary key
+- `.db.unique()` — Unique constraint
+- `.db.index()` — Create an index
+- `.db.references(table, {as, field?, onDelete?})` — Foreign key with resolved property name
+- `.db.softDelete()` — Soft delete timestamp field
+- `.db.encode(fn)` — Custom encoding for database storage
+- `.db.decode(fn)` — Custom decoding from database storage
+- `.db.type(columnType)` — Explicit column type for DDL generation
+
+**Why `extendZod()`?** Zod v4 removed `.register()` so there's no official way to add custom methods. `extendZod()` patches the Zod prototype once at startup to add the `.db` namespace. Call it once before defining any tables.
+
+**Automatic JSON encoding/decoding:**
+
+Objects (`z.object()`) and arrays (`z.array()`) are automatically serialized to JSON when stored and parsed back when read:
+
+```typescript
+const Settings = table("settings", {
+  id: z.string().db.primary(),
+  config: z.object({theme: z.string(), fontSize: z.number()}),
+  tags: z.array(z.string()),
+});
+
+// On insert: config and tags are JSON.stringify'd
+await db.insert(Settings, {
+  id: "s1",
+  config: {theme: "dark", fontSize: 14},
+  tags: ["admin", "premium"],
+});
+// Stored as: config='{"theme":"dark","fontSize":14}', tags='["admin","premium"]'
+
+// On read: JSON strings are parsed back to objects/arrays
+const settings = await db.get(Settings, "s1");
+settings.config.theme; // "dark" (object, not string)
+settings.tags[0];      // "admin" (array, not string)
+```
+
+**Custom encoding/decoding:**
+
+Override automatic JSON encoding with custom transformations:
+
+```typescript
+const Custom = table("custom", {
+  id: z.string().db.primary(),
+  // Store array as CSV instead of JSON
+  tags: z.array(z.string())
+    .db.encode((arr) => arr.join(","))
+    .db.decode((str: string) => str.split(","))
+    .db.type("TEXT"), // Required: explicit column type for DDL
+});
+
+await db.insert(Custom, {id: "c1", tags: ["a", "b", "c"]});
+// Stored as: tags='a,b,c' (not '["a","b","c"]')
+```
+
+**Explicit column types:**
+
+When using custom encode/decode that transforms the storage type (e.g., array → CSV string), use `.db.type()` to specify the correct column type for DDL generation:
+
+| Scenario | Column Type |
+|----------|-------------|
+| `z.object()` / `z.array()` (no codec) | JSON/JSONB (automatic) |
+| `z.object()` / `z.array()` + encode only | JSON/JSONB (advanced use) |
+| `z.object()` / `z.array()` + encode + decode | **Explicit `.db.type()` required** |
+
+Without `.db.type()`, DDL generation would incorrectly use JSONB for a field that's actually stored as TEXT.
 
 **Soft delete:**
 ```typescript
 const Users = table("users", {
-  id: primary(z.string().uuid()),
+  id: z.string().uuid().db.primary(),
   name: z.string(),
-  deletedAt: softDelete(z.date().nullable().default(null)),
+  deletedAt: z.date().nullable().default(null).db.softDelete(),
 });
 
 // Soft delete a record (sets deletedAt to current timestamp)
@@ -180,9 +249,9 @@ const Posts = table("posts", {...}, {
 **Derived properties** for client-side transformations:
 ```typescript
 const Posts = table("posts", {
-  id: primary(z.string()),
+  id: z.string().db.primary(),
   title: z.string(),
-  authorId: references(z.string(), Users, {
+  authorId: z.string().db.references(Users, {
     as: "author",
     reverseAs: "posts"
   }),
@@ -382,7 +451,7 @@ Zealot provides idempotent helpers that encourage safe, additive-only migrations
 ```typescript
 // Add a new column (reads from schema)
 const Posts = table("posts", {
-  id: primary(z.string()),
+  id: z.string().db.primary(),
   title: z.string(),
   views: z.number().default(0), // NEW - add to schema
 });
@@ -473,8 +542,8 @@ The `all()`/`get()` methods:
 
 ```typescript
 const Posts = table("posts", {
-  id: primary(z.string()),
-  authorId: references(z.string(), Users, {as: "author"}),
+  id: z.string().db.primary(),
+  authorId: z.string().db.references(Users, {as: "author"}),
   title: z.string(),
 });
 
@@ -490,8 +559,8 @@ Use `reverseAs` to populate arrays of referencing entities:
 
 ```typescript
 const Posts = table("posts", {
-  id: primary(z.string()),
-  authorId: references(z.string(), Users, {
+  id: z.string().db.primary(),
+  authorId: z.string().db.references(Users, {
     as: "author",
     reverseAs: "posts" // Populate author.posts = Post[]
   }),
@@ -510,19 +579,19 @@ const posts = await db.all([Posts, Users])`
 
 ```typescript
 const Posts = table("posts", {
-  id: primary(z.string()),
+  id: z.string().db.primary(),
   title: z.string(),
 });
 
 const Tags = table("tags", {
-  id: primary(z.string()),
+  id: z.string().db.primary(),
   name: z.string(),
 });
 
 const PostTags = table("post_tags", {
-  id: primary(z.string()),
-  postId: references(z.string(), Posts, {as: "post", reverseAs: "postTags"}),
-  tagId: references(z.string(), Tags, {as: "tag", reverseAs: "postTags"}),
+  id: z.string().db.primary(),
+  postId: z.string().db.references(Posts, {as: "post", reverseAs: "postTags"}),
+  tagId: z.string().db.references(Tags, {as: "tag", reverseAs: "postTags"}),
 });
 
 const results = await db.all([PostTags, Posts, Tags])`

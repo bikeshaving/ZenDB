@@ -21,7 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Table Definitions:**
 - `table()` - Define tables from Zod schemas
-- Field wrappers: `primary()`, `unique()`, `index()`, `references()`, `softDelete()`
+- `extendZod(z)` - Enable `.db` namespace on all Zod types
+- `.db` API: `.db.primary()`, `.db.unique()`, `.db.index()`, `.db.references()`, `.db.softDelete()`
+- `.db.encode()` / `.db.decode()` - Custom database encoding/decoding
+- `.db.type()` - Explicit column type for DDL when custom codecs transform storage type
+- Automatic JSON encoding/decoding for `z.object()` and `z.array()` fields
 - Compound indexes via table options
 - `.pick()` for partial table selects
 - Foreign key references with automatic property resolution (forward and reverse)
@@ -122,9 +126,30 @@ Future breaking changes before 1.0.0 may occur without major version bumps.
 ### Migration from Pre-Release
 
 If upgrading from unreleased versions:
+
+**`.db` API (replaces wrapper functions):**
+```typescript
+// Before
+import {table, primary, unique, references} from "@b9g/zealot";
+const Users = table("users", {
+  id: primary(z.string()),
+  email: unique(z.string().email()),
+});
+
+// After
+import {table, extendZod} from "@b9g/zealot";
+extendZod(z); // Call once at app startup
+const Users = table("users", {
+  id: z.string().db.primary(),
+  email: z.string().email().db.unique(),
+});
+```
+
+**Other changes:**
 - `generateDDL(table)` → `table.ddl()`
 - `setDbMeta()` / `getDbMeta()` → `setDBMeta()` / `getDBMeta()` (ACROCase)
 - DDL helpers now return `DDLFragment` instead of `string`
 - No need to pass `dialect` parameter to DDL helpers (auto-detected)
+- `one()` → `get()` (JS-idiomatic naming)
 
 [0.1.0]: https://github.com/b9g/zealot/releases/tag/v0.1.0

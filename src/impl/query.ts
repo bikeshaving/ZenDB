@@ -5,6 +5,7 @@
  */
 
 import {type Table, isTable, validateWithStandardSchema} from "./table.js";
+import {decodeData} from "./database.js";
 
 // ============================================================================
 // Types
@@ -528,10 +529,11 @@ export function buildEntityMap(
 			const key = entityKey(table.name, pk);
 
 			if (!entities.has(key)) {
-				// Validate through Standard Schema for type coercion (dates, numbers, etc.)
+				// Decode JSON strings back to objects/arrays, then validate
+				const decoded = decodeData(table, data);
 				const parsed = validateWithStandardSchema<Record<string, unknown>>(
 					table.schema,
-					data,
+					decoded,
 				);
 				entities.set(key, parsed);
 			}

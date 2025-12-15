@@ -162,6 +162,8 @@ export interface FieldDbMeta {
 	};
 	encode?: (value: any) => any;
 	decode?: (value: any) => any;
+	/** Explicit column type override for DDL generation */
+	columnType?: string;
 }
 
 // ============================================================================
@@ -263,6 +265,22 @@ function createDbMethods(schema: ZodTypeAny) {
 			 */
 			decode<TApp>(decodeFn: (db: any) => TApp) {
 				return setDBMeta(schema, {decode: decodeFn});
+			},
+
+			/**
+			 * Specify explicit column type for DDL generation.
+			 * Required when using custom encode/decode on objects/arrays
+			 * that transform to a different storage type.
+			 *
+			 * @example
+			 * // Store array as CSV instead of JSON
+			 * tags: z.array(z.string())
+			 *   .db.encode((arr) => arr.join(","))
+			 *   .db.decode((str) => str.split(","))
+			 *   .db.type("TEXT")
+			 */
+			type(columnType: string) {
+				return setDBMeta(schema, {columnType});
 			},
 		};
 }
@@ -891,6 +909,9 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		}
 		if (fieldDbMeta.decode) {
 			dbMeta.decode = fieldDbMeta.decode;
+		}
+		if (fieldDbMeta.columnType) {
+			dbMeta.columnType = fieldDbMeta.columnType;
 		}
 
 		meta.fields[key] = dbMeta;
@@ -1586,6 +1607,20 @@ declare module "zod" {
 			 * tags: z.array(z.string()).db.csv()
 			 */
 			csv<T extends ZodTypeAny>(this: T): ZodTypeAny;
+
+			/**
+			 * Specify explicit column type for DDL generation.
+			 * Required when using custom encode/decode on objects/arrays
+			 * that transform to a different storage type.
+			 *
+			 * @example
+			 * // Store array as CSV instead of JSON
+			 * tags: z.array(z.string())
+			 *   .db.encode((arr) => arr.join(","))
+			 *   .db.decode((str) => str.split(","))
+			 *   .db.type("TEXT")
+			 */
+			type<T extends ZodTypeAny>(this: T, columnType: string): T;
 		};
 	}
 }
