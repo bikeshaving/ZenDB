@@ -5,7 +5,7 @@
  * Extends EventTarget for IndexedDB-style migration events.
  */
 
-import type {Table, Infer, Insert} from "./table.js";
+import type {Table, Infer, Insert, FullTableOnly} from "./table.js";
 import {validateWithStandardSchema, getDBMeta} from "./table.js";
 import {z} from "zod";
 import {
@@ -117,7 +117,7 @@ function injectSchemaExpressions<T extends Table<any>>(
 	data: Record<string, unknown>,
 	operation: "insert" | "update",
 ): Record<string, unknown> {
-	const shape = table.schema._def.schema?.shape ?? table.schema.shape;
+	const shape = (table.schema._def as any).schema?.shape ?? table.schema.shape;
 	const result = {...data};
 
 	for (const [fieldName, fieldSchema] of Object.entries(shape)) {
@@ -173,7 +173,7 @@ export function encodeData<T extends Table<any>>(
 	data: Record<string, unknown>,
 ): Record<string, unknown> {
 	const encoded: Record<string, unknown> = {};
-	const shape = table.schema._def.schema?.shape ?? table.schema.shape;
+	const shape = (table.schema._def as any).schema?.shape ?? table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
 		const fieldSchema = shape?.[key];
@@ -221,7 +221,7 @@ export function decodeData<T extends Table<any>>(
 	if (!data) return data;
 
 	const decoded: Record<string, unknown> = {};
-	const shape = table.schema._def.schema?.shape ?? table.schema.shape;
+	const shape = (table.schema._def as any).schema?.shape ?? table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
 		const fieldSchema = shape?.[key];
@@ -533,7 +533,7 @@ export class Transaction {
 	// ==========================================================================
 
 	async insert<T extends Table<any>>(
-		table: T,
+		table: T & FullTableOnly<T>,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
 		if (table._meta.isPartial) {
@@ -604,7 +604,7 @@ export class Transaction {
 		await this.#driver.run(sql, values);
 
 		const pk = table._meta.primary;
-		const pkValue = encoded[pk] ?? (expressions[pk] ? undefined : null);
+		const pkValue = pk ? (encoded[pk] ?? (expressions[pk] ? undefined : null)) : null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
 			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [pkValue]);
@@ -618,7 +618,7 @@ export class Transaction {
 	}
 
 	async update<T extends Table<any>>(
-		table: T,
+		table: T & FullTableOnly<T>,
 		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
 	): Promise<Infer<T> | null> {
@@ -1075,7 +1075,7 @@ export class Database extends EventTarget {
 	 * });
 	 */
 	async insert<T extends Table<any>>(
-		table: T,
+		table: T & FullTableOnly<T>,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
 		if (table._meta.isPartial) {
@@ -1152,7 +1152,7 @@ export class Database extends EventTarget {
 
 		// Fetch the inserted row to get DB-applied defaults
 		const pk = table._meta.primary;
-		const pkValue = encoded[pk] ?? (expressions[pk] ? undefined : null);
+		const pkValue = pk ? (encoded[pk] ?? (expressions[pk] ? undefined : null)) : null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
 			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [pkValue]);
@@ -1175,7 +1175,7 @@ export class Database extends EventTarget {
 	 * const user = await db.update(users, userId, { name: "Bob" });
 	 */
 	async update<T extends Table<any>>(
-		table: T,
+		table: T & FullTableOnly<T>,
 		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
 	): Promise<Infer<T> | null> {

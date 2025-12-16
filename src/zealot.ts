@@ -19,13 +19,6 @@ export {
 	// Zod extension
 	extendZod,
 
-	// Field wrappers
-	primary,
-	unique,
-	index,
-	references,
-	softDelete,
-
 	// Custom field helpers
 	setDBMeta,
 	getDBMeta,
@@ -38,6 +31,7 @@ export {
 	// Type inference
 	type Infer,
 	type Insert,
+	type FullTableOnly,
 
 	// Fragment method types
 	type ConditionOperators,

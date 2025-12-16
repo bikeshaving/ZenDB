@@ -443,7 +443,7 @@ describe("Database", () => {
 			const result = await db.get(Complex, "c1");
 
 			expect(result).not.toBeNull();
-			expect(result!.nested.level1.level2).toEqual([{value: 1}, {value: 2}]);
+			expect((result as any).nested.level1.level2).toEqual([{value: 1}, {value: 2}]);
 		});
 
 		test("nullable object fields decode correctly", async () => {

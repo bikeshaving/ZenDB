@@ -70,12 +70,12 @@ export class ValidationError extends ZealotError {
  * Thrown when table definition is invalid (e.g., dots in names).
  */
 export class TableDefinitionError extends ZealotError {
-	readonly tableName: string;
+	readonly tableName?: string;
 	readonly fieldName?: string;
 
 	constructor(
 		message: string,
-		tableName: string,
+		tableName?: string,
 		fieldName?: string,
 		options?: ErrorOptions,
 	) {

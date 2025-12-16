@@ -1334,7 +1334,7 @@ function createTableObject(
 				fieldSet.has(f),
 			);
 
-			const pickedMeta: Record<string, any> = {
+			const pickedMeta = {
 				primary:
 					meta.primary && fieldSet.has(meta.primary) ? meta.primary : null,
 				unique: meta.unique.filter((f) => fieldSet.has(f)),
@@ -1346,8 +1346,11 @@ function createTableObject(
 				references: meta.references.filter((r) => fieldSet.has(r.fieldName)),
 				fields: Object.fromEntries(
 					Object.entries(meta.fields).filter(([k]) => fieldSet.has(k)),
-				),
-				isPartial: true,
+				) as Record<string, FieldDbMeta>,
+				isPartial: true as const,
+				isDerived: undefined as true | undefined,
+				derivedExprs: undefined as DerivedExpr[] | undefined,
+				derivedFields: undefined as string[] | undefined,
 			};
 
 			// Preserve derived metadata if any derived fields are picked
@@ -1768,108 +1771,154 @@ function extractFieldMeta(
 export type Infer<T extends Table<any>> = z.infer<T["schema"]>;
 
 /**
- * Infer the insert type (respects defaults).
+ * Type guard that evaluates to `never` for partial or derived tables.
+ * Use this to prevent insert/update operations at compile time.
+ *
+ * @example
+ * function insert<T extends Table<any>>(
+ *   table: T & FullTableOnly<T>,
+ *   data: Insert<T>
+ * ): Promise<Infer<T>>
  */
-export type Insert<T extends Table<any>> = z.input<T["schema"]>;
+export type FullTableOnly<T> =
+	T extends { _meta: { isPartial: true } } ? never :
+	T extends { _meta: { isDerived: true } } ? never :
+	T;
+
+/**
+ * Infer the insert type (respects defaults).
+ * Returns `never` for partial or derived tables to prevent insert at compile time.
+ */
+export type Insert<T extends Table<any>> =
+	T extends { _meta: { isPartial: true } } ? never :
+	T extends { _meta: { isDerived: true } } ? never :
+	z.input<T["schema"]>;
 
 // ============================================================================
 // TypeScript Declarations for .db namespace
 // ============================================================================
 
+/**
+ * Database metadata methods available on Zod schemas.
+ * These methods are added via extendZod() and return the same schema type.
+ */
+export interface ZodDBMethods<Schema extends ZodTypeAny> {
+	/**
+	 * Mark field as primary key.
+	 * @example z.string().uuid().db.primary()
+	 */
+	primary(): Schema;
+
+	/**
+	 * Mark field as unique.
+	 * @example z.string().email().db.unique()
+	 */
+	unique(): Schema;
+
+	/**
+	 * Create an index on this field.
+	 * @example z.date().db.index()
+	 */
+	index(): Schema;
+
+	/**
+	 * Mark field as soft delete timestamp.
+	 * @example z.date().nullable().default(null).db.softDelete()
+	 */
+	softDelete(): Schema;
+
+	/**
+	 * Define a foreign key reference with optional reverse relationship.
+	 *
+	 * @example
+	 * // Forward reference only
+	 * authorId: z.string().uuid().db.references(Users, {as: "author"})
+	 *
+	 * @example
+	 * // With reverse relationship
+	 * authorId: z.string().uuid().db.references(Users, {
+	 *   as: "author",      // post.author = User
+	 *   reverseAs: "posts" // user.posts = Post[]
+	 * })
+	 */
+	references(table: Table<any>, options: {
+		field?: string;
+		as: string;
+		reverseAs?: string;
+		onDelete?: "cascade" | "set null" | "restrict";
+	}): Schema;
+
+	/**
+	 * Encode app values to DB values (for INSERT/UPDATE).
+	 * One-way transformation is fine (e.g., password hashing).
+	 *
+	 * @example
+	 * password: z.string().db.encode(hashPassword)
+	 *
+	 * @example
+	 * // Bidirectional: pair with .db.decode()
+	 * status: z.enum(["pending", "active"])
+	 *   .db.encode(s => statusMap.indexOf(s))
+	 *   .db.decode(i => statusMap[i])
+	 */
+	encode<TDB>(fn: (app: z.infer<Schema>) => TDB): Schema;
+
+	/**
+	 * Decode DB values to app values (for SELECT).
+	 * One-way transformation is fine.
+	 *
+	 * @example
+	 * legacy: z.string().db.decode(deserializeLegacyFormat)
+	 */
+	decode<TApp>(fn: (db: any) => TApp): Schema;
+
+	/**
+	 * Shorthand for JSON encoding/decoding.
+	 * Stores the value as a JSON string in the database.
+	 *
+	 * @example
+	 * metadata: z.object({theme: z.string()}).db.json()
+	 */
+	json(): Schema;
+
+	/**
+	 * Shorthand for CSV encoding/decoding of string arrays.
+	 * Stores the array as a comma-separated string in the database.
+	 *
+	 * @example
+	 * tags: z.array(z.string()).db.csv()
+	 */
+	csv(): Schema;
+
+	/**
+	 * Specify explicit column type for DDL generation.
+	 * Required when using custom encode/decode on objects/arrays
+	 * that transform to a different storage type.
+	 *
+	 * @example
+	 * // Store array as CSV instead of JSON
+	 * tags: z.array(z.string())
+	 *   .db.encode((arr) => arr.join(","))
+	 *   .db.decode((str) => str.split(","))
+	 *   .db.type("TEXT")
+	 */
+	type(columnType: string): Schema;
+
+	/**
+	 * Set a DB expression to be used on INSERT.
+	 * @example createdAt: z.date().db.inserted(db.now())
+	 */
+	inserted(expr: import("./database.js").DBExpression): Schema;
+
+	/**
+	 * Set a DB expression to be used on UPDATE (and INSERT).
+	 * @example updatedAt: z.date().db.updated(db.now())
+	 */
+	updated(expr: import("./database.js").DBExpression): Schema;
+}
+
 declare module "zod" {
-	interface ZodType {
-		readonly db: {
-			/**
-			 * Mark field as primary key.
-			 * @example z.string().uuid().db.primary()
-			 */
-			primary<T extends ZodTypeAny>(this: T): T;
-
-			/**
-			 * Mark field as unique.
-			 * @example z.string().email().db.unique()
-			 */
-			unique<T extends ZodTypeAny>(this: T): T;
-
-			/**
-			 * Create an index on this field.
-			 * @example z.date().db.index()
-			 */
-			index<T extends ZodTypeAny>(this: T): T;
-
-			/**
-			 * Mark field as soft delete timestamp.
-			 * @example z.date().nullable().default(null).db.softDelete()
-			 */
-			softDelete<T extends ZodTypeAny>(this: T): T;
-
-			/**
-			 * Define a foreign key reference with optional reverse relationship.
-			 *
-			 * @example
-			 * // Forward reference only
-			 * authorId: z.string().uuid().db.references(Users, {as: "author"})
-			 *
-			 * @example
-			 * // With reverse relationship
-			 * authorId: z.string().uuid().db.references(Users, {
-			 *   as: "author",      // post.author = User
-			 *   reverseAs: "posts" // user.posts = Post[]
-			 * })
-			 */
-			references<T extends ZodTypeAny>(this: T, table: Table<any>, options: {
-				field?: string;
-				as: string;
-				reverseAs?: string;
-				onDelete?: "cascade" | "set null" | "restrict";
-			}): T;
-
-			/**
-			 * Encode app values to DB values (for INSERT/UPDATE).
-			 * One-way transformation is fine (e.g., password hashing).
-			 *
-			 * @example
-			 * password: z.string().db.encode(hashPassword)
-			 *
-			 * @example
-			 * // Bidirectional: pair with .db.decode()
-			 * status: z.enum(["pending", "active"])
-			 *   .db.encode(s => statusMap.indexOf(s))
-			 *   .db.decode(i => statusMap[i])
-			 */
-			serialize<T extends ZodTypeAny, TDB>(this: T, fn: (app: z.infer<T>) => TDB): T;
-
-			/**
-			 * Shorthand for JSON encoding/decoding.
-			 * Equivalent to .transform(JSON.parse).db.serialize(JSON.stringify)
-			 *
-			 * @example
-			 * metadata: z.object({theme: z.string()}).db.json()
-			 */
-			json<T extends ZodTypeAny>(this: T): ZodTypeAny;
-
-			/**
-			 * Shorthand for CSV encoding/decoding of string arrays.
-			 * Equivalent to .transform(s => s.split(",")).db.serialize(arr => arr.join(","))
-			 *
-			 * @example
-			 * tags: z.array(z.string()).db.csv()
-			 */
-			csv<T extends ZodTypeAny>(this: T): ZodTypeAny;
-
-			/**
-			 * Specify explicit column type for DDL generation.
-			 * Required when using custom encode/decode on objects/arrays
-			 * that transform to a different storage type.
-			 *
-			 * @example
-			 * // Store array as CSV instead of JSON
-			 * tags: z.array(z.string())
-			 *   .db.encode((arr) => arr.join(","))
-			 *   .db.decode((str) => str.split(","))
-			 *   .db.type("TEXT")
-			 */
-			type<T extends ZodTypeAny>(this: T, columnType: string): T;
-		};
+	interface ZodType<out Output, out Input, out Internals> {
+		readonly db: ZodDBMethods<this>;
 	}
 }
