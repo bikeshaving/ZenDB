@@ -210,6 +210,16 @@ describe("Database", () => {
 			).rejects.toThrow('Cannot insert into partial table "users"');
 		});
 
+		test("throws on derived table", async () => {
+			const UsersWithStats = Users.derive(
+				z.object({postCount: z.number()}),
+			)`COUNT(*) AS "postCount"`;
+
+			await expect(
+				db.insert(UsersWithStats as any, {id: USER_ID, name: "Alice", email: "a@b.com", postCount: 0}),
+			).rejects.toThrow('Cannot insert into derived table "users"');
+		});
+
 		test("auto-encodes objects and arrays as JSON", async () => {
 			const Settings = table("settings", {
 				id: z.string().db.primary(),
@@ -521,6 +531,16 @@ describe("Database", () => {
 			const user = await db.update(Users, "nonexistent", {name: "Test"});
 
 			expect(user).toBeNull();
+		});
+
+		test("throws on derived table", async () => {
+			const UsersWithStats = Users.derive(
+				z.object({postCount: z.number()}),
+			)`COUNT(*) AS "postCount"`;
+
+			await expect(
+				db.update(UsersWithStats as any, USER_ID, {name: "Alice Updated"}),
+			).rejects.toThrow('Cannot update derived table "users"');
 		});
 
 	});

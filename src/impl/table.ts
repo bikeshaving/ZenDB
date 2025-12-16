@@ -543,6 +543,16 @@ export interface ReferenceInfo {
 	onDelete?: "cascade" | "set null" | "restrict";
 }
 
+/**
+ * Metadata for SQL-derived expressions created via Table.derive().
+ */
+export interface DerivedExpr {
+	/** The SQL expression (e.g., 'COUNT("likes"."id") AS "likeCount"') */
+	sql: string;
+	/** Parameters for the expression */
+	params: readonly unknown[];
+}
+
 // ============================================================================
 // Fragment Method Types
 // ============================================================================
@@ -590,6 +600,21 @@ export interface PartialTable<T extends ZodRawShape = ZodRawShape> extends Omit<
 	"_meta"
 > {
 	readonly _meta: Table<T>["_meta"] & {isPartial: true};
+}
+
+/**
+ * A table with SQL-derived columns created via derive().
+ * Can be used for queries but not for insert/update.
+ */
+export interface DerivedTable<T extends ZodRawShape = ZodRawShape> extends Omit<
+	Table<T>,
+	"_meta"
+> {
+	readonly _meta: Table<T>["_meta"] & {
+		isDerived: true;
+		derivedExprs: DerivedExpr[];
+		derivedFields: string[];
+	};
 }
 
 export interface Table<T extends ZodRawShape = ZodRawShape> {
@@ -679,6 +704,42 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	pick<K extends keyof z.infer<ZodObject<T>>>(
 		...fields: K[]
 	): PartialTable<Pick<T, K & keyof T>>;
+
+	/**
+	 * Create a new table with SQL-computed derived columns.
+	 *
+	 * Returns a tagged template function that parses the SQL expression.
+	 * Derived columns are computed in the SELECT clause by the database.
+	 * The AS aliases must match the schema field names.
+	 *
+	 * The returned table cannot be used for insert/update - SELECT only.
+	 *
+	 * @param derivedSchema - Zod schema for the derived fields
+	 * @returns Tagged template function that returns a DerivedTable
+	 *
+	 * @example
+	 * const PostsWithStats = Posts.derive(
+	 *   z.object({
+	 *     likeCount: z.number(),
+	 *     commentCount: z.number(),
+	 *   })
+	 * )`
+	 *   COUNT(${Likes.cols.id}) AS "likeCount",
+	 *   COUNT(${Comments.cols.id}) AS "commentCount"
+	 * `;
+	 *
+	 * db.all(PostsWithStats, Likes, Comments)`
+	 *   LEFT JOIN likes ON ${Likes.cols.postId} = ${Posts.cols.id}
+	 *   LEFT JOIN comments ON ${Comments.cols.postId} = ${Posts.cols.id}
+	 *   GROUP BY ${Posts.primary}
+	 * `
+	 */
+	derive<D extends ZodRawShape>(
+		derivedSchema: ZodObject<D>
+	): (
+		strings: TemplateStringsArray,
+		...values: unknown[]
+	) => DerivedTable<T & D>;
 
 	/**
 	 * Access qualified column names as SQL fragments.
@@ -1303,6 +1364,65 @@ function createTableObject(
 				pickedMeta,
 				{indexes: pickedIndexes, unique: pickedUnique, references: pickedCompoundRefs},
 			) as PartialTable<any>;
+		},
+
+		derive<D extends ZodRawShape>(derivedSchema: ZodObject<D>) {
+			return (strings: TemplateStringsArray, ...values: unknown[]) => {
+				// Parse template string with interpolated values
+				const parts: string[] = [];
+				const params: unknown[] = [];
+
+				for (let i = 0; i < strings.length; i++) {
+					parts.push(strings[i]);
+					if (i < values.length) {
+						const value = values[i];
+						// Check if it's an SQL fragment (from cols proxy or other fragments)
+						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
+							const fragment = value as ColumnFragment;
+							parts.push(fragment.sql);
+							params.push(...fragment.params);
+						} else {
+							// Regular value - parameterize it
+							parts.push("?");
+							params.push(value);
+						}
+					}
+				}
+
+				// Clean up the SQL expression (trim whitespace, normalize)
+				const sql = parts.join("").trim();
+				const derivedExpr: DerivedExpr = {sql, params};
+
+				// Merge the base schema with derived schema
+				const mergedSchema = schema.merge(derivedSchema);
+				const mergedZodShape = {...zodShape, ...derivedSchema.shape};
+
+				// Accumulate expressions (supports composition: A.derive(...).derive(...))
+				const existingExprs: DerivedExpr[] = (meta as any).derivedExprs ?? [];
+				const existingDerivedFields: string[] = (meta as any).derivedFields ?? [];
+
+				const derivedMeta = {
+					...meta,
+					isDerived: true as const,
+					derivedExprs: [...existingExprs, derivedExpr],
+					derivedFields: [...existingDerivedFields, ...Object.keys(derivedSchema.shape)],
+					fields: {
+						...meta.fields,
+						// Add empty field metadata for derived fields
+						...Object.fromEntries(
+							Object.keys(derivedSchema.shape).map((k) => [k, {}]),
+						),
+					},
+				};
+
+				return createTableObject(
+					name,
+					mergedSchema,
+					mergedZodShape,
+					derivedMeta,
+					options,
+				) as DerivedTable<any>;
+			};
 		},
 
 		where(conditions: Record<string, unknown>): SQLFragment {

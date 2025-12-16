@@ -389,6 +389,144 @@ describe("Table.pick()", () => {
 	});
 });
 
+describe("Table.derive()", () => {
+	const Posts = table("posts", {
+		id: z.string().uuid().db.primary(),
+		title: z.string(),
+		authorId: z.string().uuid(),
+	});
+
+	const Likes = table("likes", {
+		id: z.string().uuid().db.primary(),
+		postId: z.string().uuid(),
+	});
+
+	test("creates derived table with extended schema", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({
+				likeCount: z.number(),
+			}),
+		)`COUNT(${Likes.cols.id}) AS "likeCount"`;
+
+		expect(PostsWithCount.name).toBe("posts");
+		expect(Object.keys(PostsWithCount.schema.shape)).toEqual([
+			"id",
+			"title",
+			"authorId",
+			"likeCount",
+		]);
+	});
+
+	test("derived table is still a table", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		expect(isTable(PostsWithCount)).toBe(true);
+	});
+
+	test("stores derived expression in _meta.derivedExprs", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(${Likes.cols.id}) AS "likeCount"`;
+
+		expect((PostsWithCount._meta as any).isDerived).toBe(true);
+		expect((PostsWithCount._meta as any).derivedExprs).toHaveLength(1);
+
+		const expr = (PostsWithCount._meta as any).derivedExprs[0];
+		expect(expr.sql).toBe('COUNT("likes"."id") AS "likeCount"');
+		expect(expr.params).toEqual([]);
+	});
+
+	test("tracks derived fields in _meta.derivedFields", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({
+				likeCount: z.number(),
+				commentCount: z.number(),
+			}),
+		)`COUNT(${Likes.cols.id}) AS "likeCount", COUNT(*) AS "commentCount"`;
+
+		expect((PostsWithCount._meta as any).derivedFields).toEqual([
+			"likeCount",
+			"commentCount",
+		]);
+	});
+
+	test("composition accumulates expressions", () => {
+		const WithLikes = Posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(${Likes.cols.id}) AS "likeCount"`;
+
+		const WithLikesAndComments = WithLikes.derive(
+			z.object({commentCount: z.number()}),
+		)`COUNT(*) AS "commentCount"`;
+
+		expect((WithLikesAndComments._meta as any).derivedExprs).toHaveLength(2);
+		expect((WithLikesAndComments._meta as any).derivedFields).toEqual([
+			"likeCount",
+			"commentCount",
+		]);
+	});
+
+	test("parameterizes non-fragment values", () => {
+		const PostsWithThreshold = Posts.derive(
+			z.object({hasMany: z.boolean()}),
+		)`CASE WHEN COUNT(*) > ${10} THEN 1 ELSE 0 END AS "hasMany"`;
+
+		const expr = (PostsWithThreshold._meta as any).derivedExprs[0];
+		expect(expr.sql).toBe('CASE WHEN COUNT(*) > ? THEN 1 ELSE 0 END AS "hasMany"');
+		expect(expr.params).toEqual([10]);
+	});
+
+	test("cols proxy works for derived fields", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		// Original fields still work
+		expect(PostsWithCount.cols.id.sql).toBe('"posts"."id"');
+
+		// Derived fields should also work via cols proxy
+		expect(PostsWithCount.cols.likeCount.sql).toBe('"posts"."likeCount"');
+	});
+
+	test("preserves base table primary key", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		expect(PostsWithCount._meta.primary).toBe("id");
+		expect(PostsWithCount.primary).not.toBeNull();
+	});
+
+	test("schema validates correctly with derived fields", () => {
+		const PostsWithCount = Posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		const validId = "550e8400-e29b-41d4-a716-446655440000";
+
+		// Valid data including derived field
+		expect(() =>
+			PostsWithCount.schema.parse({
+				id: validId,
+				title: "Hello",
+				authorId: validId,
+				likeCount: 42,
+			}),
+		).not.toThrow();
+
+		// Missing derived field should fail
+		expect(() =>
+			PostsWithCount.schema.parse({
+				id: validId,
+				title: "Hello",
+				authorId: validId,
+			}),
+		).toThrow();
+	});
+});
+
 describe("Table.cols", () => {
 	const Users = table("users", {
 		id: z.string().uuid().db.primary(),

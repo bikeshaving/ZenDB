@@ -542,6 +542,12 @@ export class Transaction {
 			);
 		}
 
+		if ((table._meta as any).isDerived) {
+			throw new Error(
+				`Cannot insert into derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
+		}
+
 		// Inject schema-defined expressions (inserted/updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
 
@@ -619,6 +625,12 @@ export class Transaction {
 		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		if ((table._meta as any).isDerived) {
+			throw new Error(
+				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
 		}
 
 		// Inject schema-defined expressions (updated) for fields not provided
@@ -1072,6 +1084,12 @@ export class Database extends EventTarget {
 			);
 		}
 
+		if ((table._meta as any).isDerived) {
+			throw new Error(
+				`Cannot insert into derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
+		}
+
 		// Inject schema-defined expressions (inserted/updated) for fields not provided
 		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
 
@@ -1164,6 +1182,12 @@ export class Database extends EventTarget {
 		const pk = table._meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
+		}
+
+		if ((table._meta as any).isDerived) {
+			throw new Error(
+				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
+			);
 		}
 
 		// Inject schema-defined expressions (updated) for fields not provided

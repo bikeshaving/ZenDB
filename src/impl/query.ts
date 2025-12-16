@@ -158,9 +158,19 @@ function placeholder(index: number, dialect: SQLDialect): string {
 /**
  * Build SELECT clause with prefixed column aliases.
  *
+ * For derived tables (created via Table.derive()), this function:
+ * - Skips derived fields when outputting regular columns
+ * - Appends derived SQL expressions with alias rewriting (AS "field" → AS "table.field")
+ *
  * @example
  * buildSelectColumns([posts, users], "sqlite")
  * // SELECT "posts"."id" AS "posts.id", "posts"."title" AS "posts.title", ...
+ *
+ * @example
+ * // With derived table
+ * const PostsWithCount = Posts.derive(z.object({ likeCount: z.number() }))`COUNT(*) AS "likeCount"`;
+ * buildSelectColumns([PostsWithCount], "sqlite")
+ * // SELECT "posts"."id" AS "posts.id", ..., COUNT(*) AS "posts.likeCount"
  */
 export function buildSelectColumns(
 	tables: Table<any>[],
@@ -172,10 +182,31 @@ export function buildSelectColumns(
 		const tableName = table.name;
 		const shape = table.schema.shape;
 
+		// Get derived fields set (for skipping in regular column output)
+		const derivedFields = new Set<string>(
+			(table._meta as any).derivedFields ?? [],
+		);
+
+		// Add regular columns (skip derived fields - they come from expressions)
 		for (const fieldName of Object.keys(shape)) {
+			if (derivedFields.has(fieldName)) continue;
+
 			const qualifiedCol = `${quoteIdent(tableName, dialect)}.${quoteIdent(fieldName, dialect)}`;
 			const alias = `${tableName}.${fieldName}`;
 			columns.push(`${qualifiedCol} AS ${quoteIdent(alias, dialect)}`);
+		}
+
+		// Append derived expressions with prefixed aliases
+		// Transform AS "field" → AS "tableName.field" for normalization
+		const derivedExprs = (table._meta as any).derivedExprs ?? [];
+		for (const expr of derivedExprs) {
+			// Rewrite aliases to be table-qualified
+			const prefixedSql = expr.sql.replace(
+				/AS\s+"([^"]+)"/gi,
+				(_: string, field: string) =>
+					`AS ${quoteIdent(`${tableName}.${field}`, dialect)}`,
+			);
+			columns.push(prefixedSql);
 		}
 	}
 

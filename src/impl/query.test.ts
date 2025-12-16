@@ -285,6 +285,76 @@ describe("buildSelectColumns with partial tables", () => {
 	});
 });
 
+describe("buildSelectColumns with derived tables", () => {
+	test("skips derived fields in regular columns", () => {
+		const PostsWithCount = posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		const cols = buildSelectColumns([PostsWithCount], "sqlite");
+
+		// Regular columns should be present
+		expect(cols).toContain('"posts"."id" AS "posts.id"');
+		expect(cols).toContain('"posts"."title" AS "posts.title"');
+
+		// Should NOT have derived field as a regular column
+		expect(cols).not.toContain('"posts"."likeCount" AS "posts.likeCount"');
+	});
+
+	test("appends derived expressions with prefixed aliases", () => {
+		const PostsWithCount = posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		const cols = buildSelectColumns([PostsWithCount], "sqlite");
+
+		// Should have the derived expression with prefixed alias
+		expect(cols).toContain('COUNT(*) AS "posts.likeCount"');
+	});
+
+	test("handles multiple derived fields", () => {
+		const PostsWithStats = posts.derive(
+			z.object({
+				likeCount: z.number(),
+				commentCount: z.number(),
+			}),
+		)`COUNT(likes.id) AS "likeCount", COUNT(comments.id) AS "commentCount"`;
+
+		const cols = buildSelectColumns([PostsWithStats], "sqlite");
+
+		expect(cols).toContain('AS "posts.likeCount"');
+		expect(cols).toContain('AS "posts.commentCount"');
+	});
+
+	test("handles composition (multiple derive() calls)", () => {
+		const WithLikes = posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(likes.id) AS "likeCount"`;
+
+		const WithLikesAndComments = WithLikes.derive(
+			z.object({commentCount: z.number()}),
+		)`COUNT(comments.id) AS "commentCount"`;
+
+		const cols = buildSelectColumns([WithLikesAndComments], "sqlite");
+
+		// Both expressions should be present
+		expect(cols).toContain('AS "posts.likeCount"');
+		expect(cols).toContain('AS "posts.commentCount"');
+	});
+
+	test("works with MySQL dialect", () => {
+		const PostsWithCount = posts.derive(
+			z.object({likeCount: z.number()}),
+		)`COUNT(*) AS "likeCount"`;
+
+		const cols = buildSelectColumns([PostsWithCount], "mysql");
+
+		// MySQL uses backticks
+		expect(cols).toContain('`posts`.`id` AS `posts.id`');
+		expect(cols).toContain('AS `posts.likeCount`');
+	});
+});
+
 describe("SQL fragment placeholder handling", () => {
 	test("fragment SQL with literal ? in string is corrupted (known bug)", () => {
 		// This test documents a known bug:
