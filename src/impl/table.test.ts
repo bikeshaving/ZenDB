@@ -403,10 +403,9 @@ describe("Table.derive()", () => {
 
 	test("creates derived table with extended schema", () => {
 		const PostsWithCount = Posts.derive(
-			z.object({
-				likeCount: z.number(),
-			}),
-		)`COUNT(${Likes.cols.id}) AS "likeCount"`;
+			"likeCount",
+			z.number(),
+		)`COUNT(${Likes.cols.id})`;
 
 		expect(PostsWithCount.name).toBe("posts");
 		expect(Object.keys(PostsWithCount.schema.shape)).toEqual([
@@ -418,33 +417,30 @@ describe("Table.derive()", () => {
 	});
 
 	test("derived table is still a table", () => {
-		const PostsWithCount = Posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
 		expect(isTable(PostsWithCount)).toBe(true);
 	});
 
 	test("stores derived expression in _meta.derivedExprs", () => {
 		const PostsWithCount = Posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(${Likes.cols.id}) AS "likeCount"`;
+			"likeCount",
+			z.number(),
+		)`COUNT(${Likes.cols.id})`;
 
 		expect((PostsWithCount._meta as any).isDerived).toBe(true);
 		expect((PostsWithCount._meta as any).derivedExprs).toHaveLength(1);
 
 		const expr = (PostsWithCount._meta as any).derivedExprs[0];
-		expect(expr.sql).toBe('COUNT("likes"."id") AS "likeCount"');
+		expect(expr.fieldName).toBe("likeCount");
+		expect(expr.sql).toBe('COUNT("likes"."id")');
 		expect(expr.params).toEqual([]);
 	});
 
 	test("tracks derived fields in _meta.derivedFields", () => {
-		const PostsWithCount = Posts.derive(
-			z.object({
-				likeCount: z.number(),
-				commentCount: z.number(),
-			}),
-		)`COUNT(${Likes.cols.id}) AS "likeCount", COUNT(*) AS "commentCount"`;
+		const PostsWithCount = Posts
+			.derive("likeCount", z.number())`COUNT(${Likes.cols.id})`
+			.derive("commentCount", z.number())`COUNT(*)`;
 
 		expect((PostsWithCount._meta as any).derivedFields).toEqual([
 			"likeCount",
@@ -454,12 +450,14 @@ describe("Table.derive()", () => {
 
 	test("composition accumulates expressions", () => {
 		const WithLikes = Posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(${Likes.cols.id}) AS "likeCount"`;
+			"likeCount",
+			z.number(),
+		)`COUNT(${Likes.cols.id})`;
 
 		const WithLikesAndComments = WithLikes.derive(
-			z.object({commentCount: z.number()}),
-		)`COUNT(*) AS "commentCount"`;
+			"commentCount",
+			z.number(),
+		)`COUNT(*)`;
 
 		expect((WithLikesAndComments._meta as any).derivedExprs).toHaveLength(2);
 		expect((WithLikesAndComments._meta as any).derivedFields).toEqual([
@@ -470,18 +468,18 @@ describe("Table.derive()", () => {
 
 	test("parameterizes non-fragment values", () => {
 		const PostsWithThreshold = Posts.derive(
-			z.object({hasMany: z.boolean()}),
-		)`CASE WHEN COUNT(*) > ${10} THEN 1 ELSE 0 END AS "hasMany"`;
+			"hasMany",
+			z.boolean(),
+		)`CASE WHEN COUNT(*) > ${10} THEN 1 ELSE 0 END`;
 
 		const expr = (PostsWithThreshold._meta as any).derivedExprs[0];
-		expect(expr.sql).toBe('CASE WHEN COUNT(*) > ? THEN 1 ELSE 0 END AS "hasMany"');
+		expect(expr.fieldName).toBe("hasMany");
+		expect(expr.sql).toBe("CASE WHEN COUNT(*) > ? THEN 1 ELSE 0 END");
 		expect(expr.params).toEqual([10]);
 	});
 
 	test("cols proxy works for derived fields", () => {
-		const PostsWithCount = Posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
 		// Original fields still work
 		expect(PostsWithCount.cols.id.sql).toBe('"posts"."id"');
@@ -491,18 +489,14 @@ describe("Table.derive()", () => {
 	});
 
 	test("preserves base table primary key", () => {
-		const PostsWithCount = Posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
 		expect(PostsWithCount._meta.primary).toBe("id");
 		expect(PostsWithCount.primary).not.toBeNull();
 	});
 
 	test("schema validates correctly with derived fields", () => {
-		const PostsWithCount = Posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
 		const validId = "550e8400-e29b-41d4-a716-446655440000";
 

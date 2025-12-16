@@ -160,23 +160,24 @@ function placeholder(index: number, dialect: SQLDialect): string {
  *
  * For derived tables (created via Table.derive()), this function:
  * - Skips derived fields when outputting regular columns
- * - Appends derived SQL expressions with alias rewriting (AS "field" → AS "table.field")
+ * - Appends derived SQL expressions with auto-generated aliases
  *
  * @example
  * buildSelectColumns([posts, users], "sqlite")
- * // SELECT "posts"."id" AS "posts.id", "posts"."title" AS "posts.title", ...
+ * // { sql: '"posts"."id" AS "posts.id", ...', params: [] }
  *
  * @example
  * // With derived table
- * const PostsWithCount = Posts.derive(z.object({ likeCount: z.number() }))`COUNT(*) AS "likeCount"`;
+ * const PostsWithCount = Posts.derive('likeCount', z.number())`COUNT(*)`;
  * buildSelectColumns([PostsWithCount], "sqlite")
- * // SELECT "posts"."id" AS "posts.id", ..., COUNT(*) AS "posts.likeCount"
+ * // { sql: '"posts"."id" AS "posts.id", ..., COUNT(*) AS "posts.likeCount"', params: [] }
  */
 export function buildSelectColumns(
 	tables: Table<any>[],
 	dialect: SQLDialect = "sqlite",
-): string {
+): {sql: string; params: unknown[]} {
 	const columns: string[] = [];
+	const params: unknown[] = [];
 
 	for (const table of tables) {
 		const tableName = table.name;
@@ -196,21 +197,17 @@ export function buildSelectColumns(
 			columns.push(`${qualifiedCol} AS ${quoteIdent(alias, dialect)}`);
 		}
 
-		// Append derived expressions with prefixed aliases
-		// Transform AS "field" → AS "tableName.field" for normalization
+		// Append derived expressions with auto-generated aliases
 		const derivedExprs = (table._meta as any).derivedExprs ?? [];
 		for (const expr of derivedExprs) {
-			// Rewrite aliases to be table-qualified
-			const prefixedSql = expr.sql.replace(
-				/AS\s+"([^"]+)"/gi,
-				(_: string, field: string) =>
-					`AS ${quoteIdent(`${tableName}.${field}`, dialect)}`,
-			);
-			columns.push(prefixedSql);
+			// Generate alias from fieldName - no parsing needed
+			const alias = `${tableName}.${expr.fieldName}`;
+			columns.push(`(${expr.sql}) AS ${quoteIdent(alias, dialect)}`);
+			params.push(...expr.params);
 		}
 	}
 
-	return columns.join(", ");
+	return {sql: columns.join(", "), params};
 }
 
 /**
@@ -420,13 +417,13 @@ export function buildQuery(
 	tables: Table<any>[],
 	userClauses: string,
 	dialect: SQLDialect = "sqlite",
-): string {
+): {sql: string; params: unknown[]} {
 	if (tables.length === 0) {
 		throw new Error("At least one table is required");
 	}
 
 	const mainTable = tables[0].name;
-	const selectCols = buildSelectColumns(tables, dialect);
+	const {sql: selectCols, params} = buildSelectColumns(tables, dialect);
 	const fromClause = quoteIdent(mainTable, dialect);
 
 	let sql = `SELECT ${selectCols} FROM ${fromClause}`;
@@ -435,7 +432,7 @@ export function buildQuery(
 		sql += ` ${userClauses}`;
 	}
 
-	return sql;
+	return {sql, params};
 }
 
 /**
@@ -453,9 +450,10 @@ export function createQuery(
 	dialect: SQLDialect = "sqlite",
 ): (strings: TemplateStringsArray, ...values: unknown[]) => ParsedQuery {
 	return (strings: TemplateStringsArray, ...values: unknown[]) => {
-		const {sql: userClauses, params} = parseTemplate(strings, values, dialect);
-		const sql = buildQuery(tables, userClauses, dialect);
-		return {sql, params};
+		const {sql: userClauses, params: userParams} = parseTemplate(strings, values, dialect);
+		const {sql, params: selectParams} = buildQuery(tables, userClauses, dialect);
+		// Derived expression params come first (they're in the SELECT), then user params
+		return {sql, params: [...selectParams, ...userParams]};
 	};
 }
 

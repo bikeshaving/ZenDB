@@ -547,7 +547,9 @@ export interface ReferenceInfo {
  * Metadata for SQL-derived expressions created via Table.derive().
  */
 export interface DerivedExpr {
-	/** The SQL expression (e.g., 'COUNT("likes"."id") AS "likeCount"') */
+	/** The field name for this derived column */
+	fieldName: string;
+	/** The SQL expression (e.g., 'COUNT("likes"."id")') */
 	sql: string;
 	/** Parameters for the expression */
 	params: readonly unknown[];
@@ -718,15 +720,9 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * @returns Tagged template function that returns a DerivedTable
 	 *
 	 * @example
-	 * const PostsWithStats = Posts.derive(
-	 *   z.object({
-	 *     likeCount: z.number(),
-	 *     commentCount: z.number(),
-	 *   })
-	 * )`
-	 *   COUNT(${Likes.cols.id}) AS "likeCount",
-	 *   COUNT(${Comments.cols.id}) AS "commentCount"
-	 * `;
+	 * const PostsWithStats = Posts
+	 *   .derive('likeCount', z.number())`COUNT(DISTINCT ${Likes.cols.id})`
+	 *   .derive('commentCount', z.number())`COUNT(DISTINCT ${Comments.cols.id})`;
 	 *
 	 * db.all(PostsWithStats, Likes, Comments)`
 	 *   LEFT JOIN likes ON ${Likes.cols.postId} = ${Posts.cols.id}
@@ -734,12 +730,13 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *   GROUP BY ${Posts.primary}
 	 * `
 	 */
-	derive<D extends ZodRawShape>(
-		derivedSchema: ZodObject<D>
+	derive<N extends string, V extends z.ZodTypeAny>(
+		fieldName: N,
+		fieldType: V
 	): (
 		strings: TemplateStringsArray,
 		...values: unknown[]
-	) => DerivedTable<T & D>;
+	) => DerivedTable<T & { [K in N]: V }>;
 
 	/**
 	 * Access qualified column names as SQL fragments.
@@ -1366,7 +1363,7 @@ function createTableObject(
 			) as PartialTable<any>;
 		},
 
-		derive<D extends ZodRawShape>(derivedSchema: ZodObject<D>) {
+		derive<N extends string, V extends z.ZodTypeAny>(fieldName: N, fieldType: V) {
 			return (strings: TemplateStringsArray, ...values: unknown[]) => {
 				// Parse template string with interpolated values
 				const parts: string[] = [];
@@ -1391,11 +1388,11 @@ function createTableObject(
 
 				// Clean up the SQL expression (trim whitespace, normalize)
 				const sql = parts.join("").trim();
-				const derivedExpr: DerivedExpr = {sql, params};
+				const derivedExpr: DerivedExpr = {fieldName, sql, params};
 
-				// Merge the base schema with derived schema
-				const mergedSchema = schema.merge(derivedSchema);
-				const mergedZodShape = {...zodShape, ...derivedSchema.shape};
+				// Extend schema with new field
+				const mergedSchema = schema.extend({[fieldName]: fieldType} as any);
+				const mergedZodShape = {...zodShape, [fieldName]: fieldType};
 
 				// Accumulate expressions (supports composition: A.derive(...).derive(...))
 				const existingExprs: DerivedExpr[] = (meta as any).derivedExprs ?? [];
@@ -1405,13 +1402,10 @@ function createTableObject(
 					...meta,
 					isDerived: true as const,
 					derivedExprs: [...existingExprs, derivedExpr],
-					derivedFields: [...existingDerivedFields, ...Object.keys(derivedSchema.shape)],
+					derivedFields: [...existingDerivedFields, fieldName],
 					fields: {
 						...meta.fields,
-						// Add empty field metadata for derived fields
-						...Object.fromEntries(
-							Object.keys(derivedSchema.shape).map((k) => [k, {}]),
-						),
+						[fieldName]: {},
 					},
 				};
 

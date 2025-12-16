@@ -211,9 +211,7 @@ describe("Database", () => {
 		});
 
 		test("throws on derived table", async () => {
-			const UsersWithStats = Users.derive(
-				z.object({postCount: z.number()}),
-			)`COUNT(*) AS "postCount"`;
+			const UsersWithStats = Users.derive("postCount", z.number())`COUNT(*)`;
 
 			await expect(
 				db.insert(UsersWithStats as any, {id: USER_ID, name: "Alice", email: "a@b.com", postCount: 0}),
@@ -534,9 +532,7 @@ describe("Database", () => {
 		});
 
 		test("throws on derived table", async () => {
-			const UsersWithStats = Users.derive(
-				z.object({postCount: z.number()}),
-			)`COUNT(*) AS "postCount"`;
+			const UsersWithStats = Users.derive("postCount", z.number())`COUNT(*)`;
 
 			await expect(
 				db.update(UsersWithStats as any, USER_ID, {name: "Alice Updated"}),

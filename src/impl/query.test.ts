@@ -27,31 +27,32 @@ const posts = table("posts", {
 
 describe("buildSelectColumns", () => {
 	test("single table", () => {
-		const cols = buildSelectColumns([users], "sqlite");
+		const {sql, params} = buildSelectColumns([users], "sqlite");
 
-		expect(cols).toContain('"users"."id" AS "users.id"');
-		expect(cols).toContain('"users"."email" AS "users.email"');
-		expect(cols).toContain('"users"."name" AS "users.name"');
+		expect(sql).toContain('"users"."id" AS "users.id"');
+		expect(sql).toContain('"users"."email" AS "users.email"');
+		expect(sql).toContain('"users"."name" AS "users.name"');
+		expect(params).toEqual([]);
 	});
 
 	test("multiple tables", () => {
-		const cols = buildSelectColumns([posts, users], "sqlite");
+		const {sql} = buildSelectColumns([posts, users], "sqlite");
 
 		// Post columns
-		expect(cols).toContain('"posts"."id" AS "posts.id"');
-		expect(cols).toContain('"posts"."authorId" AS "posts.authorId"');
-		expect(cols).toContain('"posts"."title" AS "posts.title"');
+		expect(sql).toContain('"posts"."id" AS "posts.id"');
+		expect(sql).toContain('"posts"."authorId" AS "posts.authorId"');
+		expect(sql).toContain('"posts"."title" AS "posts.title"');
 
 		// User columns
-		expect(cols).toContain('"users"."id" AS "users.id"');
-		expect(cols).toContain('"users"."name" AS "users.name"');
+		expect(sql).toContain('"users"."id" AS "users.id"');
+		expect(sql).toContain('"users"."name" AS "users.name"');
 	});
 
 	test("mysql dialect uses backticks", () => {
-		const cols = buildSelectColumns([users], "mysql");
+		const {sql} = buildSelectColumns([users], "mysql");
 
-		expect(cols).toContain("`users`.`id` AS `users.id`");
-		expect(cols).toContain("`users`.`email` AS `users.email`");
+		expect(sql).toContain("`users`.`id` AS `users.id`");
+		expect(sql).toContain("`users`.`email` AS `users.email`");
 	});
 });
 
@@ -106,21 +107,22 @@ describe("parseTemplate", () => {
 
 describe("buildQuery", () => {
 	test("single table with no clauses", () => {
-		const sql = buildQuery([users], "", "sqlite");
+		const {sql, params} = buildQuery([users], "", "sqlite");
 
 		expect(sql).toContain("SELECT");
 		expect(sql).toContain('"users"."id" AS "users.id"');
 		expect(sql).toContain('FROM "users"');
+		expect(params).toEqual([]);
 	});
 
 	test("single table with WHERE", () => {
-		const sql = buildQuery([users], "WHERE active = ?", "sqlite");
+		const {sql} = buildQuery([users], "WHERE active = ?", "sqlite");
 
 		expect(sql).toContain('FROM "users" WHERE active = ?');
 	});
 
 	test("multiple tables with JOIN", () => {
-		const sql = buildQuery(
+		const {sql} = buildQuery(
 			[posts, users],
 			'JOIN "users" ON "users"."id" = "posts"."authorId" WHERE published = ?',
 			"sqlite",
@@ -260,98 +262,86 @@ describe("table interpolation", () => {
 describe("buildSelectColumns with partial tables", () => {
 	test("picks only selected columns", () => {
 		const UserSummary = users.pick("id", "name");
-		const cols = buildSelectColumns([UserSummary], "sqlite");
+		const {sql} = buildSelectColumns([UserSummary], "sqlite");
 
-		expect(cols).toContain('"users"."id" AS "users.id"');
-		expect(cols).toContain('"users"."name" AS "users.name"');
-		expect(cols).not.toContain("email");
+		expect(sql).toContain('"users"."id" AS "users.id"');
+		expect(sql).toContain('"users"."name" AS "users.name"');
+		expect(sql).not.toContain("email");
 	});
 
 	test("multiple partial tables", () => {
 		const PostSummary = posts.pick("id", "title", "authorId");
 		const UserSummary = users.pick("id", "name");
-		const cols = buildSelectColumns([PostSummary, UserSummary], "sqlite");
+		const {sql} = buildSelectColumns([PostSummary, UserSummary], "sqlite");
 
 		// Post columns
-		expect(cols).toContain('"posts"."id" AS "posts.id"');
-		expect(cols).toContain('"posts"."title" AS "posts.title"');
-		expect(cols).toContain('"posts"."authorId" AS "posts.authorId"');
-		expect(cols).not.toContain('"posts"."body"');
+		expect(sql).toContain('"posts"."id" AS "posts.id"');
+		expect(sql).toContain('"posts"."title" AS "posts.title"');
+		expect(sql).toContain('"posts"."authorId" AS "posts.authorId"');
+		expect(sql).not.toContain('"posts"."body"');
 
 		// User columns
-		expect(cols).toContain('"users"."id" AS "users.id"');
-		expect(cols).toContain('"users"."name" AS "users.name"');
-		expect(cols).not.toContain('"users"."email"');
+		expect(sql).toContain('"users"."id" AS "users.id"');
+		expect(sql).toContain('"users"."name" AS "users.name"');
+		expect(sql).not.toContain('"users"."email"');
 	});
 });
 
 describe("buildSelectColumns with derived tables", () => {
 	test("skips derived fields in regular columns", () => {
-		const PostsWithCount = posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+		const PostsWithCount = posts.derive("likeCount", z.number())`COUNT(*)`;
 
-		const cols = buildSelectColumns([PostsWithCount], "sqlite");
+		const {sql, params} = buildSelectColumns([PostsWithCount], "sqlite");
 
 		// Regular columns should be present
-		expect(cols).toContain('"posts"."id" AS "posts.id"');
-		expect(cols).toContain('"posts"."title" AS "posts.title"');
+		expect(sql).toContain('"posts"."id" AS "posts.id"');
+		expect(sql).toContain('"posts"."title" AS "posts.title"');
 
 		// Should NOT have derived field as a regular column
-		expect(cols).not.toContain('"posts"."likeCount" AS "posts.likeCount"');
+		expect(sql).not.toContain('"posts"."likeCount" AS "posts.likeCount"');
+		expect(params).toEqual([]);
 	});
 
-	test("appends derived expressions with prefixed aliases", () => {
-		const PostsWithCount = posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+	test("appends derived expressions with auto-generated aliases", () => {
+		const PostsWithCount = posts.derive("likeCount", z.number())`COUNT(*)`;
 
-		const cols = buildSelectColumns([PostsWithCount], "sqlite");
+		const {sql} = buildSelectColumns([PostsWithCount], "sqlite");
 
-		// Should have the derived expression with prefixed alias
-		expect(cols).toContain('COUNT(*) AS "posts.likeCount"');
-	});
-
-	test("handles multiple derived fields", () => {
-		const PostsWithStats = posts.derive(
-			z.object({
-				likeCount: z.number(),
-				commentCount: z.number(),
-			}),
-		)`COUNT(likes.id) AS "likeCount", COUNT(comments.id) AS "commentCount"`;
-
-		const cols = buildSelectColumns([PostsWithStats], "sqlite");
-
-		expect(cols).toContain('AS "posts.likeCount"');
-		expect(cols).toContain('AS "posts.commentCount"');
+		// Should have the derived expression with auto-generated prefixed alias
+		expect(sql).toContain('(COUNT(*)) AS "posts.likeCount"');
 	});
 
 	test("handles composition (multiple derive() calls)", () => {
-		const WithLikes = posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(likes.id) AS "likeCount"`;
+		const WithLikes = posts.derive("likeCount", z.number())`COUNT(likes.id)`;
+		const WithLikesAndComments = WithLikes.derive("commentCount", z.number())`COUNT(comments.id)`;
 
-		const WithLikesAndComments = WithLikes.derive(
-			z.object({commentCount: z.number()}),
-		)`COUNT(comments.id) AS "commentCount"`;
-
-		const cols = buildSelectColumns([WithLikesAndComments], "sqlite");
+		const {sql} = buildSelectColumns([WithLikesAndComments], "sqlite");
 
 		// Both expressions should be present
-		expect(cols).toContain('AS "posts.likeCount"');
-		expect(cols).toContain('AS "posts.commentCount"');
+		expect(sql).toContain('AS "posts.likeCount"');
+		expect(sql).toContain('AS "posts.commentCount"');
 	});
 
 	test("works with MySQL dialect", () => {
-		const PostsWithCount = posts.derive(
-			z.object({likeCount: z.number()}),
-		)`COUNT(*) AS "likeCount"`;
+		const PostsWithCount = posts.derive("likeCount", z.number())`COUNT(*)`;
 
-		const cols = buildSelectColumns([PostsWithCount], "mysql");
+		const {sql} = buildSelectColumns([PostsWithCount], "mysql");
 
 		// MySQL uses backticks
-		expect(cols).toContain('`posts`.`id` AS `posts.id`');
-		expect(cols).toContain('AS `posts.likeCount`');
+		expect(sql).toContain('`posts`.`id` AS `posts.id`');
+		expect(sql).toContain('AS `posts.likeCount`');
+	});
+
+	test("collects params from derived expressions", () => {
+		const PostsWithThreshold = posts.derive(
+			"hasMany",
+			z.boolean(),
+		)`CASE WHEN COUNT(*) > ${10} THEN 1 ELSE 0 END`;
+
+		const {sql, params} = buildSelectColumns([PostsWithThreshold], "sqlite");
+
+		expect(sql).toContain("CASE WHEN COUNT(*) > ? THEN 1 ELSE 0 END");
+		expect(params).toEqual([10]);
 	});
 });
 
