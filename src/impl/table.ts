@@ -17,6 +17,46 @@ import {
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
+// Identifier Validation
+// ============================================================================
+
+/**
+ * Validate that an identifier (table or column name) is safe for SQL.
+ * Throws an error if the identifier contains dangerous characters.
+ *
+ * @param name - The identifier to validate
+ * @param type - "table" or "column" for error messages
+ * @throws Error if identifier contains control characters, semicolons, etc.
+ */
+function validateIdentifier(name: string, type: "table" | "column"): void {
+	// Check for control characters (ASCII 0-31 and 127)
+	// These include: null byte (\x00), newline (\n), carriage return (\r), tab (\t), etc.
+	// eslint-disable-next-line no-control-regex
+	const controlCharRegex = /[\x00-\x1f\x7f]/;
+	if (controlCharRegex.test(name)) {
+		throw new TableDefinitionError(
+			// eslint-disable-next-line no-control-regex
+			`Invalid ${type} identifier "${name.replace(/[\x00-\x1f\x7f]/g, "\\x")}"` +
+				`: ${type} names cannot contain control characters`,
+		);
+	}
+
+	// Check for semicolons (SQL statement separator)
+	if (name.includes(";")) {
+		throw new TableDefinitionError(
+			`Invalid ${type} identifier "${name}": ${type} names cannot contain semicolons`,
+		);
+	}
+
+	// Check for backticks (could interfere with MySQL quoting)
+	if (name.includes("`")) {
+		throw new TableDefinitionError(
+			`Invalid ${type} identifier "${name}": ${type} names cannot contain backticks`,
+		);
+	}
+}
+
+// ============================================================================
 // Standard Schema Support
 // ============================================================================
 
@@ -987,6 +1027,9 @@ export function table<T extends Record<string, ZodTypeAny>>(
 	shape: T,
 	options: TableOptions = {},
 ): Table<any> {
+	// Validate table name for dangerous characters
+	validateIdentifier(name, "table");
+
 	// Validate table name doesn't contain dots (would break normalization)
 	if (name.includes(".")) {
 		throw new TableDefinitionError(
@@ -1007,6 +1050,9 @@ export function table<T extends Record<string, ZodTypeAny>>(
 	};
 
 	for (const [key, value] of Object.entries(shape)) {
+		// Validate field name for dangerous characters
+		validateIdentifier(key, "column");
+
 		// Validate field names don't contain dots (would break normalization)
 		if (key.includes(".")) {
 			throw new TableDefinitionError(
@@ -1146,6 +1192,39 @@ function buildCondition(
 	value: ConditionValue<unknown>,
 ): {sql: string; params: unknown[]} {
 	if (isOperatorObject(value)) {
+		// Validate for conflicting operators
+		if (value.$eq !== undefined && value.$neq !== undefined) {
+			throw new Error(
+				`Conflicting operators: $eq and $neq cannot be used together on ${column}`,
+			);
+		}
+
+		// Check for impossible range: $gt >= $lt means nothing can satisfy both
+		if (
+			value.$gt !== undefined &&
+			value.$lt !== undefined &&
+			typeof value.$gt === "number" &&
+			typeof value.$lt === "number" &&
+			value.$gt >= value.$lt
+		) {
+			throw new Error(
+				`Impossible range conflict: $gt: ${value.$gt} and $lt: ${value.$lt} on ${column} cannot both be satisfied`,
+			);
+		}
+
+		// Check for impossible range: $gte > $lte
+		if (
+			value.$gte !== undefined &&
+			value.$lte !== undefined &&
+			typeof value.$gte === "number" &&
+			typeof value.$lte === "number" &&
+			value.$gte > value.$lte
+		) {
+			throw new Error(
+				`Impossible range conflict: $gte: ${value.$gte} and $lte: ${value.$lte} on ${column} cannot both be satisfied`,
+			);
+		}
+
 		const parts: string[] = [];
 		const params: unknown[] = [];
 
@@ -1319,6 +1398,16 @@ function createTableObject(
 			// Handle empty array - return always-false condition
 			if (values.length === 0) {
 				return createFragment("1 = 0", []);
+			}
+
+			// PostgreSQL has a limit of 32767 parameters per query
+			// Validate this limit to prevent runtime errors
+			const POSTGRESQL_PARAM_LIMIT = 32767;
+			if (values.length > POSTGRESQL_PARAM_LIMIT) {
+				throw new Error(
+					`Too many values in IN clause: ${values.length} exceeds PostgreSQL's parameter limit of ${POSTGRESQL_PARAM_LIMIT}. ` +
+						`Consider using a temporary table or splitting the query.`,
+				);
 			}
 
 			// Generate IN clause with placeholders

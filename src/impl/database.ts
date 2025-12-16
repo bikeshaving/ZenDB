@@ -245,9 +245,12 @@ export function decodeData<T extends Table<any>>(
 				if (typeof value === "string") {
 					try {
 						decoded[key] = JSON.parse(value);
-					} catch {
-						// If parse fails, keep as-is
-						decoded[key] = value;
+					} catch (e) {
+						// Throw with helpful error message mentioning JSON and field
+						throw new Error(
+							`JSON parse error for field "${key}": ${e instanceof Error ? e.message : String(e)}. ` +
+								`Value was: ${value.slice(0, 100)}${value.length > 100 ? "..." : ""}`,
+						);
 					}
 				} else {
 					// Already an object (e.g., from PostgreSQL JSONB)
@@ -256,8 +259,19 @@ export function decodeData<T extends Table<any>>(
 			} else if (core instanceof z.ZodDate) {
 				// Automatic date decoding from ISO string
 				if (typeof value === "string") {
-					decoded[key] = new Date(value);
+					const date = new Date(value);
+					if (isNaN(date.getTime())) {
+						throw new Error(
+							`Invalid date value for field "${key}": "${value}" cannot be parsed as a valid date`,
+						);
+					}
+					decoded[key] = date;
 				} else if (value instanceof Date) {
+					if (isNaN(value.getTime())) {
+						throw new Error(
+							`Invalid Date object for field "${key}": received an Invalid Date`,
+						);
+					}
 					decoded[key] = value;
 				} else {
 					decoded[key] = value;
@@ -313,9 +327,9 @@ export interface Driver {
 	run(sql: string, params: unknown[]): Promise<number>;
 
 	/**
-	 * Execute a query and return a single value.
+	 * Execute a query and return a single value, or null if no rows.
 	 */
-	val<T = unknown>(sql: string, params: unknown[]): Promise<T>;
+	val<T = unknown>(sql: string, params: unknown[]): Promise<T | null>;
 
 	/**
 	 * Escape an identifier (table name, column name) for safe SQL interpolation.
@@ -816,7 +830,7 @@ export class Transaction {
 	async val<T>(
 		strings: TemplateStringsArray,
 		...values: unknown[]
-	): Promise<T> {
+	): Promise<T | null> {
 		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.val<T>(sql, params);
 	}
@@ -929,11 +943,12 @@ export class Database extends EventTarget {
 			throw new Error("Database already opened");
 		}
 
-		// Create table outside lock (idempotent)
-		await this.#ensureMigrationsTable();
-
 		// Run migration logic inside lock
 		const runMigration = async (): Promise<void> => {
+			// Create table inside lock to prevent race conditions when
+			// multiple processes start simultaneously
+			await this.#ensureMigrationsTable();
+
 			const currentVersion = await this.#getCurrentVersionLocked();
 
 			if (version > currentVersion) {
@@ -1449,7 +1464,7 @@ export class Database extends EventTarget {
 	async val<T>(
 		strings: TemplateStringsArray,
 		...values: unknown[]
-	): Promise<T> {
+	): Promise<T | null> {
 		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
 		return this.#driver.val<T>(sql, params);
 	}
