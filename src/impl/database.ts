@@ -464,10 +464,11 @@ export class Transaction {
 
 		const tableName = this.#quoteIdent(table.name);
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
-		const setClause = `${this.#quoteIdent(softDeleteField)} = ${this.#placeholder(2)}`;
+		// Use CURRENT_TIMESTAMP for consistent DB server time (not app server time)
+		const setClause = `${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`;
 
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		const affected = await this.#driver.run(sql, [id, new Date()]);
+		const affected = await this.#driver.run(sql, [id]);
 
 		return affected > 0;
 	}
@@ -829,9 +830,22 @@ export class Database extends EventTarget {
 			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
 		}
 
-		// MySQL fallback: INSERT then SELECT
+		// MySQL fallback: INSERT then SELECT to get DB defaults
 		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${placeholders})`;
 		await this.#driver.run(sql, values);
+
+		// Fetch the inserted row to get DB-applied defaults
+		const pk = table._meta.primary;
+		if (pk && encoded[pk] !== undefined) {
+			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
+			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [encoded[pk]]);
+			if (row) {
+				const decoded = decodeData(table, row);
+				return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+			}
+		}
+
+		// Fallback if no primary key or row not found (shouldn't happen normally)
 		return validated as Infer<T>;
 	}
 
@@ -946,10 +960,11 @@ export class Database extends EventTarget {
 
 		const tableName = this.#quoteIdent(table.name);
 		const whereClause = `${this.#quoteIdent(pk)} = ${this.#placeholder(1)}`;
-		const setClause = `${this.#quoteIdent(softDeleteField)} = ${this.#placeholder(2)}`;
+		// Use CURRENT_TIMESTAMP for consistent DB server time (not app server time)
+		const setClause = `${this.#quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`;
 
 		const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause}`;
-		const affected = await this.#driver.run(sql, [id, new Date()]);
+		const affected = await this.#driver.run(sql, [id]);
 
 		return affected > 0;
 	}

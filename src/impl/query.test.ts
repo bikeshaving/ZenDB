@@ -284,3 +284,47 @@ describe("buildSelectColumns with partial tables", () => {
 		expect(cols).not.toContain('"users"."email"');
 	});
 });
+
+describe("SQL fragment placeholder handling", () => {
+	test("fragment SQL with literal ? in string is corrupted (known bug)", () => {
+		// This test documents a known bug:
+		// If fragment SQL contains a literal '?' (in a string literal or comment),
+		// String.replace("?", ...) will incorrectly replace it instead of the placeholder
+		const {createFragment} = require("./query.js");
+
+		// User creates a raw fragment with a literal ? in a SQL string
+		// They want to match the literal character '?' in the name column
+		// SQL: WHERE name = '?' AND email = ?
+		const fragment = createFragment(
+			`"users"."name" = '?' AND "users"."email" = ?`,
+			["test@example.com"],
+		);
+
+		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [fragment], "postgresql");
+
+		// BUG: The '?' inside the string literal gets replaced with $1
+		// Expected (correct): WHERE "users"."name" = '?' AND "users"."email" = $1
+		// Actual (buggy): WHERE "users"."name" = '$1' AND "users"."email" = ?
+		//
+		// This test should PASS when the bug is FIXED
+		expect(result.sql).toBe(`WHERE "users"."name" = '?' AND "users"."email" = $1`);
+		expect(result.params).toEqual(["test@example.com"]);
+	});
+
+	test("fragment with multiple params replaces placeholders in order", () => {
+		const {createFragment} = require("./query.js");
+
+		const fragment = createFragment(
+			'"posts"."title" = ? AND "posts"."body" LIKE ?',
+			["Hello", "%test%"],
+		);
+
+		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [fragment], "postgresql");
+
+		// Should correctly replace BOTH placeholders with $1 and $2
+		expect(result.sql).toBe('WHERE "posts"."title" = $1 AND "posts"."body" LIKE $2');
+		expect(result.params).toEqual(["Hello", "%test%"]);
+	});
+});

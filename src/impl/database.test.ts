@@ -584,6 +584,44 @@ describe("MySQL dialect", () => {
 		expect(sql).toContain("INSERT INTO `users`");
 		expect(sql).toContain("`id`, `email`, `name`");
 	});
+
+	test("insert() fetches row after INSERT to get DB defaults", async () => {
+		const driver = createMockDriver("mysql");
+		const db = new Database(driver);
+
+		const TableWithDefaults = table("with_defaults", {
+			id: z.string().db.primary(),
+			name: z.string(),
+			metadata: z.object({source: z.string()}).default({source: "unknown"}),
+			version: z.number().default(0),
+		});
+
+		// MySQL doesn't support RETURNING, so it should:
+		// 1. INSERT the row
+		// 2. SELECT the row back to get DB-applied defaults
+		(driver.run as any).mockImplementation(async () => 1);
+		(driver.get as any).mockImplementation(async () => ({
+			id: "test-id",
+			name: "Test",
+			metadata: '{"source":"db-trigger"}', // DB might set this via trigger
+			version: 1, // DB might have a trigger that sets this
+		}));
+
+		const result = await db.insert(TableWithDefaults, {
+			id: "test-id",
+			name: "Test",
+		});
+
+		// Should have fetched the row with DB defaults, not just return input
+		expect(result.version).toBe(1);
+		expect(result.metadata).toEqual({source: "db-trigger"});
+
+		// Verify SELECT was called after INSERT
+		expect((driver.get as any).mock.calls.length).toBe(1);
+		const [selectSql] = (driver.get as any).mock.calls[0];
+		expect(selectSql).toContain("SELECT");
+		expect(selectSql).toContain("`with_defaults`");
+	});
 });
 
 describe("escapeIdentifier", () => {
@@ -735,7 +773,7 @@ describe("Soft Delete", () => {
 			db = new Database(driver);
 		});
 
-		test("soft deletes by primary key", async () => {
+		test("soft deletes by primary key using DB timestamp", async () => {
 			(driver.run as any).mockImplementation(async () => 1);
 
 			const deleted = await db.softDelete(SoftDeleteUsers, USER_ID);
@@ -744,11 +782,13 @@ describe("Soft Delete", () => {
 
 			const [sql, params] = (driver.run as any).mock.calls[0];
 			expect(sql).toContain('UPDATE "soft_delete_users"');
-			expect(sql).toContain('SET "deletedAt" = ?');
+			// Should use DB's CURRENT_TIMESTAMP, not app-side Date
+			// This ensures consistent timestamps in distributed systems
+			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql).toContain('WHERE "id" = ?');
-			expect(params).toHaveLength(2);
+			// Only the ID should be a parameter, not the timestamp
+			expect(params).toHaveLength(1);
 			expect(params[0]).toBe(USER_ID);
-			expect(params[1]).toBeInstanceOf(Date);
 		});
 
 		test("returns false if entity not found", async () => {
@@ -781,7 +821,7 @@ describe("Soft Delete", () => {
 	});
 
 	describe("Transaction.softDelete()", () => {
-		test("soft deletes within transaction", async () => {
+		test("soft deletes within transaction using DB timestamp", async () => {
 			const driver = createMockDriver();
 			const db = new Database(driver);
 			(driver.run as any).mockImplementation(async () => 1);
@@ -796,14 +836,14 @@ describe("Soft Delete", () => {
 			// Check transaction was called
 			expect((driver.transaction as any).mock.calls.length).toBe(1);
 
-			// Check UPDATE was called
+			// Check UPDATE was called with DB timestamp
 			const [sql, params] = (driver.run as any).mock.calls[0];
 			expect(sql).toContain('UPDATE "soft_delete_users"');
-			expect(sql).toContain('SET "deletedAt" = ?');
+			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql).toContain('WHERE "id" = ?');
-			expect(params).toHaveLength(2);
+			// Only ID should be parameterized, not the timestamp
+			expect(params).toHaveLength(1);
 			expect(params[0]).toBe(USER_ID);
-			expect(params[1]).toBeInstanceOf(Date);
 		});
 
 		test("throws if table has no soft delete field", async () => {

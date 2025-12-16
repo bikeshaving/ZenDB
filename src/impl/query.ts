@@ -183,6 +183,40 @@ export function buildSelectColumns(
 }
 
 /**
+ * Find the next ? placeholder that's NOT inside a string literal.
+ * Returns the index of the ?, or -1 if not found.
+ */
+function findNextPlaceholder(sql: string, startIndex: number): number {
+	let inSingleQuote = false;
+	let inDoubleQuote = false;
+
+	for (let i = startIndex; i < sql.length; i++) {
+		const char = sql[i];
+
+		// Handle escaped quotes ('' or "")
+		if (char === "'" && !inDoubleQuote) {
+			// Check for escaped single quote ('')
+			if (sql[i + 1] === "'") {
+				i++; // Skip the escaped quote
+				continue;
+			}
+			inSingleQuote = !inSingleQuote;
+		} else if (char === '"' && !inSingleQuote) {
+			// Check for escaped double quote ("")
+			if (sql[i + 1] === '"') {
+				i++; // Skip the escaped quote
+				continue;
+			}
+			inDoubleQuote = !inDoubleQuote;
+		} else if (char === "?" && !inSingleQuote && !inDoubleQuote) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+/**
  * Parse a tagged template into SQL string and params array.
  *
  * Supports:
@@ -245,14 +279,22 @@ export function parseTemplate(
 				sql += transformDDLFragment(value, dialect);
 			} else if (isSQLFragment(value)) {
 				// Inject fragment SQL, replacing ? placeholders with dialect-appropriate ones
+				// Use index-based replacement to avoid replacing ? inside string literals
 				let fragmentSQL = value.sql;
+				let searchStart = 0;
 				for (const param of value.params) {
 					params.push(param);
-					// Replace first ? with the correct placeholder for this dialect
-					fragmentSQL = fragmentSQL.replace(
-						"?",
-						placeholder(params.length, dialect),
-					);
+					// Find the next ? placeholder (not inside quotes)
+					const placeholderIdx = findNextPlaceholder(fragmentSQL, searchStart);
+					if (placeholderIdx !== -1) {
+						const newPlaceholder = placeholder(params.length, dialect);
+						fragmentSQL =
+							fragmentSQL.slice(0, placeholderIdx) +
+							newPlaceholder +
+							fragmentSQL.slice(placeholderIdx + 1);
+						// Continue searching after the new placeholder
+						searchStart = placeholderIdx + newPlaceholder.length;
+					}
 				}
 				sql += fragmentSQL;
 			} else if (isTable(value)) {
