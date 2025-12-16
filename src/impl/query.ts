@@ -91,7 +91,11 @@ const DDL_FRAGMENT = Symbol.for("@b9g/zealot:ddl-fragment");
  */
 export interface DDLFragment {
 	readonly [DDL_FRAGMENT]: true;
-	readonly type: "create-table" | "alter-table-add-column" | "create-index" | "update";
+	readonly type:
+		| "create-table"
+		| "alter-table-add-column"
+		| "create-index"
+		| "update";
 	readonly table: Table<any>;
 	readonly options?: Record<string, any>;
 	toString(): string;
@@ -342,7 +346,10 @@ export function parseTemplate(
  * Transform a DDL fragment to SQL based on the dialect.
  * @internal
  */
-function transformDDLFragment(fragment: DDLFragment, dialect: SQLDialect): string {
+function transformDDLFragment(
+	fragment: DDLFragment,
+	dialect: SQLDialect,
+): string {
 	// Lazy import to avoid circular dependencies
 	const {generateDDL, generateColumnDDL} = require("./ddl.js");
 	const table = fragment.table;
@@ -366,7 +373,10 @@ function transformDDLFragment(fragment: DDLFragment, dialect: SQLDialect): strin
 				);
 
 				// MySQL doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN
-				const ifNotExists = dialect === "sqlite" || dialect === "postgresql" ? "IF NOT EXISTS " : "";
+				const ifNotExists =
+					dialect === "sqlite" || dialect === "postgresql"
+						? "IF NOT EXISTS "
+						: "";
 				if (dialect === "mysql" && !ifNotExists) {
 					// For MySQL, document that this will fail if column exists
 					// Users should wrap in try/catch or check column existence first
@@ -378,9 +388,12 @@ function transformDDLFragment(fragment: DDLFragment, dialect: SQLDialect): strin
 
 			case "create-index": {
 				const {fields, name: indexName} = options;
-				const finalIndexName = indexName || `idx_${table.name}_${fields.join("_")}`;
+				const finalIndexName =
+					indexName || `idx_${table.name}_${fields.join("_")}`;
 				const quote = dialect === "mysql" ? "`" : '"';
-				const quotedColumns = fields.map((f: string) => `${quote}${f}${quote}`).join(", ");
+				const quotedColumns = fields
+					.map((f: string) => `${quote}${f}${quote}`)
+					.join(", ");
 
 				// All three dialects support CREATE INDEX IF NOT EXISTS
 				return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${table.name}${quote}(${quotedColumns})`;
@@ -450,8 +463,16 @@ export function createQuery(
 	dialect: SQLDialect = "sqlite",
 ): (strings: TemplateStringsArray, ...values: unknown[]) => ParsedQuery {
 	return (strings: TemplateStringsArray, ...values: unknown[]) => {
-		const {sql: userClauses, params: userParams} = parseTemplate(strings, values, dialect);
-		const {sql, params: selectParams} = buildQuery(tables, userClauses, dialect);
+		const {sql: userClauses, params: userParams} = parseTemplate(
+			strings,
+			values,
+			dialect,
+		);
+		const {sql, params: selectParams} = buildQuery(
+			tables,
+			userClauses,
+			dialect,
+		);
 		// Derived expression params come first (they're in the SELECT), then user params
 		return {sql, params: [...selectParams, ...userParams]};
 	};
@@ -645,9 +666,12 @@ export function resolveReferences(
 
 			for (const ref of refs) {
 				const foreignKeyValue = entity[ref.fieldName];
-				const refEntity = foreignKeyValue === null || foreignKeyValue === undefined
-					? null
-					: entities.get(entityKey(ref.table.name, String(foreignKeyValue))) ?? null;
+				const refEntity =
+					foreignKeyValue === null || foreignKeyValue === undefined
+						? null
+						: (entities.get(
+								entityKey(ref.table.name, String(foreignKeyValue)),
+							) ?? null);
 
 				Object.defineProperty(entity, ref.as, {
 					value: refEntity,

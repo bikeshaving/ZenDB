@@ -9,7 +9,8 @@ describe("table", () => {
 	test("basic table definition", () => {
 		const users = table("users", {
 			id: z.string().uuid(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		expect(users.name).toBe("users");
 	});
@@ -23,7 +24,8 @@ describe("table", () => {
 			age: z.number().int().min(0).max(150),
 			role: z.enum(["user", "admin", "moderator"]).default("user"),
 			active: z.boolean().default(true),
-			createdAt: z.date().default(() => new Date())});
+			createdAt: z.date().default(() => new Date()),
+		});
 
 		const fields = users.fields();
 
@@ -67,7 +69,8 @@ describe("table", () => {
 	test("detects primary key", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			email: z.string().email()});
+			email: z.string().email(),
+		});
 
 		expect(users.meta.primary).toBe("id");
 		expect(users.primary).not.toBeNull();
@@ -80,7 +83,8 @@ describe("table", () => {
 			id: z.string().uuid().db.primary(),
 			bio: z.string().optional(),
 			avatar: z.string().url().nullable(),
-			nickname: z.string().nullish()});
+			nickname: z.string().nullish(),
+		});
 
 		const fields = profiles.fields();
 
@@ -93,7 +97,8 @@ describe("table", () => {
 	test("url detection", () => {
 		const links = table("links", {
 			id: z.string().uuid().db.primary(),
-			url: z.string().url()});
+			url: z.string().url(),
+		});
 
 		const fields = links.fields();
 		expect(fields.url.type).toBe("url");
@@ -103,7 +108,8 @@ describe("table", () => {
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.index(),
-			title: z.string()});
+			title: z.string(),
+		});
 
 		const fields = posts.fields();
 		expect(fields.authorId.indexed).toBe(true);
@@ -115,9 +121,11 @@ describe("table", () => {
 			{
 				id: z.string().uuid().db.primary(),
 				authorId: z.string().uuid(),
-				createdAt: z.date()},
+				createdAt: z.date(),
+			},
 			{
-				indexes: [["authorId", "createdAt"]]},
+				indexes: [["authorId", "createdAt"]],
+			},
 		);
 
 		expect(posts.indexes).toEqual([["authorId", "createdAt"]]);
@@ -129,27 +137,23 @@ describe("table", () => {
 			{
 				id: z.string().uuid().db.primary(),
 				authorId: z.string().uuid(),
-				slug: z.string()},
+				slug: z.string(),
+			},
 			{
-				unique: [["authorId", "slug"]]},
+				unique: [["authorId", "slug"]],
+			},
 		);
 
 		expect(posts.unique).toEqual([["authorId", "slug"]]);
 	});
 
 	test("compound foreign keys via options", () => {
-		const Orders = table("orders", {
-			id: z.string().uuid().db.primary(),
-			customerId: z.string().uuid()});
-
-		const Products = table("products", {
-			id: z.string().uuid().db.primary(),
-			name: z.string()});
-
+		// OrderProducts is the join table we'll reference with compound keys
 		const OrderProducts = table("order_products", {
 			orderId: z.string().uuid(),
 			productId: z.string().uuid(),
-			quantity: z.number()});
+			quantity: z.number(),
+		});
 
 		const OrderItems = table(
 			"order_items",
@@ -157,17 +161,24 @@ describe("table", () => {
 				id: z.string().uuid().db.primary(),
 				orderId: z.string().uuid(),
 				productId: z.string().uuid(),
-				price: z.number()},
+				price: z.number(),
+			},
 			{
-				references: [{
-					fields: ["orderId", "productId"],
-					table: OrderProducts,
-					as: "orderProduct",
-				}]},
+				references: [
+					{
+						fields: ["orderId", "productId"],
+						table: OrderProducts,
+						as: "orderProduct",
+					},
+				],
+			},
 		);
 
 		expect(OrderItems.compoundReferences).toHaveLength(1);
-		expect(OrderItems.compoundReferences[0].fields).toEqual(["orderId", "productId"]);
+		expect(OrderItems.compoundReferences[0].fields).toEqual([
+			"orderId",
+			"productId",
+		]);
 		expect(OrderItems.compoundReferences[0].table).toBe(OrderProducts);
 		expect(OrderItems.compoundReferences[0].as).toBe("orderProduct");
 	});
@@ -175,15 +186,21 @@ describe("table", () => {
 	test("extracts Zod 4 .meta() for UI metadata", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			email: z.string().email().meta({
+			email: z
+				.string()
+				.email()
+				.meta({
 					label: "Email Address",
 					helpText: "We will never share your email",
-					placeholder: "you@example.com"}).db.unique(),
+					placeholder: "you@example.com",
+				})
+				.db.unique(),
 			role: z
 				.enum(["user", "admin"])
 				.default("user")
 				.meta({label: "User Role", widget: "radio"}),
-			bio: z.string().optional().meta({label: "Biography", widget: "textarea"})});
+			bio: z.string().optional().meta({label: "Biography", widget: "textarea"}),
+		});
 
 		const fields = users.fields();
 
@@ -209,7 +226,8 @@ describe("table", () => {
 	test("rejects table names containing dots", () => {
 		expect(() =>
 			table("schema.users", {
-				id: z.string().uuid()}),
+				id: z.string().uuid(),
+			}),
 		).toThrow('table names cannot contain "."');
 	});
 
@@ -229,7 +247,8 @@ describe("type inference", () => {
 		const users = table("users", {
 			id: z.string().uuid(),
 			name: z.string(),
-			age: z.number().optional()});
+			age: z.number().optional(),
+		});
 
 		// Type check - this should compile
 		type UserDoc = z.infer<typeof users.schema>;
@@ -242,7 +261,8 @@ describe("isTable", () => {
 	test("returns true for table objects", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		expect(isTable(users)).toBe(true);
 	});
@@ -261,14 +281,16 @@ describe("Table.pick()", () => {
 		id: z.string().uuid().db.primary(),
 		email: z.string().email().db.unique(),
 		name: z.string(),
-		bio: z.string().optional()});
+		bio: z.string().optional(),
+	});
 
 	const Posts = table("posts", {
 		id: z.string().uuid().db.primary(),
 		authorId: z.string().uuid().db.references(Users, {as: "author"}),
 		title: z.string(),
 		body: z.string(),
-		published: z.boolean().default(false)});
+		published: z.boolean().default(false),
+	});
 
 	test("creates partial table with picked fields", () => {
 		const UserSummary = Users.pick("id", "name");
@@ -326,7 +348,8 @@ describe("Table.pick()", () => {
 		const result = UserSummary.schema.parse({
 			id: validId,
 			name: "Alice",
-			email: "alice@example.com"});
+			email: "alice@example.com",
+		});
 		expect(result).toEqual({id: validId, name: "Alice"});
 	});
 
@@ -355,7 +378,8 @@ describe("Table.pick()", () => {
 				id: z.string().uuid().db.primary(),
 				authorId: z.string().uuid(),
 				slug: z.string(),
-				title: z.string()},
+				title: z.string(),
+			},
 			{unique: [["authorId", "slug"]]},
 		);
 
@@ -369,7 +393,8 @@ describe("Table.pick()", () => {
 	test("pick() preserves compound references if all fields picked", () => {
 		const RefTable = table("ref", {
 			a: z.string(),
-			b: z.string()});
+			b: z.string(),
+		});
 
 		const WithRefs = table(
 			"with_refs",
@@ -377,7 +402,8 @@ describe("Table.pick()", () => {
 				id: z.string().db.primary(),
 				refA: z.string(),
 				refB: z.string(),
-				other: z.string()},
+				other: z.string(),
+			},
 			{references: [{fields: ["refA", "refB"], table: RefTable, as: "ref"}]},
 		);
 
@@ -438,9 +464,10 @@ describe("Table.derive()", () => {
 	});
 
 	test("tracks derived fields in meta.derivedFields", () => {
-		const PostsWithCount = Posts
-			.derive("likeCount", z.number())`COUNT(${Likes.cols.id})`
-			.derive("commentCount", z.number())`COUNT(*)`;
+		const PostsWithCount = Posts.derive(
+			"likeCount",
+			z.number(),
+		)`COUNT(${Likes.cols.id})`.derive("commentCount", z.number())`COUNT(*)`;
 
 		expect((PostsWithCount.meta as any).derivedFields).toEqual([
 			"likeCount",
@@ -531,9 +558,10 @@ describe("Table.derive()", () => {
 	});
 
 	test("derive then pick excludes non-picked derived fields", () => {
-		const WithStats = Posts
-			.derive("likeCount", z.number())`COUNT(likes.id)`
-			.derive("commentCount", z.number())`COUNT(comments.id)`;
+		const WithStats = Posts.derive(
+			"likeCount",
+			z.number(),
+		)`COUNT(likes.id)`.derive("commentCount", z.number())`COUNT(comments.id)`;
 		const Picked = WithStats.pick("id", "likeCount");
 
 		expect((Picked.meta as any).derivedExprs).toHaveLength(1);
@@ -561,10 +589,10 @@ describe("Type-level insert/update prevention", () => {
 			email: z.string().email(),
 			name: z.string(),
 		});
-		const PartialUsers = Users.pick("id", "name");
+		const _PartialUsers = Users.pick("id", "name");
 
 		// Insert<PartialTable> should be never
-		type PartialInsert = import("./table.js").Insert<typeof PartialUsers>;
+		type PartialInsert = import("./table.js").Insert<typeof _PartialUsers>;
 		const _check: PartialInsert = {} as never;
 		expect(true).toBe(true); // Type check is the real test
 	});
@@ -574,10 +602,10 @@ describe("Type-level insert/update prevention", () => {
 			id: z.string().uuid().db.primary(),
 			title: z.string(),
 		});
-		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
+		const _PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
 		// Insert<DerivedTable> should be never
-		type DerivedInsert = import("./table.js").Insert<typeof PostsWithCount>;
+		type DerivedInsert = import("./table.js").Insert<typeof _PostsWithCount>;
 		const _check: DerivedInsert = {} as never;
 		expect(true).toBe(true); // Type check is the real test
 	});
@@ -587,9 +615,9 @@ describe("Type-level insert/update prevention", () => {
 			id: z.string().uuid().db.primary(),
 			name: z.string(),
 		});
-		const PartialUsers = Users.pick("id");
+		const _PartialUsers = Users.pick("id");
 
-		type FullCheck = import("./table.js").FullTableOnly<typeof PartialUsers>;
+		type FullCheck = import("./table.js").FullTableOnly<typeof _PartialUsers>;
 		const _check: FullCheck = {} as never;
 		expect(true).toBe(true);
 	});
@@ -599,9 +627,9 @@ describe("Type-level insert/update prevention", () => {
 			id: z.string().uuid().db.primary(),
 			title: z.string(),
 		});
-		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
+		const _PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
-		type FullCheck = import("./table.js").FullTableOnly<typeof PostsWithCount>;
+		type FullCheck = import("./table.js").FullTableOnly<typeof _PostsWithCount>;
 		const _check: FullCheck = {} as never;
 		expect(true).toBe(true);
 	});
@@ -624,7 +652,8 @@ describe("Table.cols", () => {
 		id: z.string().uuid().db.primary(),
 		email: z.string().email().db.unique(),
 		name: z.string(),
-		createdAt: z.date()});
+		createdAt: z.date(),
+	});
 
 	test("returns SQL fragment for column", () => {
 		const fragment = Users.cols.id;
@@ -734,7 +763,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.inserted(db.now()).db.encode(() => "encoded"),
+			z
+				.date()
+				.db.inserted(db.now())
+				.db.encode(() => "encoded"),
 		).toThrow("encode() cannot be combined with inserted() or updated()");
 	});
 
@@ -742,7 +774,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.updated(db.now()).db.encode(() => "encoded"),
+			z
+				.date()
+				.db.updated(db.now())
+				.db.encode(() => "encoded"),
 		).toThrow("encode() cannot be combined with inserted() or updated()");
 	});
 
@@ -750,7 +785,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.inserted(db.now()).db.decode(() => new Date()),
+			z
+				.date()
+				.db.inserted(db.now())
+				.db.decode(() => new Date()),
 		).toThrow("decode() cannot be combined with inserted() or updated()");
 	});
 
@@ -758,7 +796,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.updated(db.now()).db.decode(() => new Date()),
+			z
+				.date()
+				.db.updated(db.now())
+				.db.decode(() => new Date()),
 		).toThrow("decode() cannot be combined with inserted() or updated()");
 	});
 
@@ -766,7 +807,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.encode(() => "encoded").db.inserted(db.now()),
+			z
+				.date()
+				.db.encode(() => "encoded")
+				.db.inserted(db.now()),
 		).toThrow("inserted() cannot be combined with encode() or decode()");
 	});
 
@@ -774,7 +818,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.decode(() => new Date()).db.inserted(db.now()),
+			z
+				.date()
+				.db.decode(() => new Date())
+				.db.inserted(db.now()),
 		).toThrow("inserted() cannot be combined with encode() or decode()");
 	});
 
@@ -782,7 +829,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.encode(() => "encoded").db.updated(db.now()),
+			z
+				.date()
+				.db.encode(() => "encoded")
+				.db.updated(db.now()),
 		).toThrow("updated() cannot be combined with encode() or decode()");
 	});
 
@@ -790,7 +840,10 @@ describe("Schema marker validation", () => {
 		const {db} = require("./database.js");
 
 		expect(() =>
-			z.date().db.decode(() => new Date()).db.updated(db.now()),
+			z
+				.date()
+				.db.decode(() => new Date())
+				.db.updated(db.now()),
 		).toThrow("updated() cannot be combined with encode() or decode()");
 	});
 });

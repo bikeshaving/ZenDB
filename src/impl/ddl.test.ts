@@ -10,7 +10,8 @@ describe("DDL generation", () => {
 	test("basic table", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
@@ -22,7 +23,8 @@ describe("DDL generation", () => {
 	test("primary key and unique", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			email: z.string().email().db.unique()});
+			email: z.string().email().db.unique(),
+		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
@@ -34,7 +36,8 @@ describe("DDL generation", () => {
 		const profiles = table("profiles", {
 			id: z.string().uuid().db.primary(),
 			bio: z.string().optional(),
-			avatar: z.string().nullable()});
+			avatar: z.string().nullable(),
+		});
 
 		const ddl = generateDDL(profiles, {dialect: "sqlite"});
 
@@ -50,7 +53,8 @@ describe("DDL generation", () => {
 			id: z.string().uuid().db.primary(),
 			role: z.string().default("user"),
 			active: z.boolean().default(true),
-			score: z.number().default(0)});
+			score: z.number().default(0),
+		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
@@ -63,7 +67,8 @@ describe("DDL generation", () => {
 		const stats = table("stats", {
 			id: z.string().uuid().db.primary(),
 			count: z.number().int(),
-			average: z.number()});
+			average: z.number(),
+		});
 
 		const ddl = generateDDL(stats, {dialect: "sqlite"});
 
@@ -74,7 +79,8 @@ describe("DDL generation", () => {
 	test("enum as text", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			role: z.enum(["user", "admin", "moderator"]).default("user")});
+			role: z.enum(["user", "admin", "moderator"]).default("user"),
+		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
@@ -85,7 +91,8 @@ describe("DDL generation", () => {
 	test("date field", () => {
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			createdAt: z.date().default(() => new Date())});
+			createdAt: z.date().default(() => new Date()),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -96,7 +103,8 @@ describe("DDL generation", () => {
 	test("indexed field", () => {
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			authorId: z.string().uuid().db.index()});
+			authorId: z.string().uuid().db.index(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -110,9 +118,11 @@ describe("DDL generation", () => {
 			{
 				id: z.string().uuid().db.primary(),
 				authorId: z.string().uuid(),
-				createdAt: z.date()},
+				createdAt: z.date(),
+			},
 			{
-				indexes: [["authorId", "createdAt"]]},
+				indexes: [["authorId", "createdAt"]],
+			},
 		);
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
@@ -127,7 +137,8 @@ describe("DDL generation", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
 			settings: z.object({theme: z.string(), notifications: z.boolean()}),
-			tags: z.array(z.string())});
+			tags: z.array(z.string()),
+		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
@@ -141,7 +152,8 @@ describe("DDL generation", () => {
 			score: z.number(),
 			active: z.boolean().default(true),
 			createdAt: z.date().default(() => new Date()),
-			settings: z.object({theme: z.string()})});
+			settings: z.object({theme: z.string()}),
+		});
 
 		const ddl = generateDDL(users, {dialect: "postgresql"});
 
@@ -158,7 +170,8 @@ describe("DDL generation", () => {
 	test("mysql dialect", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string().max(100)});
+			name: z.string().max(100),
+		});
 
 		const ddl = generateDDL(users, {dialect: "mysql"});
 
@@ -171,12 +184,14 @@ describe("DDL generation", () => {
 	test("foreign key constraint", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.references(users, {as: "author"}),
-			title: z.string()});
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -186,14 +201,17 @@ describe("DDL generation", () => {
 	test("foreign key with onDelete cascade", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.references(users, {
 				as: "author",
-				onDelete: "cascade"}),
-			title: z.string()});
+				onDelete: "cascade",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -205,14 +223,17 @@ describe("DDL generation", () => {
 	test("foreign key with onDelete set null", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().nullable().db.references(users, {
 				as: "author",
-				onDelete: "set null"}),
-			title: z.string()});
+				onDelete: "set null",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -224,14 +245,17 @@ describe("DDL generation", () => {
 	test("foreign key with onDelete restrict", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.references(users, {
 				as: "author",
-				onDelete: "restrict"}),
-			title: z.string()});
+				onDelete: "restrict",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -243,21 +267,26 @@ describe("DDL generation", () => {
 	test("multiple foreign keys", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const categories = table("categories", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.references(users, {
 				as: "author",
-				onDelete: "cascade"}),
+				onDelete: "cascade",
+			}),
 			categoryId: z.string().uuid().nullable().db.references(categories, {
 				as: "category",
-				onDelete: "set null"}),
-			title: z.string()});
+				onDelete: "set null",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -273,14 +302,17 @@ describe("DDL generation", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
 			email: z.string().email().db.unique(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorEmail: z.string().email().db.references(users, {
 				field: "email",
-				as: "author"}),
-			title: z.string()});
+				as: "author",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
@@ -292,14 +324,17 @@ describe("DDL generation", () => {
 	test("foreign key in postgresql", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.references(users, {
 				as: "author",
-				onDelete: "cascade"}),
-			title: z.string()});
+				onDelete: "cascade",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "postgresql"});
 
@@ -311,14 +346,17 @@ describe("DDL generation", () => {
 	test("foreign key in mysql", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			name: z.string()});
+			name: z.string(),
+		});
 
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
 			authorId: z.string().uuid().db.references(users, {
 				as: "author",
-				onDelete: "cascade"}),
-			title: z.string()});
+				onDelete: "cascade",
+			}),
+			title: z.string(),
+		});
 
 		const ddl = generateDDL(posts, {dialect: "mysql"});
 
@@ -331,7 +369,8 @@ describe("DDL generation", () => {
 		const custom = table("custom", {
 			id: z.string().uuid().db.primary(),
 			// Array with custom CSV encoding - explicit TEXT type
-			tags: z.array(z.string())
+			tags: z
+				.array(z.string())
 				.db.encode((arr) => arr.join(","))
 				.db.decode((str: string) => str.split(","))
 				.db.type("TEXT"),
@@ -359,7 +398,8 @@ describe("DDL generation", () => {
 	test("explicit column type works with default values", () => {
 		const custom = table("custom", {
 			id: z.string().uuid().db.primary(),
-			tags: z.array(z.string())
+			tags: z
+				.array(z.string())
 				.default([])
 				.db.encode((arr) => arr.join(","))
 				.db.decode((str: string) => str.split(","))
@@ -393,7 +433,8 @@ describe("DDL generation", () => {
 				id: z.string().uuid().db.primary(),
 				authorId: z.string().uuid(),
 				slug: z.string(),
-				title: z.string()},
+				title: z.string(),
+			},
 			{unique: [["authorId", "slug"]]},
 		);
 
@@ -409,8 +450,14 @@ describe("DDL generation", () => {
 				id: z.string().uuid().db.primary(),
 				a: z.string(),
 				b: z.string(),
-				c: z.string()},
-			{unique: [["a", "b"], ["b", "c"]]},
+				c: z.string(),
+			},
+			{
+				unique: [
+					["a", "b"],
+					["b", "c"],
+				],
+			},
 		);
 
 		const ddl = generateDDL(items, {dialect: "sqlite"});
@@ -423,7 +470,8 @@ describe("DDL generation", () => {
 		const orderProducts = table("order_products", {
 			orderId: z.string().uuid(),
 			productId: z.string().uuid(),
-			quantity: z.number().int()});
+			quantity: z.number().int(),
+		});
 
 		const orderItems = table(
 			"order_items",
@@ -431,13 +479,17 @@ describe("DDL generation", () => {
 				id: z.string().uuid().db.primary(),
 				orderId: z.string().uuid(),
 				productId: z.string().uuid(),
-				price: z.number()},
+				price: z.number(),
+			},
 			{
-				references: [{
-					fields: ["orderId", "productId"],
-					table: orderProducts,
-					as: "orderProduct",
-				}]},
+				references: [
+					{
+						fields: ["orderId", "productId"],
+						table: orderProducts,
+						as: "orderProduct",
+					},
+				],
+			},
 		);
 
 		const ddl = generateDDL(orderItems, {dialect: "sqlite"});
@@ -451,21 +503,26 @@ describe("DDL generation", () => {
 		const refTable = table("ref_table", {
 			keyA: z.string(),
 			keyB: z.string(),
-			data: z.string()});
+			data: z.string(),
+		});
 
 		const childTable = table(
 			"child_table",
 			{
 				id: z.string().uuid().db.primary(),
 				fkA: z.string(),
-				fkB: z.string()},
+				fkB: z.string(),
+			},
 			{
-				references: [{
-					fields: ["fkA", "fkB"],
-					table: refTable,
-					referencedFields: ["keyA", "keyB"],
-					as: "ref",
-				}]},
+				references: [
+					{
+						fields: ["fkA", "fkB"],
+						table: refTable,
+						referencedFields: ["keyA", "keyB"],
+						as: "ref",
+					},
+				],
+			},
 		);
 
 		const ddl = generateDDL(childTable, {dialect: "sqlite"});
@@ -478,22 +535,27 @@ describe("DDL generation", () => {
 	test("compound foreign key with onDelete", () => {
 		const parent = table("parent", {
 			a: z.string(),
-			b: z.string()});
+			b: z.string(),
+		});
 
 		const child = table(
 			"child",
 			{
 				id: z.string().uuid().db.primary(),
 				parentA: z.string(),
-				parentB: z.string()},
+				parentB: z.string(),
+			},
 			{
-				references: [{
-					fields: ["parentA", "parentB"],
-					table: parent,
-					referencedFields: ["a", "b"],
-					as: "parent",
-					onDelete: "cascade",
-				}]},
+				references: [
+					{
+						fields: ["parentA", "parentB"],
+						table: parent,
+						referencedFields: ["a", "b"],
+						as: "parent",
+						onDelete: "cascade",
+					},
+				],
+			},
 		);
 
 		const ddl = generateDDL(child, {dialect: "sqlite"});
@@ -506,7 +568,8 @@ describe("DDL generation", () => {
 	test("compound constraints in mysql dialect", () => {
 		const parent = table("parent", {
 			a: z.string(),
-			b: z.string()});
+			b: z.string(),
+		});
 
 		const child = table(
 			"child",
@@ -514,15 +577,19 @@ describe("DDL generation", () => {
 				id: z.string().uuid().db.primary(),
 				parentA: z.string(),
 				parentB: z.string(),
-				code: z.string()},
+				code: z.string(),
+			},
 			{
 				unique: [["parentA", "code"]],
-				references: [{
-					fields: ["parentA", "parentB"],
-					table: parent,
-					referencedFields: ["a", "b"],
-					as: "parent",
-				}]},
+				references: [
+					{
+						fields: ["parentA", "parentB"],
+						table: parent,
+						referencedFields: ["a", "b"],
+						as: "parent",
+					},
+				],
+			},
 		);
 
 		const ddl = generateDDL(child, {dialect: "mysql"});

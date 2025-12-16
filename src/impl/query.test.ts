@@ -16,14 +16,16 @@ extendZod(z);
 const users = table("users", {
 	id: z.string().uuid().db.primary(),
 	email: z.string().email().db.unique(),
-	name: z.string()});
+	name: z.string(),
+});
 
 const posts = table("posts", {
 	id: z.string().uuid().db.primary(),
 	authorId: z.string().uuid().db.references(users, {as: "author"}),
 	title: z.string(),
 	body: z.string(),
-	published: z.boolean().default(false)});
+	published: z.boolean().default(false),
+});
 
 describe("buildSelectColumns", () => {
 	test("single table", () => {
@@ -313,7 +315,10 @@ describe("buildSelectColumns with derived tables", () => {
 
 	test("handles composition (multiple derive() calls)", () => {
 		const WithLikes = posts.derive("likeCount", z.number())`COUNT(likes.id)`;
-		const WithLikesAndComments = WithLikes.derive("commentCount", z.number())`COUNT(comments.id)`;
+		const WithLikesAndComments = WithLikes.derive(
+			"commentCount",
+			z.number(),
+		)`COUNT(comments.id)`;
 
 		const {sql} = buildSelectColumns([WithLikesAndComments], "sqlite");
 
@@ -328,8 +333,8 @@ describe("buildSelectColumns with derived tables", () => {
 		const {sql} = buildSelectColumns([PostsWithCount], "mysql");
 
 		// MySQL uses backticks
-		expect(sql).toContain('`posts`.`id` AS `posts.id`');
-		expect(sql).toContain('AS `posts.likeCount`');
+		expect(sql).toContain("`posts`.`id` AS `posts.id`");
+		expect(sql).toContain("AS `posts.likeCount`");
 	});
 
 	test("collects params from derived expressions", () => {
@@ -346,15 +351,10 @@ describe("buildSelectColumns with derived tables", () => {
 });
 
 describe("SQL fragment placeholder handling", () => {
-	test("fragment SQL with literal ? in string is corrupted (known bug)", () => {
-		// This test documents a known bug:
-		// If fragment SQL contains a literal '?' (in a string literal or comment),
-		// String.replace("?", ...) will incorrectly replace it instead of the placeholder
+	test("preserves literal ? inside single-quoted strings", () => {
 		const {createFragment} = require("./query.js");
 
-		// User creates a raw fragment with a literal ? in a SQL string
-		// They want to match the literal character '?' in the name column
-		// SQL: WHERE name = '?' AND email = ?
+		// SQL with a literal '?' in a string literal - should not be replaced
 		const fragment = createFragment(
 			`"users"."name" = '?' AND "users"."email" = ?`,
 			["test@example.com"],
@@ -363,12 +363,10 @@ describe("SQL fragment placeholder handling", () => {
 		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [fragment], "postgresql");
 
-		// BUG: The '?' inside the string literal gets replaced with $1
-		// Expected (correct): WHERE "users"."name" = '?' AND "users"."email" = $1
-		// Actual (buggy): WHERE "users"."name" = '$1' AND "users"."email" = ?
-		//
-		// This test should PASS when the bug is FIXED
-		expect(result.sql).toBe(`WHERE "users"."name" = '?' AND "users"."email" = $1`);
+		// The '?' inside the string literal is preserved, only the real placeholder becomes $1
+		expect(result.sql).toBe(
+			`WHERE "users"."name" = '?' AND "users"."email" = $1`,
+		);
 		expect(result.params).toEqual(["test@example.com"]);
 	});
 
@@ -384,7 +382,66 @@ describe("SQL fragment placeholder handling", () => {
 		const result = parseTemplate(strings, [fragment], "postgresql");
 
 		// Should correctly replace BOTH placeholders with $1 and $2
-		expect(result.sql).toBe('WHERE "posts"."title" = $1 AND "posts"."body" LIKE $2');
+		expect(result.sql).toBe(
+			'WHERE "posts"."title" = $1 AND "posts"."body" LIKE $2',
+		);
 		expect(result.params).toEqual(["Hello", "%test%"]);
+	});
+
+	test("preserves literal ? inside double-quoted identifiers", () => {
+		const {createFragment} = require("./query.js");
+
+		// Unusual but valid: column name containing ?
+		const fragment = createFragment('"weird?col" = ?', ["value"]);
+
+		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [fragment], "postgresql");
+
+		expect(result.sql).toBe('WHERE "weird?col" = $1');
+		expect(result.params).toEqual(["value"]);
+	});
+
+	test("handles escaped single quotes", () => {
+		const {createFragment} = require("./query.js");
+
+		// SQL with escaped single quote: WHERE name = 'O''Brien' AND id = ?
+		const fragment = createFragment(
+			`"users"."name" = 'O''Brien' AND "users"."id" = ?`,
+			["123"],
+		);
+
+		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [fragment], "postgresql");
+
+		expect(result.sql).toBe(
+			`WHERE "users"."name" = 'O''Brien' AND "users"."id" = $1`,
+		);
+		expect(result.params).toEqual(["123"]);
+	});
+
+	test("handles escaped double quotes", () => {
+		const {createFragment} = require("./query.js");
+
+		// Column with escaped double quote in name
+		const fragment = createFragment(`"weird""col" = ?`, ["value"]);
+
+		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [fragment], "postgresql");
+
+		expect(result.sql).toBe(`WHERE "weird""col" = $1`);
+		expect(result.params).toEqual(["value"]);
+	});
+
+	test("handles multiple ? in string literals", () => {
+		const {createFragment} = require("./query.js");
+
+		// Multiple literal ? characters in a string
+		const fragment = createFragment(`"col" = '???' AND "other" = ?`, ["value"]);
+
+		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
+		const result = parseTemplate(strings, [fragment], "postgresql");
+
+		expect(result.sql).toBe(`WHERE "col" = '???' AND "other" = $1`);
+		expect(result.params).toEqual(["value"]);
 	});
 });

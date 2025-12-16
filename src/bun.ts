@@ -67,7 +67,10 @@ export default class BunDriver implements Driver {
 			// Handle constraint violations based on dialect
 			if (this.dialect === "sqlite") {
 				// SQLite errors
-				if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_UNIQUE") {
+				if (
+					code === "SQLITE_CONSTRAINT" ||
+					code === "SQLITE_CONSTRAINT_UNIQUE"
+				) {
 					// Extract table.column from message
 					// Example: "UNIQUE constraint failed: users.email"
 					const match = message.match(/constraint failed: (\w+)\.(\w+)/i);
@@ -76,49 +79,82 @@ export default class BunDriver implements Driver {
 					const constraint = match ? `${table}.${column}` : undefined;
 
 					// Determine kind from error code
-					let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+					let kind:
+						| "unique"
+						| "foreign_key"
+						| "check"
+						| "not_null"
+						| "unknown" = "unknown";
 					if (code === "SQLITE_CONSTRAINT_UNIQUE") kind = "unique";
 					else if (message.includes("UNIQUE")) kind = "unique";
 					else if (message.includes("FOREIGN KEY")) kind = "foreign_key";
 					else if (message.includes("NOT NULL")) kind = "not_null";
 					else if (message.includes("CHECK")) kind = "check";
 
-					throw new ConstraintViolationError(message, {
-						kind,
-						constraint,
-						table,
-						column,
-					}, {
-						cause: error,
-					});
+					throw new ConstraintViolationError(
+						message,
+						{
+							kind,
+							constraint,
+							table,
+							column,
+						},
+						{
+							cause: error,
+						},
+					);
 				}
 			} else if (this.dialect === "postgresql") {
 				// PostgreSQL errors (23xxx = integrity constraint violation)
-				if (code === "23505" || code === "23503" || code === "23514" || code === "23502") {
-					const constraint = (error as any).constraint_name || (error as any).constraint;
+				if (
+					code === "23505" ||
+					code === "23503" ||
+					code === "23514" ||
+					code === "23502"
+				) {
+					const constraint =
+						(error as any).constraint_name || (error as any).constraint;
 					const table = (error as any).table_name || (error as any).table;
 					const column = (error as any).column_name || (error as any).column;
 
 					// PostgreSQL constraint violations (23505 = unique, 23503 = fk, 23514 = check, 23502 = not null)
-					let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+					let kind:
+						| "unique"
+						| "foreign_key"
+						| "check"
+						| "not_null"
+						| "unknown" = "unknown";
 					if (code === "23505") kind = "unique";
 					else if (code === "23503") kind = "foreign_key";
 					else if (code === "23514") kind = "check";
 					else if (code === "23502") kind = "not_null";
 
-					throw new ConstraintViolationError(message, {
-						kind,
-						constraint,
-						table,
-						column,
-					}, {
-						cause: error,
-					});
+					throw new ConstraintViolationError(
+						message,
+						{
+							kind,
+							constraint,
+							table,
+							column,
+						},
+						{
+							cause: error,
+						},
+					);
 				}
 			} else if (this.dialect === "mysql") {
 				// MySQL errors
-				if (code === "ER_DUP_ENTRY" || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
-					let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+				if (
+					code === "ER_DUP_ENTRY" ||
+					code === "ER_NO_REFERENCED_ROW_2" ||
+					code === "ER_ROW_IS_REFERENCED_2"
+				) {
+					let kind:
+						| "unique"
+						| "foreign_key"
+						| "check"
+						| "not_null"
+						| "unknown" = "unknown";
 					let constraint: string | undefined;
 					let table: string | undefined;
 					let column: string | undefined;
@@ -135,7 +171,10 @@ export default class BunDriver implements Driver {
 								table = parts[0];
 							}
 						}
-					} else if (code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
+					} else if (
+						code === "ER_NO_REFERENCED_ROW_2" ||
+						code === "ER_ROW_IS_REFERENCED_2"
+					) {
 						kind = "foreign_key";
 						// Example: "Cannot add or update a child row: a foreign key constraint fails (`db`.`table`, CONSTRAINT `fk_name` ...)"
 						const constraintMatch = message.match(/CONSTRAINT `([^`]+)`/i);
@@ -146,14 +185,18 @@ export default class BunDriver implements Driver {
 						}
 					}
 
-					throw new ConstraintViolationError(message, {
-						kind,
-						constraint,
-						table,
-						column,
-					}, {
-						cause: error,
-					});
+					throw new ConstraintViolationError(
+						message,
+						{
+							kind,
+							constraint,
+							table,
+							column,
+						},
+						{
+							cause: error,
+						},
+					);
 				}
 			}
 		}
@@ -215,12 +258,15 @@ export default class BunDriver implements Driver {
 		await this.#sql.close();
 	}
 
-	async transaction<T>(fn: () => Promise<T>): Promise<T> {
-		// Bun.SQL: use appropriate BEGIN syntax for dialect
+	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
+		// Bun.SQL: For SQLite, it's a single connection, so we can pass `this`.
+		// For PostgreSQL/MySQL, Bun.SQL manages connection pooling internally.
+		// TODO: Investigate if Bun.SQL has a way to reserve a connection for transaction.
+		// For now, we pass `this` which assumes single-connection or internal pooling.
 		const beginSql = this.dialect === "mysql" ? "START TRANSACTION" : "BEGIN";
 		await this.#sql.unsafe(beginSql, []);
 		try {
-			const result = await fn();
+			const result = await fn(this);
 			await this.#sql.unsafe("COMMIT", []);
 			return result;
 		} catch (error) {
@@ -236,7 +282,9 @@ export default class BunDriver implements Driver {
 		try {
 			const columns = Object.keys(data);
 			const values = Object.values(data);
-			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const columnList = columns
+				.map((c) => this.escapeIdentifier(c))
+				.join(", ");
 
 			if (this.dialect === "mysql") {
 				// MySQL: no RETURNING support
@@ -362,11 +410,15 @@ export default class BunDriver implements Driver {
 		}
 	}
 
-	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+	async explain(
+		query: string,
+		params: unknown[],
+	): Promise<Record<string, unknown>[]> {
 		try {
-			const explainSQL = this.dialect === "sqlite"
-				? `EXPLAIN QUERY PLAN ${query}`
-				: `EXPLAIN ${query}`;
+			const explainSQL =
+				this.dialect === "sqlite"
+					? `EXPLAIN QUERY PLAN ${query}`
+					: `EXPLAIN ${query}`;
 			const result = await this.#sql.unsafe(explainSQL, params as any[]);
 			return result as Record<string, unknown>[];
 		} catch (error) {

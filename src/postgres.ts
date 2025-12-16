@@ -61,7 +61,8 @@ export default class PostgresDriver implements Driver {
 		if (error && typeof error === "object" && "code" in error) {
 			const code = (error as any).code;
 			const message = (error as any).message || String(error);
-			const constraint = (error as any).constraint_name || (error as any).constraint;
+			const constraint =
+				(error as any).constraint_name || (error as any).constraint;
 			const table = (error as any).table_name || (error as any).table;
 			const column = (error as any).column_name || (error as any).column;
 
@@ -70,21 +71,26 @@ export default class PostgresDriver implements Driver {
 			// 23503 = foreign_key_violation
 			// 23514 = check_violation
 			// 23502 = not_null_violation
-			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" =
+				"unknown";
 			if (code === "23505") kind = "unique";
 			else if (code === "23503") kind = "foreign_key";
 			else if (code === "23514") kind = "check";
 			else if (code === "23502") kind = "not_null";
 
 			if (kind !== "unknown") {
-				throw new ConstraintViolationError(message, {
-					kind,
-					constraint,
-					table,
-					column,
-				}, {
-					cause: error,
-				});
+				throw new ConstraintViolationError(
+					message,
+					{
+						kind,
+						constraint,
+						table,
+						column,
+					},
+					{
+						cause: error,
+					},
+				);
 			}
 		}
 		throw error;
@@ -138,17 +144,94 @@ export default class PostgresDriver implements Driver {
 		await this.#sql.end();
 	}
 
-	async transaction<T>(fn: () => Promise<T>): Promise<T> {
+	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 		// postgres.js has native transaction support with sql.begin()
-		const result = await this.#sql.begin(async (sql) => {
-			// Temporarily replace #sql with transaction-bound sql
-			const originalSql = this.#sql;
-			this.#sql = sql as any;
-			try {
-				return await fn();
-			} finally {
-				this.#sql = originalSql;
-			}
+		const result = await this.#sql.begin(async (txSql) => {
+			// Create a transaction-bound driver that uses the transaction SQL
+			const txDriver: Driver = {
+				dialect: "postgresql",
+				all: async <R>(query: string, params: unknown[]): Promise<R[]> => {
+					try {
+						const result = await txSql.unsafe<R[]>(query, params as any[]);
+						return result;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				get: async <R>(query: string, params: unknown[]): Promise<R | null> => {
+					try {
+						const result = await txSql.unsafe<R[]>(query, params as any[]);
+						return result[0] ?? null;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				run: async (query: string, params: unknown[]): Promise<number> => {
+					try {
+						const result = await txSql.unsafe(query, params as any[]);
+						return result.count;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				val: async <R>(query: string, params: unknown[]): Promise<R> => {
+					try {
+						const result = await txSql.unsafe(query, params as any[]);
+						const row = result[0];
+						if (!row) return null as R;
+						const values = Object.values(row as object);
+						return values[0] as R;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				escapeIdentifier: this.escapeIdentifier.bind(this),
+				close: async () => {
+					// No-op for transaction driver
+				},
+				transaction: async () => {
+					throw new Error("Nested transactions are not supported");
+				},
+				insert: async (
+					tableName: string,
+					data: Record<string, unknown>,
+				): Promise<Record<string, unknown>> => {
+					try {
+						const columns = Object.keys(data);
+						const values = Object.values(data);
+						const columnList = columns
+							.map((c) => this.escapeIdentifier(c))
+							.join(", ");
+						const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+						const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+						const result = await txSql.unsafe(sql, values as any[]);
+						return result[0] as Record<string, unknown>;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				update: async (
+					tableName: string,
+					primaryKey: string,
+					id: unknown,
+					data: Record<string, unknown>,
+				): Promise<Record<string, unknown> | null> => {
+					try {
+						const columns = Object.keys(data);
+						const values = Object.values(data);
+						const setClause = columns
+							.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
+							.join(", ");
+						const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
+						const result = await txSql.unsafe(sql, [...values, id] as any[]);
+						return result[0] ?? null;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+			};
+
+			return await fn(txDriver);
 		});
 		return result as T;
 	}
@@ -160,7 +243,9 @@ export default class PostgresDriver implements Driver {
 		try {
 			const columns = Object.keys(data);
 			const values = Object.values(data);
-			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const columnList = columns
+				.map((c) => this.escapeIdentifier(c))
+				.join(", ");
 			const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
 
 			// PostgreSQL supports RETURNING
@@ -207,10 +292,16 @@ export default class PostgresDriver implements Driver {
 		}
 	}
 
-	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+	async explain(
+		query: string,
+		params: unknown[],
+	): Promise<Record<string, unknown>[]> {
 		try {
 			const explainSQL = `EXPLAIN ${query}`;
-			const result = await this.#sql.unsafe<Record<string, unknown>[]>(explainSQL, params as any[]);
+			const result = await this.#sql.unsafe<Record<string, unknown>[]>(
+				explainSQL,
+				params as any[],
+			);
 			return result;
 		} catch (error) {
 			this.#handleError(error);

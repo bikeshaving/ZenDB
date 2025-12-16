@@ -833,7 +833,9 @@ describe("reverse relationships (has-many)", () => {
 
 		const postTags = table("post_tags", {
 			id: z.string().db.primary(), // Add primary key for join table
-			postId: z.string().db.references(posts, {as: "post", reverseAs: "postTags"}),
+			postId: z
+				.string()
+				.db.references(posts, {as: "post", reverseAs: "postTags"}),
 			tagId: z.string().db.references(tags, {as: "tag", reverseAs: "postTags"}),
 		});
 
@@ -895,7 +897,9 @@ describe("many-to-many relationships (comprehensive)", () => {
 			as: "post",
 			reverseAs: "postTags",
 		}),
-		tagId: z.string().db.references(tagsTable, {as: "tag", reverseAs: "postTags"}),
+		tagId: z
+			.string()
+			.db.references(tagsTable, {as: "tag", reverseAs: "postTags"}),
 	});
 
 	test("query from posts side - get all tags for posts", () => {
@@ -932,7 +936,11 @@ describe("many-to-many relationships (comprehensive)", () => {
 			},
 		];
 
-		const results = normalize<any>(rows, [postsTable, postTagsTable, tagsTable]);
+		const results = normalize<any>(rows, [
+			postsTable,
+			postTagsTable,
+			tagsTable,
+		]);
 
 		// Main result is posts
 		expect(results.length).toBe(2);
@@ -979,7 +987,11 @@ describe("many-to-many relationships (comprehensive)", () => {
 			},
 		];
 
-		const results = normalize<any>(rows, [tagsTable, postTagsTable, postsTable]);
+		const results = normalize<any>(rows, [
+			tagsTable,
+			postTagsTable,
+			postsTable,
+		]);
 
 		// Main result is tags
 		expect(results.length).toBe(1);
@@ -1011,7 +1023,11 @@ describe("many-to-many relationships (comprehensive)", () => {
 			},
 		];
 
-		const results = normalize<any>(rows, [postsTable, postTagsTable, tagsTable]);
+		const results = normalize<any>(rows, [
+			postsTable,
+			postTagsTable,
+			tagsTable,
+		]);
 
 		expect(results.length).toBe(2);
 		expect(results[0].postTags).toEqual([]); // Empty array
@@ -1036,7 +1052,11 @@ describe("many-to-many relationships (comprehensive)", () => {
 			},
 		];
 
-		const results = normalize<any>(rows, [tagsTable, postTagsTable, postsTable]);
+		const results = normalize<any>(rows, [
+			tagsTable,
+			postTagsTable,
+			postsTable,
+		]);
 
 		expect(results.length).toBe(2);
 		expect(results[0].postTags).toEqual([]); // Unused tag
@@ -1228,7 +1248,11 @@ describe("many-to-many relationships (comprehensive)", () => {
 			},
 		];
 
-		const results = normalize<any>(rows, [postsTable, postTagsTable, tagsTable]);
+		const results = normalize<any>(rows, [
+			postsTable,
+			postTagsTable,
+			tagsTable,
+		]);
 
 		expect(results.length).toBe(2);
 
@@ -1363,29 +1387,22 @@ describe("enumerability and serialization", () => {
 		}),
 	});
 
-	const tags = table("tags", {
-		id: z.string().db.primary(),
-		name: z.string(),
-	});
-
-	const postTags = table("postTags", {
-		id: z.string().db.primary(),
-		postId: z.string().db.references(posts, {as: "post"}),
-		tagId: z.string().db.references(tags, {as: "tag"}),
-	});
-
-	const postsWithDerived = table("posts", {
-		id: z.string().db.primary(),
-		title: z.string(),
-		authorId: z.string().db.references(users, {
-			as: "author",
-			reverseAs: "posts",
-		}),
-	}, {
-		derive: {
-			titleUpper: (post: any) => post.title.toUpperCase(),
+	const postsWithDerived = table(
+		"posts",
+		{
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(users, {
+				as: "author",
+				reverseAs: "posts",
+			}),
 		},
-	});
+		{
+			derive: {
+				titleUpper: (post: any) => post.title.toUpperCase(),
+			},
+		},
+	);
 
 	test("forward references are enumerable", () => {
 		const rows = [

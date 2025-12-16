@@ -8,7 +8,12 @@
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
 
 import {TableDefinitionError} from "./errors.js";
-import {createFragment, type SQLFragment, createDDLFragment, type DDLFragment} from "./query.js";
+import {
+	createFragment,
+	type SQLFragment,
+	createDDLFragment,
+	type DDLFragment,
+} from "./query.js";
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
@@ -92,7 +97,8 @@ const DB_META_NAMESPACE = "db" as const;
  */
 export function getDBMeta(schema: ZodTypeAny): Record<string, any> {
 	try {
-		const meta = typeof (schema as any).meta === "function" ? (schema as any).meta() : {};
+		const meta =
+			typeof (schema as any).meta === "function" ? (schema as any).meta() : {};
 		return meta?.[DB_META_NAMESPACE] ?? {};
 	} catch {
 		// Fallback to empty object if .meta() fails
@@ -135,7 +141,10 @@ export function setDBMeta<T extends ZodTypeAny>(
 	schema: T,
 	dbMeta: Record<string, any>,
 ): T {
-	const existing = (typeof (schema as any).meta === "function" ? (schema as any).meta() : undefined) ?? {};
+	const existing =
+		(typeof (schema as any).meta === "function"
+			? (schema as any).meta()
+			: undefined) ?? {};
 	return schema.meta({
 		...existing,
 		[DB_META_NAMESPACE]: {
@@ -180,191 +189,194 @@ export interface FieldDbMeta {
  */
 function createDbMethods(schema: ZodTypeAny) {
 	return {
-			/**
-			 * Mark field as primary key.
-			 * @example z.string().uuid().db.primary()
-			 */
-			primary() {
-				return setDBMeta(schema, {primary: true});
-			},
+		/**
+		 * Mark field as primary key.
+		 * @example z.string().uuid().db.primary()
+		 */
+		primary() {
+			return setDBMeta(schema, {primary: true});
+		},
 
-			/**
-			 * Mark field as unique.
-			 * @example z.string().email().db.unique()
-			 */
-			unique() {
-				return setDBMeta(schema, {unique: true});
-			},
+		/**
+		 * Mark field as unique.
+		 * @example z.string().email().db.unique()
+		 */
+		unique() {
+			return setDBMeta(schema, {unique: true});
+		},
 
-			/**
-			 * Create an index on this field.
-			 * @example z.date().db.index()
-			 */
-			index() {
-				return setDBMeta(schema, {indexed: true});
-			},
+		/**
+		 * Create an index on this field.
+		 * @example z.date().db.index()
+		 */
+		index() {
+			return setDBMeta(schema, {indexed: true});
+		},
 
-			/**
-			 * Mark field as soft delete timestamp.
-			 * @example z.date().nullable().default(null).db.softDelete()
-			 */
-			softDelete() {
-				return setDBMeta(schema, {softDelete: true});
-			},
+		/**
+		 * Mark field as soft delete timestamp.
+		 * @example z.date().nullable().default(null).db.softDelete()
+		 */
+		softDelete() {
+			return setDBMeta(schema, {softDelete: true});
+		},
 
-			/**
-			 * Define a foreign key reference with optional reverse relationship.
-			 *
-			 * @example
-			 * // Forward reference only
-			 * authorId: z.string().uuid().db.references(Users, {as: "author"})
-			 *
-			 * @example
-			 * // With reverse relationship
-			 * authorId: z.string().uuid().db.references(Users, {
-			 *   as: "author",      // post.author = User
-			 *   reverseAs: "posts" // user.posts = Post[]
-			 * })
-			 */
-			references(table: Table<any>, options: {
+		/**
+		 * Define a foreign key reference with optional reverse relationship.
+		 *
+		 * @example
+		 * // Forward reference only
+		 * authorId: z.string().uuid().db.references(Users, {as: "author"})
+		 *
+		 * @example
+		 * // With reverse relationship
+		 * authorId: z.string().uuid().db.references(Users, {
+		 *   as: "author",      // post.author = User
+		 *   reverseAs: "posts" // user.posts = Post[]
+		 * })
+		 */
+		references(
+			table: Table<any>,
+			options: {
 				field?: string;
 				as: string;
 				reverseAs?: string;
 				onDelete?: "cascade" | "set null" | "restrict";
-			}) {
-				return setDBMeta(schema, {
-					reference: {
-						table,
-						field: options.field,
-						as: options.as,
-						reverseAs: options.reverseAs,
-						onDelete: options.onDelete,
-					},
-				});
 			},
+		) {
+			return setDBMeta(schema, {
+				reference: {
+					table,
+					field: options.field,
+					as: options.as,
+					reverseAs: options.reverseAs,
+					onDelete: options.onDelete,
+				},
+			});
+		},
 
-			/**
-			 * Encode app values to DB values (for INSERT/UPDATE).
-			 * One-way transformation is fine (e.g., password hashing).
-			 *
-			 * @example
-			 * password: z.string().db.encode(hashPassword)
-			 *
-			 * @example
-			 * // Bidirectional: pair with .db.decode()
-			 * status: z.enum(["pending", "active"])
-			 *   .db.encode(s => statusMap.indexOf(s))
-			 *   .db.decode(i => statusMap[i])
-			 */
-			encode<TDB>(encodeFn: (app: any) => TDB) {
-				// Validate: encode cannot be combined with inserted/updated
-				const existing = getDBMeta(schema);
-				if (existing.inserted || existing.updated) {
-					throw new TableDefinitionError(
-						`encode() cannot be combined with inserted() or updated(). ` +
+		/**
+		 * Encode app values to DB values (for INSERT/UPDATE).
+		 * One-way transformation is fine (e.g., password hashing).
+		 *
+		 * @example
+		 * password: z.string().db.encode(hashPassword)
+		 *
+		 * @example
+		 * // Bidirectional: pair with .db.decode()
+		 * status: z.enum(["pending", "active"])
+		 *   .db.encode(s => statusMap.indexOf(s))
+		 *   .db.decode(i => statusMap[i])
+		 */
+		encode<TDB>(encodeFn: (app: any) => TDB) {
+			// Validate: encode cannot be combined with inserted/updated
+			const existing = getDBMeta(schema);
+			if (existing.inserted || existing.updated) {
+				throw new TableDefinitionError(
+					`encode() cannot be combined with inserted() or updated(). ` +
 						`DB expressions bypass encoding and are sent directly to the database.`,
-					);
-				}
-				return setDBMeta(schema, {encode: encodeFn});
-			},
+				);
+			}
+			return setDBMeta(schema, {encode: encodeFn});
+		},
 
-			/**
-			 * Decode DB values to app values (for SELECT).
-			 * One-way transformation is fine.
-			 *
-			 * @example
-			 * legacy: z.string().db.decode(deserializeLegacyFormat)
-			 */
-			decode<TApp>(decodeFn: (db: any) => TApp) {
-				// Validate: decode cannot be combined with inserted/updated
-				const existing = getDBMeta(schema);
-				if (existing.inserted || existing.updated) {
-					throw new TableDefinitionError(
-						`decode() cannot be combined with inserted() or updated(). ` +
+		/**
+		 * Decode DB values to app values (for SELECT).
+		 * One-way transformation is fine.
+		 *
+		 * @example
+		 * legacy: z.string().db.decode(deserializeLegacyFormat)
+		 */
+		decode<TApp>(decodeFn: (db: any) => TApp) {
+			// Validate: decode cannot be combined with inserted/updated
+			const existing = getDBMeta(schema);
+			if (existing.inserted || existing.updated) {
+				throw new TableDefinitionError(
+					`decode() cannot be combined with inserted() or updated(). ` +
 						`DB expressions bypass decoding and are sent directly to the database.`,
-					);
-				}
-				return setDBMeta(schema, {decode: decodeFn});
-			},
+				);
+			}
+			return setDBMeta(schema, {decode: decodeFn});
+		},
 
-			/**
-			 * Specify explicit column type for DDL generation.
-			 * Required when using custom encode/decode on objects/arrays
-			 * that transform to a different storage type.
-			 *
-			 * @example
-			 * // Store array as CSV instead of JSON
-			 * tags: z.array(z.string())
-			 *   .db.encode((arr) => arr.join(","))
-			 *   .db.decode((str) => str.split(","))
-			 *   .db.type("TEXT")
-			 */
-			type(columnType: string) {
-				return setDBMeta(schema, {columnType});
-			},
+		/**
+		 * Specify explicit column type for DDL generation.
+		 * Required when using custom encode/decode on objects/arrays
+		 * that transform to a different storage type.
+		 *
+		 * @example
+		 * // Store array as CSV instead of JSON
+		 * tags: z.array(z.string())
+		 *   .db.encode((arr) => arr.join(","))
+		 *   .db.decode((str) => str.split(","))
+		 *   .db.type("TEXT")
+		 */
+		type(columnType: string) {
+			return setDBMeta(schema, {columnType});
+		},
 
-			/**
-			 * Auto-apply a DB expression on insert.
-			 * Field becomes optional for insert - the expression provides the value.
-			 *
-			 * @example
-			 * createdAt: z.date().db.inserted(db.now())
-			 */
-			inserted(expr: unknown) {
-				// Validate at definition time that this is a DBExpression
-				const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
-				if (
-					expr === null ||
-					typeof expr !== "object" ||
-					!(DB_EXPR in expr) ||
-					(expr as any)[DB_EXPR] !== true
-				) {
-					throw new TableDefinitionError(
-						`inserted() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
-					);
-				}
-				// Validate: inserted cannot be combined with encode/decode
-				const existing = getDBMeta(schema);
-				if (existing.encode || existing.decode) {
-					throw new TableDefinitionError(
-						`inserted() cannot be combined with encode() or decode(). ` +
+		/**
+		 * Auto-apply a DB expression on insert.
+		 * Field becomes optional for insert - the expression provides the value.
+		 *
+		 * @example
+		 * createdAt: z.date().db.inserted(db.now())
+		 */
+		inserted(expr: unknown) {
+			// Validate at definition time that this is a DBExpression
+			const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+			if (
+				expr === null ||
+				typeof expr !== "object" ||
+				!(DB_EXPR in expr) ||
+				(expr as any)[DB_EXPR] !== true
+			) {
+				throw new TableDefinitionError(
+					`inserted() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
+				);
+			}
+			// Validate: inserted cannot be combined with encode/decode
+			const existing = getDBMeta(schema);
+			if (existing.encode || existing.decode) {
+				throw new TableDefinitionError(
+					`inserted() cannot be combined with encode() or decode(). ` +
 						`DB expressions bypass encoding/decoding and are sent directly to the database.`,
-					);
-				}
-				return setDBMeta(schema, {inserted: expr});
-			},
+				);
+			}
+			return setDBMeta(schema, {inserted: expr});
+		},
 
-			/**
-			 * Auto-apply a DB expression on insert and update.
-			 * Field becomes optional for insert/update - the expression provides the value.
-			 *
-			 * @example
-			 * updatedAt: z.date().db.updated(db.now())
-			 */
-			updated(expr: unknown) {
-				// Validate at definition time that this is a DBExpression
-				const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
-				if (
-					expr === null ||
-					typeof expr !== "object" ||
-					!(DB_EXPR in expr) ||
-					(expr as any)[DB_EXPR] !== true
-				) {
-					throw new TableDefinitionError(
-						`updated() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
-					);
-				}
-				// Validate: updated cannot be combined with encode/decode
-				const existing = getDBMeta(schema);
-				if (existing.encode || existing.decode) {
-					throw new TableDefinitionError(
-						`updated() cannot be combined with encode() or decode(). ` +
+		/**
+		 * Auto-apply a DB expression on insert and update.
+		 * Field becomes optional for insert/update - the expression provides the value.
+		 *
+		 * @example
+		 * updatedAt: z.date().db.updated(db.now())
+		 */
+		updated(expr: unknown) {
+			// Validate at definition time that this is a DBExpression
+			const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+			if (
+				expr === null ||
+				typeof expr !== "object" ||
+				!(DB_EXPR in expr) ||
+				(expr as any)[DB_EXPR] !== true
+			) {
+				throw new TableDefinitionError(
+					`updated() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
+				);
+			}
+			// Validate: updated cannot be combined with encode/decode
+			const existing = getDBMeta(schema);
+			if (existing.encode || existing.decode) {
+				throw new TableDefinitionError(
+					`updated() cannot be combined with encode() or decode(). ` +
 						`DB expressions bypass encoding/decoding and are sent directly to the database.`,
-					);
-				}
-				return setDBMeta(schema, {updated: expr});
-			},
-		};
+				);
+			}
+			return setDBMeta(schema, {updated: expr});
+		},
+	};
 }
 
 /**
@@ -393,13 +405,13 @@ export function extendZod(zodModule: typeof z): void {
 
 		// Check if this is a Zod type constructor (has prototype and starts with "Zod")
 		if (
-			typeof value === 'function' &&
+			typeof value === "function" &&
 			value.prototype &&
-			key.startsWith('Zod')
+			key.startsWith("Zod")
 		) {
 			// Skip if .db already exists (avoid double-extending)
-			if (!('db' in value.prototype)) {
-				Object.defineProperty(value.prototype, 'db', {
+			if (!("db" in value.prototype)) {
+				Object.defineProperty(value.prototype, "db", {
 					get() {
 						return createDbMethods(this as ZodTypeAny);
 					},
@@ -732,11 +744,11 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 */
 	derive<N extends string, V extends z.ZodTypeAny>(
 		fieldName: N,
-		fieldType: V
+		fieldType: V,
 	): (
 		strings: TemplateStringsArray,
 		...values: unknown[]
-	) => DerivedTable<T & { [K in N]: V }>;
+	) => DerivedTable<T & {[K in N]: V}>;
 
 	/**
 	 * Access qualified column names as SQL fragments.
@@ -891,7 +903,10 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * // With explicit name
 	 * await db.exec`${Posts.ensureIndex(["authorId"], { name: "posts_author_idx" })}`;
 	 */
-	ensureIndex(fields: (keyof z.infer<ZodObject<T>> & string)[], options?: {name?: string}): DDLFragment;
+	ensureIndex(
+		fields: (keyof z.infer<ZodObject<T>> & string)[],
+		options?: {name?: string},
+	): DDLFragment;
 
 	/**
 	 * Generate UPDATE statement to copy data from one column to another.
@@ -933,7 +948,10 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * }
 	 * // → UPDATE users SET emailAddress = email WHERE emailAddress IS NULL
 	 */
-	copyColumn(fromField: string, toField: keyof z.infer<ZodObject<T>> & string): DDLFragment;
+	copyColumn(
+		fromField: string,
+		toField: keyof z.infer<ZodObject<T>> & string,
+	): DDLFragment;
 
 	/**
 	 * Generate column list and value tuples for INSERT statements.
@@ -1329,7 +1347,8 @@ function createTableObject(
 			}
 
 			// Filter metadata
-			const existingDerivedExprs: DerivedExpr[] = (meta as any).derivedExprs ?? [];
+			const existingDerivedExprs: DerivedExpr[] =
+				(meta as any).derivedExprs ?? [];
 			const existingDerivedFields: string[] = (meta as any).derivedFields ?? [];
 
 			// Filter derived expressions to only those for picked fields
@@ -1381,16 +1400,17 @@ function createTableObject(
 				ref.fields.every((f) => fieldSet.has(f)),
 			);
 
-			return createTableObject(
-				name,
-				pickedSchema,
-				pickedZodShape,
-				pickedMeta,
-				{indexes: pickedIndexes, unique: pickedUnique, references: pickedCompoundRefs},
-			) as PartialTable<any>;
+			return createTableObject(name, pickedSchema, pickedZodShape, pickedMeta, {
+				indexes: pickedIndexes,
+				unique: pickedUnique,
+				references: pickedCompoundRefs,
+			}) as PartialTable<any>;
 		},
 
-		derive<N extends string, V extends z.ZodTypeAny>(fieldName: N, fieldType: V) {
+		derive<N extends string, V extends z.ZodTypeAny>(
+			fieldName: N,
+			fieldType: V,
+		) {
 			return (strings: TemplateStringsArray, ...values: unknown[]) => {
 				// Parse template string with interpolated values
 				const parts: string[] = [];
@@ -1423,7 +1443,8 @@ function createTableObject(
 
 				// Accumulate expressions (supports composition: A.derive(...).derive(...))
 				const existingExprs: DerivedExpr[] = (meta as any).derivedExprs ?? [];
-				const existingDerivedFields: string[] = (meta as any).derivedFields ?? [];
+				const existingDerivedFields: string[] =
+					(meta as any).derivedFields ?? [];
 
 				const derivedMeta = {
 					...meta,
@@ -1517,11 +1538,13 @@ function createTableObject(
 			// Validate field exists in schema
 			if (!(fieldName in zodShape)) {
 				throw new Error(
-					`Field "${fieldName}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`
+					`Field "${fieldName}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`,
 				);
 			}
 
-			return createDDLFragment("alter-table-add-column", this as Table<any>, {fieldName});
+			return createDDLFragment("alter-table-add-column", this as Table<any>, {
+				fieldName,
+			});
 		},
 
 		ensureIndex(fields: string[], options?: {name?: string}): DDLFragment {
@@ -1529,24 +1552,30 @@ function createTableObject(
 			for (const field of fields) {
 				if (!(field in zodShape)) {
 					throw new Error(
-						`Field "${field}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`
+						`Field "${field}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`,
 					);
 				}
 			}
 
-			return createDDLFragment("create-index", this as Table<any>, {...options, fields});
+			return createDDLFragment("create-index", this as Table<any>, {
+				...options,
+				fields,
+			});
 		},
 
 		copyColumn(fromField: string, toField: string): DDLFragment {
 			// Validate toField exists in schema
 			if (!(toField in zodShape)) {
 				throw new Error(
-					`Destination field "${toField}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`
+					`Destination field "${toField}" does not exist in table "${name}". Available fields: ${Object.keys(zodShape).join(", ")}`,
 				);
 			}
 
 			// Note: fromField might not exist in current schema (it's the old column)
-			return createDDLFragment("update", this as Table<any>, {fromField, toField});
+			return createDDLFragment("update", this as Table<any>, {
+				fromField,
+				toField,
+			});
 		},
 
 		values(rows: Record<string, unknown>[]): SQLFragment {
@@ -1786,19 +1815,21 @@ export type Infer<T extends Table<any>> = z.infer<T["schema"]>;
  *   data: Insert<T>
  * ): Promise<Infer<T>>
  */
-export type FullTableOnly<T> =
-	T extends { meta: { isPartial: true } } ? never :
-	T extends { meta: { isDerived: true } } ? never :
-	T;
+export type FullTableOnly<T> = T extends {meta: {isPartial: true}}
+	? never
+	: T extends {meta: {isDerived: true}}
+		? never
+		: T;
 
 /**
  * Infer the insert type (respects defaults).
  * Returns `never` for partial or derived tables to prevent insert at compile time.
  */
-export type Insert<T extends Table<any>> =
-	T extends { meta: { isPartial: true } } ? never :
-	T extends { meta: { isDerived: true } } ? never :
-	z.input<T["schema"]>;
+export type Insert<T extends Table<any>> = T extends {meta: {isPartial: true}}
+	? never
+	: T extends {meta: {isDerived: true}}
+		? never
+		: z.input<T["schema"]>;
 
 // ============================================================================
 // TypeScript Declarations for .db namespace
@@ -1847,12 +1878,15 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	 *   reverseAs: "posts" // user.posts = Post[]
 	 * })
 	 */
-	references(table: Table<any>, options: {
-		field?: string;
-		as: string;
-		reverseAs?: string;
-		onDelete?: "cascade" | "set null" | "restrict";
-	}): Schema;
+	references(
+		table: Table<any>,
+		options: {
+			field?: string;
+			as: string;
+			reverseAs?: string;
+			onDelete?: "cascade" | "set null" | "restrict";
+		},
+	): Schema;
 
 	/**
 	 * Encode app values to DB values (for INSERT/UPDATE).
@@ -1924,6 +1958,7 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 }
 
 declare module "zod" {
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	interface ZodType<out Output, out Input, out Internals> {
 		readonly db: ZodDBMethods<this>;
 	}

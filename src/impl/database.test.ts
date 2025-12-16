@@ -14,20 +14,22 @@ const POST_ID = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 const Users = table("users", {
 	id: z.string().uuid().db.primary(),
 	email: z.string().email().db.unique(),
-	name: z.string()});
+	name: z.string(),
+});
 
 const Posts = table("posts", {
 	id: z.string().uuid().db.primary(),
 	authorId: z.string().uuid().db.references(Users, {as: "author"}),
 	title: z.string(),
 	body: z.string(),
-	published: z.boolean().default(false)});
+	published: z.boolean().default(false),
+});
 
 // Mock driver factory (default: SQLite-style escaping)
 function createMockDriver(
 	dialect: "sqlite" | "mysql" | "postgresql" = "sqlite",
 ): Driver {
-	return {
+	const driver: Driver = {
 		dialect: dialect,
 		all: mock(async () => []) as Driver["all"],
 		get: mock(async () => null) as Driver["get"],
@@ -40,11 +42,13 @@ function createMockDriver(
 			return `"${name.replace(/"/g, '""')}"`;
 		},
 		close: mock(async () => {}),
-		transaction: mock(async (fn) => await fn()) as Driver["transaction"],
+		transaction: mock(async (fn) => await fn(driver)) as Driver["transaction"],
 		insert: mock(async (_tableName, data) => data) as Driver["insert"],
 		update: mock(
 			async (_tableName, _pk, _id, data) => data,
-		) as Driver["update"]};
+		) as Driver["update"],
+	};
+	return driver;
 }
 
 describe("Database", () => {
@@ -67,7 +71,8 @@ describe("Database", () => {
 					"posts.published": true,
 					"users.id": USER_ID,
 					"users.email": "alice@example.com",
-					"users.name": "Alice"},
+					"users.name": "Alice",
+				},
 			]);
 
 			const results = await db.all([Posts, Users])`
@@ -103,7 +108,8 @@ describe("Database", () => {
 				"posts.authorId": USER_ID,
 				"posts.title": "Test Post",
 				"posts.body": "Content",
-				"posts.published": true}));
+				"posts.published": true,
+			}));
 
 			const post = await db.get(Posts)`WHERE "posts"."id" = ${POST_ID}`;
 
@@ -117,7 +123,8 @@ describe("Database", () => {
 				authorId: USER_ID,
 				title: "Test Post",
 				body: "Content",
-				published: true}));
+				published: true,
+			}));
 
 			const post = await db.get(Posts, POST_ID);
 
@@ -153,12 +160,14 @@ describe("Database", () => {
 			(driver.get as any).mockImplementation(async () => ({
 				id: USER_ID,
 				email: "alice@example.com",
-				name: "Alice"}));
+				name: "Alice",
+			}));
 
 			const user = await db.insert(Users, {
 				id: USER_ID,
 				email: "alice@example.com",
-				name: "Alice"});
+				name: "Alice",
+			});
 
 			expect(user.id).toBe(USER_ID);
 			expect(user.email).toBe("alice@example.com");
@@ -177,7 +186,8 @@ describe("Database", () => {
 				db.insert(Users, {
 					id: USER_ID,
 					email: "not-an-email", // Invalid email
-					name: "Alice"}),
+					name: "Alice",
+				}),
 			).rejects.toThrow();
 		});
 
@@ -214,7 +224,12 @@ describe("Database", () => {
 			const UsersWithStats = Users.derive("postCount", z.number())`COUNT(*)`;
 
 			await expect(
-				db.insert(UsersWithStats as any, {id: USER_ID, name: "Alice", email: "a@b.com", postCount: 0}),
+				db.insert(UsersWithStats as any, {
+					id: USER_ID,
+					name: "Alice",
+					email: "a@b.com",
+					postCount: 0,
+				}),
 			).rejects.toThrow('Cannot insert into derived table "users"');
 		});
 
@@ -227,15 +242,17 @@ describe("Database", () => {
 
 			// Mock driver.get (Database.insert uses RETURNING)
 			let capturedValues: any;
-			(driver.get as any).mockImplementation(async (sql: string, values: unknown[]) => {
-				capturedValues = values;
-				// Return the values as a row with field names
-				return {
-					id: values[0],
-					config: values[1],
-					tags: values[2],
-				};
-			});
+			(driver.get as any).mockImplementation(
+				async (sql: string, values: unknown[]) => {
+					capturedValues = values;
+					// Return the values as a row with field names
+					return {
+						id: values[0],
+						config: values[1],
+						tags: values[2],
+					};
+				},
+			);
 
 			await db.insert(Settings, {
 				id: "s1",
@@ -248,90 +265,99 @@ describe("Database", () => {
 			expect(capturedValues[2]).toBe('["admin","premium"]');
 		});
 
+		test("auto-decodes JSON strings back to objects/arrays", async () => {
+			const Settings = table("settings", {
+				id: z.string().db.primary(),
+				config: z.object({theme: z.string()}),
+				tags: z.array(z.string()),
+			});
 
-	test("auto-decodes JSON strings back to objects/arrays", async () => {
-		const Settings = table("settings", {
-			id: z.string().db.primary(),
-			config: z.object({theme: z.string()}),
-			tags: z.array(z.string()),
+			// Mock driver.get to return JSON strings (SQLite behavior)
+			(driver.get as any).mockImplementation(
+				async (sql: string, values: unknown[]) => {
+					return {
+						id: values[0],
+						config: values[1], // Already JSON string from encoding
+						tags: values[2], // Already JSON string from encoding
+					};
+				},
+			);
+
+			const result = await db.insert(Settings, {
+				id: "s1",
+				config: {theme: "dark"},
+				tags: ["admin", "premium"],
+			});
+
+			// Verify automatic JSON decoding happened
+			expect(result.config).toEqual({theme: "dark"});
+			expect(result.tags).toEqual(["admin", "premium"]);
 		});
 
-		// Mock driver.get to return JSON strings (SQLite behavior)
-		(driver.get as any).mockImplementation(async (sql: string, values: unknown[]) => {
-			return {
-				id: values[0],
-				config: values[1], // Already JSON string from encoding
-				tags: values[2], // Already JSON string from encoding
-			};
+		test("custom encode overrides automatic JSON encoding", async () => {
+			const Custom = table("custom", {
+				id: z.string().db.primary(),
+				data: z
+					.array(z.string())
+					.db.encode((arr) => arr.join(","))
+					.db.decode((str: string) => str.split(",")),
+			});
+
+			let capturedValues: any;
+			(driver.get as any).mockImplementation(
+				async (sql: string, values: unknown[]) => {
+					capturedValues = values;
+					return {
+						id: values[0],
+						data: values[1],
+					};
+				},
+			);
+
+			await db.insert(Custom, {
+				id: "c1",
+				data: ["a", "b", "c"],
+			});
+
+			// Should use custom encoding (CSV), not JSON
+			expect(capturedValues[1]).toBe("a,b,c");
 		});
 
-		const result = await db.insert(Settings, {
-			id: "s1",
-			config: {theme: "dark"},
-			tags: ["admin", "premium"],
+		test("throws when using DB expression on field with encode", async () => {
+			const {db: dbHelpers} = require("./database.js");
+
+			const EncodedField = table("encoded", {
+				id: z.string().db.primary(),
+				value: z.string().db.encode((v) => v.toUpperCase()),
+			});
+
+			await expect(
+				db.insert(EncodedField, {
+					id: "1",
+					value: dbHelpers.now() as any, // Try to pass DB expression
+				}),
+			).rejects.toThrow(
+				'Cannot use DB expression for field "value" which has encode/decode',
+			);
 		});
 
-		// Verify automatic JSON decoding happened
-		expect(result.config).toEqual({theme: "dark"});
-		expect(result.tags).toEqual(["admin", "premium"]);
-	});
+		test("throws when using DB expression on field with decode", async () => {
+			const {db: dbHelpers} = require("./database.js");
 
-	test("custom encode overrides automatic JSON encoding", async () => {
-		const Custom = table("custom", {
-			id: z.string().db.primary(),
-			data: z.array(z.string()).db.encode((arr) => arr.join(",")).db.decode((str: string) => str.split(",")),
+			const DecodedField = table("decoded", {
+				id: z.string().db.primary(),
+				value: z.string().db.decode((v) => v.toLowerCase()),
+			});
+
+			await expect(
+				db.insert(DecodedField, {
+					id: "1",
+					value: dbHelpers.now() as any, // Try to pass DB expression
+				}),
+			).rejects.toThrow(
+				'Cannot use DB expression for field "value" which has encode/decode',
+			);
 		});
-
-		let capturedValues: any;
-		(driver.get as any).mockImplementation(async (sql: string, values: unknown[]) => {
-			capturedValues = values;
-			return {
-				id: values[0],
-				data: values[1],
-			};
-		});
-
-		await db.insert(Custom, {
-			id: "c1",
-			data: ["a", "b", "c"],
-		});
-
-		// Should use custom encoding (CSV), not JSON
-		expect(capturedValues[1]).toBe("a,b,c");
-	});
-
-	test("throws when using DB expression on field with encode", async () => {
-		const {db: dbHelpers} = require("./database.js");
-
-		const EncodedField = table("encoded", {
-			id: z.string().db.primary(),
-			value: z.string().db.encode((v) => v.toUpperCase()),
-		});
-
-		await expect(
-			db.insert(EncodedField, {
-				id: "1",
-				value: dbHelpers.now() as any, // Try to pass DB expression
-			}),
-		).rejects.toThrow('Cannot use DB expression for field "value" which has encode/decode');
-	});
-
-	test("throws when using DB expression on field with decode", async () => {
-		const {db: dbHelpers} = require("./database.js");
-
-		const DecodedField = table("decoded", {
-			id: z.string().db.primary(),
-			value: z.string().db.decode((v) => v.toLowerCase()),
-		});
-
-		await expect(
-			db.insert(DecodedField, {
-				id: "1",
-				value: dbHelpers.now() as any, // Try to pass DB expression
-			}),
-		).rejects.toThrow('Cannot use DB expression for field "value" which has encode/decode');
-	});
-
 	});
 
 	describe("read path JSON decoding", () => {
@@ -410,7 +436,10 @@ describe("Database", () => {
 		test("custom decode overrides automatic JSON decoding on read", async () => {
 			const Custom = table("custom", {
 				id: z.string().db.primary(),
-				data: z.array(z.string()).db.encode((arr) => arr.join(",")).db.decode((str: string) => str.split(",")),
+				data: z
+					.array(z.string())
+					.db.encode((arr) => arr.join(","))
+					.db.decode((str: string) => str.split(",")),
 			});
 
 			// Mock driver.get to return CSV string (custom format)
@@ -443,7 +472,10 @@ describe("Database", () => {
 			const result = await db.get(Complex, "c1");
 
 			expect(result).not.toBeNull();
-			expect((result as any).nested.level1.level2).toEqual([{value: 1}, {value: 2}]);
+			expect((result as any).nested.level1.level2).toEqual([
+				{value: 1},
+				{value: 2},
+			]);
 		});
 
 		test("nullable object fields decode correctly", async () => {
@@ -501,7 +533,8 @@ describe("Database", () => {
 			(driver.get as any).mockImplementation(async () => ({
 				id: USER_ID,
 				email: "alice@example.com",
-				name: "Alice Updated"}));
+				name: "Alice Updated",
+			}));
 
 			const user = await db.update(Users, USER_ID, {name: "Alice Updated"});
 
@@ -538,7 +571,6 @@ describe("Database", () => {
 				db.update(UsersWithStats as any, USER_ID, {name: "Alice Updated"}),
 			).rejects.toThrow('Cannot update derived table "users"');
 		});
-
 	});
 
 	describe("delete()", () => {
@@ -626,7 +658,8 @@ describe("MySQL dialect", () => {
 		await db.insert(Users, {
 			id: USER_ID,
 			email: "test@example.com",
-			name: "Test"});
+			name: "Test",
+		});
 
 		const [sql] = (driver.run as any).mock.calls[0];
 		expect(sql).toContain("INSERT INTO `users`");
@@ -703,7 +736,8 @@ describe("transaction()", () => {
 			await tx.insert(Users, {
 				id: USER_ID,
 				email: "alice@example.com",
-				name: "Alice"});
+				name: "Alice",
+			});
 			return "done";
 		});
 
@@ -732,7 +766,8 @@ describe("transaction()", () => {
 				await tx.insert(Users, {
 					id: USER_ID,
 					email: "alice@example.com",
-					name: "Alice"});
+					name: "Alice",
+				});
 				throw error;
 			}),
 		).rejects.toThrow("Test error");
@@ -802,7 +837,8 @@ describe("Soft Delete", () => {
 		id: z.string().uuid().db.primary(),
 		email: z.string().email().db.unique(),
 		name: z.string(),
-		deletedAt: z.date().nullable().db.softDelete()});
+		deletedAt: z.date().nullable().db.softDelete(),
+	});
 
 	describe("softDelete() field wrapper", () => {
 		test("marks field as soft delete field", () => {
@@ -814,7 +850,8 @@ describe("Soft Delete", () => {
 				table("invalid_table", {
 					id: z.string().db.primary(),
 					deletedAt1: z.date().nullable().db.softDelete(),
-					deletedAt2: z.date().nullable().db.softDelete()}),
+					deletedAt2: z.date().nullable().db.softDelete(),
+				}),
 			).toThrow(
 				'Table "invalid_table" has multiple soft delete fields: "deletedAt1" and "deletedAt2"',
 			);
@@ -823,7 +860,8 @@ describe("Soft Delete", () => {
 		test("allows tables without soft delete field", () => {
 			const NormalTable = table("normal", {
 				id: z.string().db.primary(),
-				name: z.string()});
+				name: z.string(),
+			});
 			expect(NormalTable.meta.softDeleteField).toBeNull();
 		});
 	});
@@ -833,16 +871,15 @@ describe("Soft Delete", () => {
 			const fragment = SoftDeleteUsers.deleted();
 			expect(fragment).toHaveProperty("sql");
 			expect(fragment).toHaveProperty("params");
-			expect(fragment.sql).toBe(
-				'"soft_delete_users"."deletedAt" IS NOT NULL',
-			);
+			expect(fragment.sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
 			expect(fragment.params).toEqual([]);
 		});
 
 		test("throws if table has no soft delete field", () => {
 			const NormalTable = table("normal", {
 				id: z.string().db.primary(),
-				name: z.string()});
+				name: z.string(),
+			});
 			expect(() => NormalTable.deleted()).toThrow(
 				'Table "normal" does not have a soft delete field',
 			);
@@ -898,7 +935,8 @@ describe("Soft Delete", () => {
 		test("throws if table has no primary key", async () => {
 			const NoPkTable = table("no_pk", {
 				name: z.string(),
-				deletedAt: z.date().nullable().db.softDelete()});
+				deletedAt: z.date().nullable().db.softDelete(),
+			});
 
 			await expect(db.softDelete(NoPkTable, "123")).rejects.toThrow(
 				"Table no_pk has no primary key defined",
@@ -908,10 +946,11 @@ describe("Soft Delete", () => {
 		test("throws if table has no soft delete field", async () => {
 			const NormalTable = table("normal", {
 				id: z.string().db.primary(),
-				name: z.string()});
+				name: z.string(),
+			});
 
 			await expect(db.softDelete(NormalTable, "123")).rejects.toThrow(
-				'Table normal does not have a soft delete field',
+				"Table normal does not have a soft delete field",
 			);
 		});
 
@@ -967,13 +1006,14 @@ describe("Soft Delete", () => {
 			const db = new Database(driver);
 			const NormalTable = table("normal", {
 				id: z.string().db.primary(),
-				name: z.string()});
+				name: z.string(),
+			});
 
 			await expect(
 				db.transaction(async (tx) => {
 					await tx.softDelete(NormalTable, "123");
 				}),
-			).rejects.toThrow('Table normal does not have a soft delete field');
+			).rejects.toThrow("Table normal does not have a soft delete field");
 		});
 
 		test("applies updated() markers on soft delete", async () => {
@@ -1015,9 +1055,7 @@ describe("Soft Delete", () => {
 		test("deleted() works on partial table with soft delete field", () => {
 			const PartialUsers = SoftDeleteUsers.pick("id", "name", "deletedAt");
 			const fragment = PartialUsers.deleted();
-			expect(fragment.sql).toBe(
-				'"soft_delete_users"."deletedAt" IS NOT NULL',
-			);
+			expect(fragment.sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
 		});
 
 		test("deleted() throws on partial table without soft delete field", () => {
@@ -1037,13 +1075,6 @@ describe("DB Expressions", () => {
 		name: z.string(),
 		createdAt: z.date(),
 		updatedAt: z.date().optional(),
-	});
-
-	const CounterTable = table("counters", {
-		id: z.string().db.primary(),
-		name: z.string(),
-		views: z.number().int().default(0),
-		likes: z.number().int().default(0),
 	});
 
 	describe("db.now()", () => {
@@ -1255,9 +1286,9 @@ describe("DB Expressions", () => {
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 
 			// Update with no data should throw since inserted() doesn't apply on update
-			await expect(
-				database.update(InsertOnlyTable, "123", {}),
-			).rejects.toThrow("No fields to update");
+			await expect(database.update(InsertOnlyTable, "123", {})).rejects.toThrow(
+				"No fields to update",
+			);
 		});
 	});
 });

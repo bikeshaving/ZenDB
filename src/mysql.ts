@@ -67,7 +67,8 @@ export default class MySQLDriver implements Driver {
 			// ER_DUP_ENTRY = duplicate key/unique constraint
 			// ER_NO_REFERENCED_ROW_2 = foreign key constraint (insert)
 			// ER_ROW_IS_REFERENCED_2 = foreign key constraint (delete)
-			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+			let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" =
+				"unknown";
 			let constraint: string | undefined;
 			let table: string | undefined;
 			let column: string | undefined;
@@ -84,7 +85,10 @@ export default class MySQLDriver implements Driver {
 						table = parts[0];
 					}
 				}
-			} else if (code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
+			} else if (
+				code === "ER_NO_REFERENCED_ROW_2" ||
+				code === "ER_ROW_IS_REFERENCED_2"
+			) {
 				kind = "foreign_key";
 				// Example: "Cannot add or update a child row: a foreign key constraint fails (`db`.`table`, CONSTRAINT `fk_name` ...)"
 				const constraintMatch = message.match(/CONSTRAINT `([^`]+)`/i);
@@ -95,15 +99,23 @@ export default class MySQLDriver implements Driver {
 				}
 			}
 
-			if (code === "ER_DUP_ENTRY" || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
-				throw new ConstraintViolationError(message, {
-					kind,
-					constraint,
-					table,
-					column,
-				}, {
-					cause: error,
-				});
+			if (
+				code === "ER_DUP_ENTRY" ||
+				code === "ER_NO_REFERENCED_ROW_2" ||
+				code === "ER_ROW_IS_REFERENCED_2"
+			) {
+				throw new ConstraintViolationError(
+					message,
+					{
+						kind,
+						constraint,
+						table,
+						column,
+					},
+					{
+						cause: error,
+					},
+				);
 			}
 		}
 		throw error;
@@ -157,12 +169,106 @@ export default class MySQLDriver implements Driver {
 		await this.#pool.end();
 	}
 
-	async transaction<T>(fn: () => Promise<T>): Promise<T> {
+	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
 		// mysql2: get a dedicated connection from pool for transaction
 		const connection = await this.#pool.getConnection();
 		try {
 			await connection.execute("START TRANSACTION", []);
-			const result = await fn();
+
+			// Create a transaction-bound driver that uses this connection
+			const txDriver: Driver = {
+				dialect: "mysql",
+				all: async <R>(sql: string, params: unknown[]): Promise<R[]> => {
+					try {
+						const [rows] = await connection.execute(sql, params);
+						return rows as R[];
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				get: async <R>(sql: string, params: unknown[]): Promise<R | null> => {
+					try {
+						const [rows] = await connection.execute(sql, params);
+						return ((rows as unknown[])[0] as R) ?? null;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				run: async (sql: string, params: unknown[]): Promise<number> => {
+					try {
+						const [result] = await connection.execute(sql, params);
+						return (result as mysql.ResultSetHeader).affectedRows ?? 0;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				val: async <R>(sql: string, params: unknown[]): Promise<R> => {
+					try {
+						const [rows] = await connection.execute(sql, params);
+						const row = (rows as unknown[])[0];
+						if (!row) return null as R;
+						const values = Object.values(row as object);
+						return values[0] as R;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				escapeIdentifier: this.escapeIdentifier.bind(this),
+				close: async () => {
+					// No-op for transaction driver
+				},
+				transaction: async () => {
+					throw new Error("Nested transactions are not supported");
+				},
+				insert: async (
+					tableName: string,
+					data: Record<string, unknown>,
+				): Promise<Record<string, unknown>> => {
+					try {
+						const columns = Object.keys(data);
+						const values = Object.values(data);
+						const columnList = columns
+							.map((c) => this.escapeIdentifier(c))
+							.join(", ");
+						const placeholders = columns.map(() => "?").join(", ");
+						const insertSql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
+						await connection.execute(insertSql, values);
+						// MySQL doesn't support RETURNING - return data as-is
+						return data;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				update: async (
+					tableName: string,
+					primaryKey: string,
+					id: unknown,
+					data: Record<string, unknown>,
+				): Promise<Record<string, unknown> | null> => {
+					try {
+						const columns = Object.keys(data);
+						const values = Object.values(data);
+						const setClause = columns
+							.map((c) => `${this.escapeIdentifier(c)} = ?`)
+							.join(", ");
+						const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+						const [result] = await connection.execute(updateSql, [
+							...values,
+							id,
+						]);
+						if ((result as mysql.ResultSetHeader).affectedRows === 0) {
+							return null;
+						}
+						const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+						const [rows] = await connection.execute(selectSql, [id]);
+						return (rows as unknown[])[0] as Record<string, unknown>;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+			};
+
+			const result = await fn(txDriver);
 			await connection.execute("COMMIT", []);
 			return result;
 		} catch (error) {
@@ -180,7 +286,9 @@ export default class MySQLDriver implements Driver {
 		try {
 			const columns = Object.keys(data);
 			const values = Object.values(data);
-			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const columnList = columns
+				.map((c) => this.escapeIdentifier(c))
+				.join(", ");
 			const placeholders = columns.map(() => "?").join(", ");
 
 			// MySQL doesn't support RETURNING - need to INSERT then SELECT
@@ -252,7 +360,10 @@ export default class MySQLDriver implements Driver {
 		}
 	}
 
-	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+	async explain(
+		query: string,
+		params: unknown[],
+	): Promise<Record<string, unknown>[]> {
 		try {
 			const explainSQL = `EXPLAIN ${query}`;
 			const [rows] = await this.#pool.execute(explainSQL, params);

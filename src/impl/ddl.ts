@@ -109,7 +109,10 @@ function mapZodToSQL(
 			// For explicit types, just stringify the default
 			if (typeof defaultValue === "string") {
 				sqlDefault = `'${defaultValue.replace(/'/g, "''")}'`;
-			} else if (typeof defaultValue === "number" || typeof defaultValue === "boolean") {
+			} else if (
+				typeof defaultValue === "number" ||
+				typeof defaultValue === "boolean"
+			) {
 				sqlDefault = String(defaultValue);
 			} else {
 				sqlDefault = `'${JSON.stringify(defaultValue).replace(/'/g, "''")}'`;
@@ -223,7 +226,11 @@ export function generateColumnDDL(
 	dialect: SQLDialect = "sqlite",
 ): string {
 	const {isOptional, isNullable, hasDefault} = unwrapType(zodType);
-	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(zodType, dialect, fieldMeta);
+	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(
+		zodType,
+		dialect,
+		fieldMeta,
+	);
 
 	let def = `${quoteIdent(fieldName, dialect)} ${sqlType}`;
 

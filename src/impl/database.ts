@@ -90,7 +90,7 @@ function extractDBExpressions(
 				if (fieldMeta?.encode || fieldMeta?.decode) {
 					throw new Error(
 						`Cannot use DB expression for field "${key}" which has encode/decode. ` +
-						`DB expressions bypass encoding and are sent directly to the database.`,
+							`DB expressions bypass encoding and are sent directly to the database.`,
 					);
 				}
 			}
@@ -190,7 +190,11 @@ export function encodeData<T extends Table<any>>(
 				core = (core as any).unwrap();
 			}
 
-			if ((core instanceof z.ZodObject || core instanceof z.ZodArray) && value !== null && value !== undefined) {
+			if (
+				(core instanceof z.ZodObject || core instanceof z.ZodArray) &&
+				value !== null &&
+				value !== undefined
+			) {
 				// Automatic JSON encoding for objects and arrays
 				encoded[key] = JSON.stringify(value);
 			} else {
@@ -331,8 +335,12 @@ export interface Driver {
 	 *
 	 * If the function completes successfully, the transaction is committed.
 	 * If the function throws an error, the transaction is rolled back.
+	 *
+	 * @param fn - Callback that receives a transaction-bound driver. All operations
+	 *             within the callback MUST use this driver to ensure they run on
+	 *             the same connection.
 	 */
-	transaction<T>(fn: () => Promise<T>): Promise<T>;
+	transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T>;
 
 	/**
 	 * Insert a row and return the full row (including DB defaults/generated values).
@@ -383,7 +391,10 @@ export interface Driver {
 	 * @param params - Query parameters
 	 * @returns Array of query plan rows (structure varies by database)
 	 */
-	explain?(query: string, params: unknown[]): Promise<Record<string, unknown>[]>;
+	explain?(
+		query: string,
+		params: unknown[],
+	): Promise<Record<string, unknown>[]>;
 }
 
 // ============================================================================
@@ -504,7 +515,10 @@ export class Transaction {
 				.then((row) => {
 					if (!row) return null;
 					const decoded = decodeData(table, row);
-					return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+					return validateWithStandardSchema<Infer<T>>(
+						table.schema,
+						decoded,
+					) as Infer<T>;
 				});
 		}
 
@@ -542,10 +556,17 @@ export class Transaction {
 		}
 
 		// Inject schema-defined expressions (inserted/updated) for fields not provided
-		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"insert",
+		);
 
 		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
-		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
 
 		// Validate and encode only regular data
 		let schema = table.schema;
@@ -589,7 +610,10 @@ export class Transaction {
 			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause}) RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
 			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+			return validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
 		}
 
 		// MySQL fallback
@@ -597,13 +621,20 @@ export class Transaction {
 		await this.#driver.run(sql, values);
 
 		const pk = table.meta.primary;
-		const pkValue = pk ? (encoded[pk] ?? (expressions[pk] ? undefined : null)) : null;
+		const pkValue = pk
+			? (encoded[pk] ?? (expressions[pk] ? undefined : null))
+			: null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [pkValue]);
+			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+				pkValue,
+			]);
 			if (row) {
 				const decoded = decodeData(table, row);
-				return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+				return validateWithStandardSchema<Infer<T>>(
+					table.schema,
+					decoded,
+				) as Infer<T>;
 			}
 		}
 
@@ -627,10 +658,17 @@ export class Transaction {
 		}
 
 		// Inject schema-defined expressions (updated) for fields not provided
-		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "update");
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"update",
+		);
 
 		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
-		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
 
 		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
@@ -653,7 +691,9 @@ export class Transaction {
 		let paramIndex = 1;
 
 		for (const col of Object.keys(encoded)) {
-			setParts.push(`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`);
+			setParts.push(
+				`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`,
+			);
 			values.push(encoded[col]);
 		}
 
@@ -666,10 +706,16 @@ export class Transaction {
 
 		if (this.#driver.dialect !== "mysql") {
 			const sql = `UPDATE ${tableName} SET ${setClause} WHERE ${whereClause} RETURNING *`;
-			const row = await this.#driver.get<Record<string, unknown>>(sql, [...values, id]);
+			const row = await this.#driver.get<Record<string, unknown>>(sql, [
+				...values,
+				id,
+			]);
 			if (!row) return null;
 			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+			return validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
 		}
 
 		// MySQL fallback
@@ -677,10 +723,15 @@ export class Transaction {
 		await this.#driver.run(sql, [...values, id]);
 
 		const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+			id,
+		]);
 		if (!row) return null;
 		const decoded = decodeData(table, row);
-		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+		return validateWithStandardSchema<Infer<T>>(
+			table.schema,
+			decoded,
+		) as Infer<T>;
 	}
 
 	async delete<T extends Table<any>>(
@@ -797,7 +848,9 @@ export class Transaction {
 		...values: unknown[]
 	): Promise<Record<string, unknown>[]> {
 		if (!this.#driver.explain) {
-			throw new Error(`Driver ${this.#driver.dialect} does not support EXPLAIN`);
+			throw new Error(
+				`Driver ${this.#driver.dialect} does not support EXPLAIN`,
+			);
 		}
 
 		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
@@ -1034,7 +1087,10 @@ export class Database extends EventTarget {
 				.then((row) => {
 					if (!row) return null;
 					const decoded = decodeData(table, row);
-					return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+					return validateWithStandardSchema<Infer<T>>(
+						table.schema,
+						decoded,
+					) as Infer<T>;
 				});
 		}
 
@@ -1084,10 +1140,17 @@ export class Database extends EventTarget {
 		}
 
 		// Inject schema-defined expressions (inserted/updated) for fields not provided
-		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "insert");
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"insert",
+		);
 
 		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
-		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
 
 		// Validate and encode only regular data
 		// DB expression fields are excluded from validation since they're handled by the DB
@@ -1136,7 +1199,10 @@ export class Database extends EventTarget {
 			const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause}) RETURNING *`;
 			const row = await this.#driver.get<Record<string, unknown>>(sql, values);
 			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+			return validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
 		}
 
 		// MySQL fallback: INSERT then SELECT to get DB defaults
@@ -1145,13 +1211,20 @@ export class Database extends EventTarget {
 
 		// Fetch the inserted row to get DB-applied defaults
 		const pk = table.meta.primary;
-		const pkValue = pk ? (encoded[pk] ?? (expressions[pk] ? undefined : null)) : null;
+		const pkValue = pk
+			? (encoded[pk] ?? (expressions[pk] ? undefined : null))
+			: null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [pkValue]);
+			const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+				pkValue,
+			]);
 			if (row) {
 				const decoded = decodeData(table, row);
-				return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+				return validateWithStandardSchema<Infer<T>>(
+					table.schema,
+					decoded,
+				) as Infer<T>;
 			}
 		}
 
@@ -1184,10 +1257,17 @@ export class Database extends EventTarget {
 		}
 
 		// Inject schema-defined expressions (updated) for fields not provided
-		const dataWithSchemaExprs = injectSchemaExpressions(table, data as Record<string, unknown>, "update");
+		const dataWithSchemaExprs = injectSchemaExpressions(
+			table,
+			data as Record<string, unknown>,
+			"update",
+		);
 
 		// Separate DB expressions from regular data (validates no DB expr on encoded fields)
-		const {regularData, expressions} = extractDBExpressions(dataWithSchemaExprs, table);
+		const {regularData, expressions} = extractDBExpressions(
+			dataWithSchemaExprs,
+			table,
+		);
 
 		// Validate and encode only regular data
 		const partialSchema = table.schema.partial();
@@ -1210,7 +1290,9 @@ export class Database extends EventTarget {
 		let paramIndex = 1;
 
 		for (const col of Object.keys(encoded)) {
-			setParts.push(`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`);
+			setParts.push(
+				`${this.#quoteIdent(col)} = ${this.#placeholder(paramIndex++)}`,
+			);
 			values.push(encoded[col]);
 		}
 
@@ -1231,7 +1313,10 @@ export class Database extends EventTarget {
 			]);
 			if (!row) return null;
 			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+			return validateWithStandardSchema<Infer<T>>(
+				table.schema,
+				decoded,
+			) as Infer<T>;
 		}
 
 		// MySQL fallback: UPDATE then SELECT
@@ -1239,10 +1324,15 @@ export class Database extends EventTarget {
 		await this.#driver.run(sql, [...values, id]);
 
 		const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
-		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [id]);
+		const row = await this.#driver.get<Record<string, unknown>>(selectSql, [
+			id,
+		]);
 		if (!row) return null;
 		const decoded = decodeData(table, row);
-		return validateWithStandardSchema<Infer<T>>(table.schema, decoded) as Infer<T>;
+		return validateWithStandardSchema<Infer<T>>(
+			table.schema,
+			decoded,
+		) as Infer<T>;
 	}
 
 	/**
@@ -1420,7 +1510,9 @@ export class Database extends EventTarget {
 		...values: unknown[]
 	): Promise<Record<string, unknown>[]> {
 		if (!this.#driver.explain) {
-			throw new Error(`Driver ${this.#driver.dialect} does not support EXPLAIN`);
+			throw new Error(
+				`Driver ${this.#driver.dialect} does not support EXPLAIN`,
+			);
 		}
 
 		const {sql, params} = parseTemplate(strings, values, this.#driver.dialect);
@@ -1437,8 +1529,8 @@ export class Database extends EventTarget {
 	 * If the function completes successfully, the transaction is committed.
 	 * If the function throws an error, the transaction is rolled back.
 	 *
-	 * For connection-pooled drivers that implement `beginTransaction()`,
-	 * all operations are guaranteed to use the same connection.
+	 * All operations within the transaction callback use the same database
+	 * connection, ensuring transactional consistency.
 	 *
 	 * @example
 	 * await db.transaction(async (tx) => {
@@ -1448,9 +1540,10 @@ export class Database extends EventTarget {
 	 * });
 	 */
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
-		// Delegate to driver.transaction() which handles dialect-specific behavior
-		return await this.#driver.transaction(async () => {
-			const tx = new Transaction(this.#driver);
+		// Delegate to driver.transaction() which provides a transaction-bound driver
+		return await this.#driver.transaction(async (txDriver) => {
+			// Create Transaction using the transaction-bound driver, not the main driver
+			const tx = new Transaction(txDriver);
 			return await fn(tx);
 		});
 	}

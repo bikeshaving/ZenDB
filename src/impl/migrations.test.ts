@@ -57,9 +57,9 @@ function createTestDriver(): Driver & {tables: Map<string, any[]>} {
 		async close(): Promise<void> {
 			// No-op for test driver
 		},
-		async transaction<T>(fn: () => Promise<T>): Promise<T> {
-			// Simple transaction - just execute the function
-			return await fn();
+		async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
+			// Simple transaction - just execute the function with this driver
+			return await fn(this as Driver);
 		},
 		async insert(_tableName: string, data: Record<string, unknown>) {
 			return data;

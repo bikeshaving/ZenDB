@@ -61,21 +61,26 @@ export default class SQLiteDriver implements Driver {
 				const constraint = match ? `${table}.${column}` : undefined;
 
 				// Determine kind from error code
-				let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" = "unknown";
+				let kind: "unique" | "foreign_key" | "check" | "not_null" | "unknown" =
+					"unknown";
 				if (code === "SQLITE_CONSTRAINT_UNIQUE") kind = "unique";
 				else if (message.includes("UNIQUE")) kind = "unique";
 				else if (message.includes("FOREIGN KEY")) kind = "foreign_key";
 				else if (message.includes("NOT NULL")) kind = "not_null";
 				else if (message.includes("CHECK")) kind = "check";
 
-				throw new ConstraintViolationError(message, {
-					kind,
-					constraint,
-					table,
-					column,
-				}, {
-					cause: error,
-				});
+				throw new ConstraintViolationError(
+					message,
+					{
+						kind,
+						constraint,
+						table,
+						column,
+					},
+					{
+						cause: error,
+					},
+				);
 			}
 		}
 		throw error;
@@ -126,12 +131,12 @@ export default class SQLiteDriver implements Driver {
 		this.#db.close();
 	}
 
-	async transaction<T>(fn: () => Promise<T>): Promise<T> {
-		// better-sqlite3 doesn't support async in transactions by default
-		// Use BEGIN/COMMIT with error handling
+	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
+		// better-sqlite3 uses a single connection, so we pass `this` as the transaction driver.
+		// All operations will use the same connection within the transaction.
 		this.#db.exec("BEGIN");
 		try {
-			const result = await fn();
+			const result = await fn(this);
 			this.#db.exec("COMMIT");
 			return result;
 		} catch (error) {
@@ -147,12 +152,17 @@ export default class SQLiteDriver implements Driver {
 		try {
 			const columns = Object.keys(data);
 			const values = Object.values(data);
-			const columnList = columns.map((c) => this.escapeIdentifier(c)).join(", ");
+			const columnList = columns
+				.map((c) => this.escapeIdentifier(c))
+				.join(", ");
 			const placeholders = columns.map(() => "?").join(", ");
 
 			// SQLite supports RETURNING
 			const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
-			const row = this.#db.prepare(sql).get(...values) as Record<string, unknown>;
+			const row = this.#db.prepare(sql).get(...values) as Record<
+				string,
+				unknown
+			>;
 			return row;
 		} catch (error) {
 			this.#handleError(error);
@@ -197,10 +207,16 @@ export default class SQLiteDriver implements Driver {
 		}
 	}
 
-	async explain(query: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+	async explain(
+		query: string,
+		params: unknown[],
+	): Promise<Record<string, unknown>[]> {
 		try {
 			const explainSQL = `EXPLAIN QUERY PLAN ${query}`;
-			return this.#db.prepare(explainSQL).all(...params) as Record<string, unknown>[];
+			return this.#db.prepare(explainSQL).all(...params) as Record<
+				string,
+				unknown
+			>[];
 		} catch (error) {
 			this.#handleError(error);
 		}

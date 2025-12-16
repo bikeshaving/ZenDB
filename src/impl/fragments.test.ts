@@ -12,14 +12,16 @@ const Users = table("users", {
 	email: z.string().email(),
 	name: z.string(),
 	role: z.enum(["user", "admin"]).default("user"),
-	createdAt: z.date()});
+	createdAt: z.date(),
+});
 
 const Posts = table("posts", {
 	id: z.string().uuid().db.primary(),
 	authorId: z.string().uuid().db.references(Users, {as: "author"}),
 	title: z.string(),
 	published: z.boolean().default(false),
-	viewCount: z.number().int().default(0)});
+	viewCount: z.number().int().default(0),
+});
 
 describe("Table.where()", () => {
 	test("simple equality with qualified column", () => {
@@ -273,7 +275,9 @@ describe("Table.values()", () => {
 			"postgresql",
 		);
 
-		expect(sql).toBe('INSERT INTO posts ("id", "title") VALUES ($1, $2), ($3, $4)');
+		expect(sql).toBe(
+			'INSERT INTO posts ("id", "title") VALUES ($1, $2), ($3, $4)',
+		);
 		expect(params).toEqual([uuid1, "First", uuid2, "Second"]);
 	});
 });
