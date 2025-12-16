@@ -259,20 +259,140 @@ export default class BunDriver implements Driver {
 	}
 
 	async transaction<T>(fn: (txDriver: Driver) => Promise<T>): Promise<T> {
-		// Bun.SQL: For SQLite, it's a single connection, so we can pass `this`.
-		// For PostgreSQL/MySQL, Bun.SQL manages connection pooling internally.
-		// TODO: Investigate if Bun.SQL has a way to reserve a connection for transaction.
-		// For now, we pass `this` which assumes single-connection or internal pooling.
-		const beginSql = this.dialect === "mysql" ? "START TRANSACTION" : "BEGIN";
-		await this.#sql.unsafe(beginSql, []);
-		try {
-			const result = await fn(this);
-			await this.#sql.unsafe("COMMIT", []);
-			return result;
-		} catch (error) {
-			await this.#sql.unsafe("ROLLBACK", []);
-			throw error;
-		}
+		// Bun.SQL's transaction() reserves a connection and provides a scoped SQL instance
+		return await (this.#sql as any).transaction(async (txSql: any) => {
+			// Create a transaction-bound driver that uses the transaction SQL
+			const txDriver: Driver = {
+				dialect: this.dialect,
+				all: async <R>(query: string, params: unknown[]): Promise<R[]> => {
+					try {
+						const result = await txSql.unsafe(query, params as any[]);
+						return result as R[];
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				get: async <R>(query: string, params: unknown[]): Promise<R | null> => {
+					try {
+						const result = await txSql.unsafe(query, params as any[]);
+						return (result[0] as R) ?? null;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				run: async (query: string, params: unknown[]): Promise<number> => {
+					try {
+						const result = await txSql.unsafe(query, params as any[]);
+						return (
+							(result as any).count ??
+							(result as any).affectedRows ??
+							result.length
+						);
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				val: async <R>(query: string, params: unknown[]): Promise<R> => {
+					try {
+						const result = await txSql.unsafe(query, params as any[]);
+						if (result.length === 0) return null as R;
+						const row = result[0] as Record<string, unknown>;
+						const firstKey = Object.keys(row)[0];
+						return row[firstKey] as R;
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				escapeIdentifier: this.escapeIdentifier.bind(this),
+				close: async () => {
+					// No-op for transaction driver
+				},
+				transaction: async () => {
+					throw new Error("Nested transactions are not supported");
+				},
+				insert: async (
+					tableName: string,
+					data: Record<string, unknown>,
+				): Promise<Record<string, unknown>> => {
+					try {
+						const columns = Object.keys(data);
+						const values = Object.values(data);
+						const columnList = columns
+							.map((c) => this.escapeIdentifier(c))
+							.join(", ");
+
+						if (this.dialect === "mysql") {
+							const placeholders = columns.map(() => "?").join(", ");
+							const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders})`;
+							await txSql.unsafe(sql, values as any[]);
+							return data;
+						} else if (this.dialect === "postgresql") {
+							const placeholders = columns
+								.map((_, i) => `$${i + 1}`)
+								.join(", ");
+							const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+							const result = await txSql.unsafe(sql, values as any[]);
+							return result[0] as Record<string, unknown>;
+						} else {
+							const placeholders = columns.map(() => "?").join(", ");
+							const sql = `INSERT INTO ${this.escapeIdentifier(tableName)} (${columnList}) VALUES (${placeholders}) RETURNING *`;
+							const result = await txSql.unsafe(sql, values as any[]);
+							return result[0] as Record<string, unknown>;
+						}
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+				update: async (
+					tableName: string,
+					primaryKey: string,
+					id: unknown,
+					data: Record<string, unknown>,
+				): Promise<Record<string, unknown> | null> => {
+					try {
+						const columns = Object.keys(data);
+						const values = Object.values(data);
+
+						if (this.dialect === "mysql") {
+							const setClause = columns
+								.map((c) => `${this.escapeIdentifier(c)} = ?`)
+								.join(", ");
+							const updateSql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+							const result = await txSql.unsafe(updateSql, [
+								...values,
+								id,
+							] as any[]);
+
+							if ((result as any).affectedRows === 0) {
+								return null;
+							}
+
+							const selectSql = `SELECT * FROM ${this.escapeIdentifier(tableName)} WHERE ${this.escapeIdentifier(primaryKey)} = ?`;
+							const rows = await txSql.unsafe(selectSql, [id] as any[]);
+							return rows[0] as Record<string, unknown>;
+						} else if (this.dialect === "postgresql") {
+							const setClause = columns
+								.map((c, i) => `${this.escapeIdentifier(c)} = $${i + 1}`)
+								.join(", ");
+							const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = $${columns.length + 1} RETURNING *`;
+							const result = await txSql.unsafe(sql, [...values, id] as any[]);
+							return result[0] ?? null;
+						} else {
+							const setClause = columns
+								.map((c) => `${this.escapeIdentifier(c)} = ?`)
+								.join(", ");
+							const sql = `UPDATE ${this.escapeIdentifier(tableName)} SET ${setClause} WHERE ${this.escapeIdentifier(primaryKey)} = ? RETURNING *`;
+							const result = await txSql.unsafe(sql, [...values, id] as any[]);
+							return result[0] ?? null;
+						}
+					} catch (error) {
+						this.#handleError(error);
+					}
+				},
+			};
+
+			return await fn(txDriver);
+		});
 	}
 
 	async insert(
