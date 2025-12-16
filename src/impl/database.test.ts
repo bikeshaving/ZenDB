@@ -806,7 +806,7 @@ describe("Soft Delete", () => {
 
 	describe("softDelete() field wrapper", () => {
 		test("marks field as soft delete field", () => {
-			expect(SoftDeleteUsers._meta.softDeleteField).toBe("deletedAt");
+			expect(SoftDeleteUsers.meta.softDeleteField).toBe("deletedAt");
 		});
 
 		test("throws on multiple soft delete fields", () => {
@@ -824,7 +824,7 @@ describe("Soft Delete", () => {
 			const NormalTable = table("normal", {
 				id: z.string().db.primary(),
 				name: z.string()});
-			expect(NormalTable._meta.softDeleteField).toBeNull();
+			expect(NormalTable.meta.softDeleteField).toBeNull();
 		});
 	});
 
@@ -1004,12 +1004,12 @@ describe("Soft Delete", () => {
 	describe("Integration with pick()", () => {
 		test("preserves soft delete field in partial table", () => {
 			const PartialUsers = SoftDeleteUsers.pick("id", "name", "deletedAt");
-			expect(PartialUsers._meta.softDeleteField).toBe("deletedAt");
+			expect(PartialUsers.meta.softDeleteField).toBe("deletedAt");
 		});
 
 		test("removes soft delete field when not picked", () => {
 			const PartialUsers = SoftDeleteUsers.pick("id", "name");
-			expect(PartialUsers._meta.softDeleteField).toBeNull();
+			expect(PartialUsers.meta.softDeleteField).toBeNull();
 		});
 
 		test("deleted() works on partial table with soft delete field", () => {

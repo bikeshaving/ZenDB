@@ -599,9 +599,9 @@ export type SetValues<T extends Table<any>> = {
  */
 export interface PartialTable<T extends ZodRawShape = ZodRawShape> extends Omit<
 	Table<T>,
-	"_meta"
+	"meta"
 > {
-	readonly _meta: Table<T>["_meta"] & {isPartial: true};
+	readonly meta: Table<T>["meta"] & {isPartial: true};
 }
 
 /**
@@ -610,9 +610,9 @@ export interface PartialTable<T extends ZodRawShape = ZodRawShape> extends Omit<
  */
 export interface DerivedTable<T extends ZodRawShape = ZodRawShape> extends Omit<
 	Table<T>,
-	"_meta"
+	"meta"
 > {
-	readonly _meta: Table<T>["_meta"] & {
+	readonly meta: Table<T>["meta"] & {
 		isDerived: true;
 		derivedExprs: DerivedExpr[];
 		derivedFields: string[];
@@ -628,7 +628,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly compoundReferences: CompoundReference[];
 
 	// Pre-extracted metadata (no Zod walking needed)
-	readonly _meta: {
+	readonly meta: {
 		primary: string | null;
 		unique: string[];
 		indexed: string[];
@@ -1060,7 +1060,7 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			meta.references.push({
 				fieldName: key,
 				table: ref.table,
-				referencedField: ref.field ?? ref.table._meta.primary ?? "id",
+				referencedField: ref.field ?? ref.table.meta.primary ?? "id",
 				as: ref.as,
 				reverseAs: ref.reverseAs,
 				onDelete: ref.onDelete,
@@ -1258,7 +1258,7 @@ function createTableObject(
 		indexes: options.indexes ?? [],
 		unique: options.unique ?? [],
 		compoundReferences: options.references ?? [],
-		_meta: {...meta, derive: options.derive},
+		meta: {...meta, derive: options.derive},
 		cols,
 		primary,
 
@@ -1718,7 +1718,7 @@ function extractFieldMeta(
 		meta.reference = {
 			table: dbMeta.reference.table.name,
 			field:
-				dbMeta.reference.field ?? dbMeta.reference.table._meta.primary ?? "id",
+				dbMeta.reference.field ?? dbMeta.reference.table.meta.primary ?? "id",
 			as: dbMeta.reference.as,
 		};
 	}
@@ -1787,8 +1787,8 @@ export type Infer<T extends Table<any>> = z.infer<T["schema"]>;
  * ): Promise<Infer<T>>
  */
 export type FullTableOnly<T> =
-	T extends { _meta: { isPartial: true } } ? never :
-	T extends { _meta: { isDerived: true } } ? never :
+	T extends { meta: { isPartial: true } } ? never :
+	T extends { meta: { isDerived: true } } ? never :
 	T;
 
 /**
@@ -1796,8 +1796,8 @@ export type FullTableOnly<T> =
  * Returns `never` for partial or derived tables to prevent insert at compile time.
  */
 export type Insert<T extends Table<any>> =
-	T extends { _meta: { isPartial: true } } ? never :
-	T extends { _meta: { isDerived: true } } ? never :
+	T extends { meta: { isPartial: true } } ? never :
+	T extends { meta: { isDerived: true } } ? never :
 	z.input<T["schema"]>;
 
 // ============================================================================

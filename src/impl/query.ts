@@ -185,7 +185,7 @@ export function buildSelectColumns(
 
 		// Get derived fields set (for skipping in regular column output)
 		const derivedFields = new Set<string>(
-			(table._meta as any).derivedFields ?? [],
+			(table.meta as any).derivedFields ?? [],
 		);
 
 		// Add regular columns (skip derived fields - they come from expressions)
@@ -198,7 +198,7 @@ export function buildSelectColumns(
 		}
 
 		// Append derived expressions with auto-generated aliases
-		const derivedExprs = (table._meta as any).derivedExprs ?? [];
+		const derivedExprs = (table.meta as any).derivedExprs ?? [];
 		for (const expr of derivedExprs) {
 			// Generate alias from fieldName - no parsing needed
 			const alias = `${tableName}.${expr.fieldName}`;
@@ -356,7 +356,7 @@ function transformDDLFragment(fragment: DDLFragment, dialect: SQLDialect): strin
 			case "alter-table-add-column": {
 				const {fieldName} = options;
 				const zodShape = table.schema.shape;
-				const meta = table._meta;
+				const meta = table.meta;
 
 				const columnDef = generateColumnDDL(
 					fieldName,
@@ -555,7 +555,7 @@ export function getPrimaryKeyValue(
 	entity: Record<string, unknown>,
 	table: Table<any>,
 ): string | null {
-	const pk = table._meta.primary;
+	const pk = table.meta.primary;
 
 	if (pk === null) {
 		return null;
@@ -708,7 +708,7 @@ export function resolveReferences(
 			for (const [key, entity] of entities) {
 				if (!key.startsWith(targetPrefix)) continue;
 
-				const pk = entity[ref.table._meta.primary!];
+				const pk = entity[ref.table.meta.primary!];
 				if (pk === null || pk === undefined) continue;
 
 				const pkStr = String(pk);
@@ -734,7 +734,7 @@ export function applyDerivedProperties(
 	tables: Table<any>[],
 ): void {
 	for (const table of tables) {
-		const derive = table._meta.derive;
+		const derive = table.meta.derive;
 		if (!derive) continue;
 
 		const prefix = `${table.name}:`;

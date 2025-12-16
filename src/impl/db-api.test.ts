@@ -21,7 +21,7 @@ describe(".db namespace API", () => {
 			name: z.string(),
 		});
 
-		expect(Users._meta.primary).toBe("id");
+		expect(Users.meta.primary).toBe("id");
 	});
 
 	test("z.string().db.unique() works", () => {
@@ -30,7 +30,7 @@ describe(".db namespace API", () => {
 			email: z.string().email().db.unique(),
 		});
 
-		expect(Users._meta.unique).toContain("email");
+		expect(Users.meta.unique).toContain("email");
 	});
 
 	test("z.date().db.index() works", () => {
@@ -39,7 +39,7 @@ describe(".db namespace API", () => {
 			createdAt: z.date().db.index(),
 		});
 
-		expect(Posts._meta.indexed).toContain("createdAt");
+		expect(Posts.meta.indexed).toContain("createdAt");
 	});
 
 	test("z.date().db.softDelete() works", () => {
@@ -48,7 +48,7 @@ describe(".db namespace API", () => {
 			deletedAt: z.date().nullable().default(null).db.softDelete(),
 		});
 
-		expect(Users._meta.softDeleteField).toBe("deletedAt");
+		expect(Users.meta.softDeleteField).toBe("deletedAt");
 	});
 
 	test("z.string().db.references() works", () => {
@@ -74,9 +74,9 @@ describe(".db namespace API", () => {
 			email: z.string().email().db.unique().db.index(),
 		});
 
-		expect(Users._meta.primary).toBe("id");
-		expect(Users._meta.unique).toContain("email");
-		expect(Users._meta.indexed).toContain("email");
+		expect(Users.meta.primary).toBe("id");
+		expect(Users.meta.unique).toContain("email");
+		expect(Users.meta.indexed).toContain("email");
 	});
 
 	test("mixing Zod and .db methods works", () => {
@@ -87,8 +87,8 @@ describe(".db namespace API", () => {
 			role: z.enum(["user", "admin"]).default("user"),
 		});
 
-		expect(Users._meta.primary).toBe("id");
-		expect(Users._meta.unique).toContain("email");
+		expect(Users.meta.primary).toBe("id");
+		expect(Users.meta.unique).toContain("email");
 	});
 
 	test(".db.encode() and .db.decode() store metadata", () => {
@@ -98,10 +98,10 @@ describe(".db namespace API", () => {
 			legacy: z.string().db.decode((val: string) => val.toUpperCase()),
 		});
 
-		const passwordMeta = Users._meta.fields["password"];
+		const passwordMeta = Users.meta.fields["password"];
 		expect(passwordMeta.encode).toBeDefined();
 
-		const legacyMeta = Users._meta.fields["legacy"];
+		const legacyMeta = Users.meta.fields["legacy"];
 		expect(legacyMeta.decode).toBeDefined();
 	});
 });

@@ -69,7 +69,7 @@ describe("table", () => {
 			id: z.string().uuid().db.primary(),
 			email: z.string().email()});
 
-		expect(users._meta.primary).toBe("id");
+		expect(users.meta.primary).toBe("id");
 		expect(users.primary).not.toBeNull();
 		expect(users.primary!.sql).toBe('"users"."id"');
 		expect(users.primary!.params).toEqual([]);
@@ -284,20 +284,20 @@ describe("Table.pick()", () => {
 
 	test("preserves primary key if picked", () => {
 		const WithPK = Users.pick("id", "name");
-		expect(WithPK._meta.primary).toBe("id");
+		expect(WithPK.meta.primary).toBe("id");
 		expect(WithPK.primary).not.toBeNull();
 
 		const WithoutPK = Users.pick("name", "email");
-		expect(WithoutPK._meta.primary).toBeNull();
+		expect(WithoutPK.meta.primary).toBeNull();
 		expect(WithoutPK.primary).toBeNull();
 	});
 
 	test("preserves unique fields if picked", () => {
 		const WithUnique = Users.pick("id", "email");
-		expect(WithUnique._meta.unique).toEqual(["email"]);
+		expect(WithUnique.meta.unique).toEqual(["email"]);
 
 		const WithoutUnique = Users.pick("id", "name");
-		expect(WithoutUnique._meta.unique).toEqual([]);
+		expect(WithoutUnique.meta.unique).toEqual([]);
 	});
 
 	test("preserves references if FK field picked", () => {
@@ -345,7 +345,7 @@ describe("Table.pick()", () => {
 		const Step2 = Step1.pick("id", "name");
 
 		expect(Object.keys(Step2.schema.shape)).toEqual(["id", "name"]);
-		expect(Step2._meta.primary).toBe("id");
+		expect(Step2.meta.primary).toBe("id");
 	});
 
 	test("pick() preserves compound unique constraints if all fields picked", () => {
@@ -422,27 +422,27 @@ describe("Table.derive()", () => {
 		expect(isTable(PostsWithCount)).toBe(true);
 	});
 
-	test("stores derived expression in _meta.derivedExprs", () => {
+	test("stores derived expression in meta.derivedExprs", () => {
 		const PostsWithCount = Posts.derive(
 			"likeCount",
 			z.number(),
 		)`COUNT(${Likes.cols.id})`;
 
-		expect((PostsWithCount._meta as any).isDerived).toBe(true);
-		expect((PostsWithCount._meta as any).derivedExprs).toHaveLength(1);
+		expect((PostsWithCount.meta as any).isDerived).toBe(true);
+		expect((PostsWithCount.meta as any).derivedExprs).toHaveLength(1);
 
-		const expr = (PostsWithCount._meta as any).derivedExprs[0];
+		const expr = (PostsWithCount.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("likeCount");
 		expect(expr.sql).toBe('COUNT("likes"."id")');
 		expect(expr.params).toEqual([]);
 	});
 
-	test("tracks derived fields in _meta.derivedFields", () => {
+	test("tracks derived fields in meta.derivedFields", () => {
 		const PostsWithCount = Posts
 			.derive("likeCount", z.number())`COUNT(${Likes.cols.id})`
 			.derive("commentCount", z.number())`COUNT(*)`;
 
-		expect((PostsWithCount._meta as any).derivedFields).toEqual([
+		expect((PostsWithCount.meta as any).derivedFields).toEqual([
 			"likeCount",
 			"commentCount",
 		]);
@@ -459,8 +459,8 @@ describe("Table.derive()", () => {
 			z.number(),
 		)`COUNT(*)`;
 
-		expect((WithLikesAndComments._meta as any).derivedExprs).toHaveLength(2);
-		expect((WithLikesAndComments._meta as any).derivedFields).toEqual([
+		expect((WithLikesAndComments.meta as any).derivedExprs).toHaveLength(2);
+		expect((WithLikesAndComments.meta as any).derivedFields).toEqual([
 			"likeCount",
 			"commentCount",
 		]);
@@ -472,7 +472,7 @@ describe("Table.derive()", () => {
 			z.boolean(),
 		)`CASE WHEN COUNT(*) > ${10} THEN 1 ELSE 0 END`;
 
-		const expr = (PostsWithThreshold._meta as any).derivedExprs[0];
+		const expr = (PostsWithThreshold.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("hasMany");
 		expect(expr.sql).toBe("CASE WHEN COUNT(*) > ? THEN 1 ELSE 0 END");
 		expect(expr.params).toEqual([10]);
@@ -491,7 +491,7 @@ describe("Table.derive()", () => {
 	test("preserves base table primary key", () => {
 		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
-		expect(PostsWithCount._meta.primary).toBe("id");
+		expect(PostsWithCount.meta.primary).toBe("id");
 		expect(PostsWithCount.primary).not.toBeNull();
 	});
 
@@ -524,9 +524,9 @@ describe("Table.derive()", () => {
 		const WithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 		const Picked = WithCount.pick("id", "likeCount");
 
-		expect((Picked._meta as any).isDerived).toBe(true);
-		expect((Picked._meta as any).derivedExprs).toHaveLength(1);
-		expect((Picked._meta as any).derivedFields).toEqual(["likeCount"]);
+		expect((Picked.meta as any).isDerived).toBe(true);
+		expect((Picked.meta as any).derivedExprs).toHaveLength(1);
+		expect((Picked.meta as any).derivedFields).toEqual(["likeCount"]);
 		expect(Object.keys(Picked.schema.shape)).toEqual(["id", "likeCount"]);
 	});
 
@@ -536,17 +536,17 @@ describe("Table.derive()", () => {
 			.derive("commentCount", z.number())`COUNT(comments.id)`;
 		const Picked = WithStats.pick("id", "likeCount");
 
-		expect((Picked._meta as any).derivedExprs).toHaveLength(1);
-		expect((Picked._meta as any).derivedExprs[0].fieldName).toBe("likeCount");
-		expect((Picked._meta as any).derivedFields).toEqual(["likeCount"]);
+		expect((Picked.meta as any).derivedExprs).toHaveLength(1);
+		expect((Picked.meta as any).derivedExprs[0].fieldName).toBe("likeCount");
+		expect((Picked.meta as any).derivedFields).toEqual(["likeCount"]);
 	});
 
 	test("pick then derive works", () => {
 		const Picked = Posts.pick("id");
 		const WithCount = Picked.derive("likeCount", z.number())`COUNT(*)`;
 
-		expect((WithCount._meta as any).isPartial).toBe(true);
-		expect((WithCount._meta as any).isDerived).toBe(true);
+		expect((WithCount.meta as any).isPartial).toBe(true);
+		expect((WithCount.meta as any).isDerived).toBe(true);
 		expect(Object.keys(WithCount.schema.shape)).toEqual(["id", "likeCount"]);
 	});
 });

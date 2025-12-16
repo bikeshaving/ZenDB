@@ -255,7 +255,7 @@ export function generateDDL<T extends Table<any>>(
 ): string {
 	const {dialect = "sqlite", ifNotExists = true} = options;
 	const shape = table.schema.shape;
-	const meta = table._meta;
+	const meta = table.meta;
 
 	const columns: ColumnDef[] = [];
 

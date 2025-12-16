@@ -86,7 +86,7 @@ function extractDBExpressions(
 		if (isDBExpression(value)) {
 			// Validate: DB expressions cannot be used with encoded/decoded fields
 			if (table) {
-				const fieldMeta = table._meta.fields[key];
+				const fieldMeta = table.meta.fields[key];
 				if (fieldMeta?.encode || fieldMeta?.decode) {
 					throw new Error(
 						`Cannot use DB expression for field "${key}" which has encode/decode. ` +
@@ -119,7 +119,7 @@ function injectSchemaExpressions<T extends Table<any>>(
 ): Record<string, unknown> {
 	const result = {...data};
 
-	for (const [fieldName, fieldMeta] of Object.entries(table._meta.fields)) {
+	for (const [fieldName, fieldMeta] of Object.entries(table.meta.fields)) {
 		// Skip if user already provided a value
 		if (fieldName in data) continue;
 
@@ -173,7 +173,7 @@ export function encodeData<T extends Table<any>>(
 	const shape = table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
-		const fieldMeta = table._meta.fields[key];
+		const fieldMeta = table.meta.fields[key];
 		const fieldSchema = shape?.[key];
 
 		if (fieldMeta?.encode && typeof fieldMeta.encode === "function") {
@@ -219,7 +219,7 @@ export function decodeData<T extends Table<any>>(
 	const shape = table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
-		const fieldMeta = table._meta.fields[key];
+		const fieldMeta = table.meta.fields[key];
 		const fieldSchema = shape?.[key];
 
 		if (fieldMeta?.decode && typeof fieldMeta.decode === "function") {
@@ -489,7 +489,7 @@ export class Transaction {
 		// Convenience overload: get by primary key
 		if (id !== undefined) {
 			const table = tables as T;
-			const pk = table._meta.primary;
+			const pk = table.meta.primary;
 			if (!pk) {
 				return Promise.reject(
 					new Error(`Table ${table.name} has no primary key defined`),
@@ -529,13 +529,13 @@ export class Transaction {
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
-		if (table._meta.isPartial) {
+		if (table.meta.isPartial) {
 			throw new Error(
 				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
 			);
 		}
 
-		if ((table._meta as any).isDerived) {
+		if ((table.meta as any).isDerived) {
 			throw new Error(
 				`Cannot insert into derived table "${table.name}". Derived tables are SELECT-only.`,
 			);
@@ -596,7 +596,7 @@ export class Transaction {
 		const sql = `INSERT INTO ${tableName} (${columnList}) VALUES (${valuesClause})`;
 		await this.#driver.run(sql, values);
 
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		const pkValue = pk ? (encoded[pk] ?? (expressions[pk] ? undefined : null)) : null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
@@ -615,12 +615,12 @@ export class Transaction {
 		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
 	): Promise<Infer<T> | null> {
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
-		if ((table._meta as any).isDerived) {
+		if ((table.meta as any).isDerived) {
 			throw new Error(
 				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
 			);
@@ -687,7 +687,7 @@ export class Transaction {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -705,12 +705,12 @@ export class Transaction {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
-		const softDeleteField = table._meta.softDeleteField;
+		const softDeleteField = table.meta.softDeleteField;
 		if (!softDeleteField) {
 			throw new Error(
 				`Table ${table.name} does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
@@ -1019,7 +1019,7 @@ export class Database extends EventTarget {
 		// Convenience overload: get by primary key
 		if (id !== undefined) {
 			const table = tables as T;
-			const pk = table._meta.primary;
+			const pk = table.meta.primary;
 			if (!pk) {
 				return Promise.reject(
 					new Error(`Table ${table.name} has no primary key defined`),
@@ -1071,13 +1071,13 @@ export class Database extends EventTarget {
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
 	): Promise<Infer<T>> {
-		if (table._meta.isPartial) {
+		if (table.meta.isPartial) {
 			throw new Error(
 				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
 			);
 		}
 
-		if ((table._meta as any).isDerived) {
+		if ((table.meta as any).isDerived) {
 			throw new Error(
 				`Cannot insert into derived table "${table.name}". Derived tables are SELECT-only.`,
 			);
@@ -1144,7 +1144,7 @@ export class Database extends EventTarget {
 		await this.#driver.run(sql, values);
 
 		// Fetch the inserted row to get DB-applied defaults
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		const pkValue = pk ? (encoded[pk] ?? (expressions[pk] ? undefined : null)) : null;
 		if (pk && pkValue !== undefined && pkValue !== null) {
 			const selectSql = `SELECT * FROM ${tableName} WHERE ${this.#quoteIdent(pk)} = ?`;
@@ -1172,12 +1172,12 @@ export class Database extends EventTarget {
 		id: string | number | Record<string, unknown>,
 		data: Partial<Insert<T>>,
 	): Promise<Infer<T> | null> {
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
-		if ((table._meta as any).isDerived) {
+		if ((table.meta as any).isDerived) {
 			throw new Error(
 				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
 			);
@@ -1255,7 +1255,7 @@ export class Database extends EventTarget {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
@@ -1279,12 +1279,12 @@ export class Database extends EventTarget {
 		table: T,
 		id: string | number | Record<string, unknown>,
 	): Promise<boolean> {
-		const pk = table._meta.primary;
+		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
 		}
 
-		const softDeleteField = table._meta.softDeleteField;
+		const softDeleteField = table.meta.softDeleteField;
 		if (!softDeleteField) {
 			throw new Error(
 				`Table ${table.name} does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
