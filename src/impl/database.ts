@@ -27,6 +27,7 @@ const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
 interface DBExpression {
 	readonly [DB_EXPR]: true;
 	readonly sql: string;
+	readonly params: unknown[];
 }
 
 /**
@@ -42,10 +43,10 @@ function isDBExpression(value: unknown): value is DBExpression {
 }
 
 /**
- * Create a DB expression from raw SQL.
+ * Create a DB expression from raw SQL and optional params.
  */
-function createDBExpr(sql: string): DBExpression {
-	return {[DB_EXPR]: true, sql};
+function createDBExpr(sql: string, params: unknown[] = []): DBExpression {
+	return {[DB_EXPR]: true, sql, params};
 }
 
 // ============================================================================
@@ -167,7 +168,7 @@ function injectSchemaExpressions<T extends Table<any>>(
 
 		// Resolve the value based on type
 		if (meta.type === "sql") {
-			result[fieldName] = createDBExpr(meta.sql!);
+			result[fieldName] = createDBExpr(meta.sql!, meta.params ?? []);
 		} else if (meta.type === "symbol") {
 			// Pass symbol through - resolved at query build time
 			result[fieldName] = meta.symbol;
@@ -438,8 +439,8 @@ function buildInsertParts(
 
 	const columnList = allCols.map((c) => quoteIdent(c)).join(", ");
 
-	// Build template: regular values and symbols get placeholders, expressions get raw SQL
-	// Values order: regular data, then symbols (expressions are inlined, not in values)
+	// Build template: regular values and symbols get placeholders, expressions get their SQL
+	// Expression SQL may contain ? placeholders for their params
 	const valueCols = [...regularCols, ...symbolCols];
 	const parts: string[] = [
 		`INSERT INTO ${quoteIdent(tableName)} (${columnList}) VALUES (`,
@@ -447,7 +448,7 @@ function buildInsertParts(
 	for (let i = 1; i < valueCols.length; i++) {
 		parts.push(", ");
 	}
-	// Add expression SQL inline (not parameterized)
+	// Add expression SQL (may contain ? placeholders for expression params)
 	const exprSql = exprCols.map((c) => expressions[c].sql).join(", ");
 	if (valueCols.length > 0 && exprCols.length > 0) {
 		parts.push(`, ${exprSql})`);
@@ -457,10 +458,11 @@ function buildInsertParts(
 		parts.push(")");
 	}
 
-	// Values: regular data values, then symbol values (symbols resolved at driver call)
+	// Values: regular data, symbols, then expression params (in column order)
 	const values = [
 		...regularCols.map((c) => data[c]),
 		...symbolCols.map((c) => symbols[c]),
+		...exprCols.flatMap((c) => expressions[c].params),
 	];
 
 	return {
@@ -496,7 +498,7 @@ function buildUpdateByIdParts(
 			parts.push(`, ${quoteIdent(valueCols[i])} = `);
 		}
 	}
-	// Add expression assignments
+	// Add expression assignments (SQL may contain ? placeholders for expression params)
 	const exprAssignments = exprCols
 		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
 		.join(", ");
@@ -509,10 +511,11 @@ function buildUpdateByIdParts(
 	}
 	parts.push("");
 
-	// Values: regular data, symbols, then id
+	// Values: regular data, symbols, expression params, then id
 	const values = [
 		...regularCols.map((c) => data[c]),
 		...symbolCols.map((c) => symbols[c]),
+		...exprCols.flatMap((c) => expressions[c].params),
 		id,
 	];
 
@@ -549,7 +552,7 @@ function buildUpdateByIdsParts(
 		}
 	}
 
-	// Add expression assignments
+	// Add expression assignments (SQL may contain ? placeholders for expression params)
 	const exprAssignments = exprCols
 		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
 		.join(", ");
@@ -568,10 +571,11 @@ function buildUpdateByIdsParts(
 	}
 	parts.push(")");
 
-	// Values: regular data, symbols, then ids
+	// Values: regular data, symbols, expression params, then ids
 	const values = [
 		...regularCols.map((c) => data[c]),
 		...symbolCols.map((c) => symbols[c]),
+		...exprCols.flatMap((c) => expressions[c].params),
 		...ids,
 	];
 

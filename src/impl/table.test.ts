@@ -765,6 +765,60 @@ describe("Schema marker validation", () => {
 		expect(schema2).toBeDefined();
 	});
 
+	test("tagged template with interpolations parameterizes values", () => {
+		const defaultValue = 42;
+		const multiplier = 2;
+
+		// Test inserted() with regular values - they become params
+		const TestTable1 = table("test1", {
+			id: z.string().db.primary(),
+			computed: z.number().db.inserted`${defaultValue} * ${multiplier}`,
+		});
+		const insertedMeta = TestTable1.meta.fields.computed.inserted;
+		expect(insertedMeta?.type).toBe("sql");
+		expect(insertedMeta?.sql).toBe("? * ?");
+		expect(insertedMeta?.params).toEqual([42, 2]);
+
+		// Test updated() with regular values - they become params
+		const TestTable2 = table("test2", {
+			id: z.string().db.primary(),
+			computed: z.number().db.updated`COALESCE(?, ${defaultValue}) + 1`,
+		});
+		const updatedMeta = TestTable2.meta.fields.computed.updated;
+		expect(updatedMeta?.type).toBe("sql");
+		expect(updatedMeta?.sql).toBe("COALESCE(?, ?) + 1");
+		expect(updatedMeta?.params).toEqual([42]);
+	});
+
+	test("tagged template with SQL fragments inlines fragment SQL", () => {
+		// Create a table with cols proxy for fragments
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			score: z.number(),
+		});
+
+		// Test inserted() with SQL fragment (from cols proxy)
+		const TestTable1 = table("test1", {
+			id: z.string().db.primary(),
+			computed: z.number().db.inserted`${Users.cols.score} + 1`,
+		});
+		const insertedMeta = TestTable1.meta.fields.computed.inserted;
+		expect(insertedMeta?.type).toBe("sql");
+		// Column reference includes table name: "users"."score"
+		expect(insertedMeta?.sql).toBe('"users"."score" + 1');
+		expect(insertedMeta?.params).toEqual([]);
+
+		// Test updated() with SQL fragment
+		const TestTable2 = table("test2", {
+			id: z.string().db.primary(),
+			computed: z.number().db.updated`COALESCE(${Users.cols.score}, 0) * 2`,
+		});
+		const updatedMeta = TestTable2.meta.fields.computed.updated;
+		expect(updatedMeta?.type).toBe("sql");
+		expect(updatedMeta?.sql).toBe('COALESCE("users"."score", 0) * 2');
+		expect(updatedMeta?.params).toEqual([]);
+	});
+
 	test("encode() throws when combined with inserted()", () => {
 		const {NOW} = require("./database.js");
 

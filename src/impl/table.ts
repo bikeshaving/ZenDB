@@ -223,6 +223,7 @@ export interface FieldDbMeta {
 	inserted?: {
 		type: "sql" | "symbol" | "function";
 		sql?: string;
+		params?: unknown[];
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
@@ -230,6 +231,7 @@ export interface FieldDbMeta {
 	updated?: {
 		type: "sql" | "symbol" | "function";
 		sql?: string;
+		params?: unknown[];
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
@@ -413,8 +415,29 @@ function createDbMethods(schema: ZodTypeAny) {
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
-				const sql = stringsOrValue.join("");
-				insertedMeta = {type: "sql", sql};
+				// Parse like derive() does: detect SQL fragments, parameterize other values
+				const parts: string[] = [];
+				const params: unknown[] = [];
+
+				for (let i = 0; i < stringsOrValue.length; i++) {
+					parts.push(stringsOrValue[i]);
+					if (i < templateValues.length) {
+						const value = templateValues[i];
+						// Check if it's an SQL fragment (from cols proxy or other fragments)
+						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
+							const fragment = value as unknown as {sql: string; params: readonly unknown[]};
+							parts.push(fragment.sql);
+							params.push(...fragment.params);
+						} else {
+							// Regular value - parameterize it
+							parts.push("?");
+							params.push(value);
+						}
+					}
+				}
+
+				const sql = parts.join("").trim();
+				insertedMeta = {type: "sql", sql, params};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				insertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -461,8 +484,29 @@ function createDbMethods(schema: ZodTypeAny) {
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
-				const sql = stringsOrValue.join("");
-				updatedMeta = {type: "sql", sql};
+				// Parse like derive() does: detect SQL fragments, parameterize other values
+				const parts: string[] = [];
+				const params: unknown[] = [];
+
+				for (let i = 0; i < stringsOrValue.length; i++) {
+					parts.push(stringsOrValue[i]);
+					if (i < templateValues.length) {
+						const value = templateValues[i];
+						// Check if it's an SQL fragment (from cols proxy or other fragments)
+						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
+							const fragment = value as unknown as {sql: string; params: readonly unknown[]};
+							parts.push(fragment.sql);
+							params.push(...fragment.params);
+						} else {
+							// Regular value - parameterize it
+							parts.push("?");
+							params.push(value);
+						}
+					}
+				}
+
+				const sql = parts.join("").trim();
+				updatedMeta = {type: "sql", sql, params};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				updatedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
