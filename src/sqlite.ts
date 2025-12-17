@@ -8,18 +8,45 @@
  */
 
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError} from "./zen.js";
+import {ConstraintViolationError, isSQLSymbol, NOW} from "./zen.js";
 import Database from "better-sqlite3";
 
 /**
- * Build SQL from template parts using ? placeholders.
+ * Resolve SQL symbol to dialect-specific SQL.
  */
-function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
-	let sql = strings[0];
-	for (let i = 1; i < strings.length; i++) {
-		sql += "?" + strings[i];
+function resolveSQLSymbol(sym: symbol): string {
+	switch (sym) {
+		case NOW:
+			return "CURRENT_TIMESTAMP";
+		default:
+			throw new Error(`Unknown SQL symbol: ${String(sym)}`);
 	}
-	return sql;
+}
+
+/**
+ * Build SQL from template parts using ? placeholders.
+ * SQL symbols in values are inlined directly; other values use placeholders.
+ */
+function buildSQL(
+	strings: TemplateStringsArray,
+	values: unknown[],
+): {sql: string; params: unknown[]} {
+	let sql = strings[0];
+	const params: unknown[] = [];
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLSymbol(value)) {
+			// Inline the symbol's SQL directly
+			sql += resolveSQLSymbol(value) + strings[i + 1];
+		} else {
+			// Add placeholder and keep value
+			sql += "?" + strings[i + 1];
+			params.push(value);
+		}
+	}
+
+	return {sql, params};
 }
 
 /**
@@ -99,8 +126,8 @@ export default class SQLiteDriver implements Driver {
 
 	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			const sql = buildSQL(strings, values);
-			return this.#db.prepare(sql).all(...values) as T[];
+			const {sql, params} = buildSQL(strings, values);
+			return this.#db.prepare(sql).all(...params) as T[];
 		} catch (error) {
 			return this.#handleError(error);
 		}
@@ -111,8 +138,8 @@ export default class SQLiteDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values);
-			return (this.#db.prepare(sql).get(...values) as T) ?? null;
+			const {sql, params} = buildSQL(strings, values);
+			return (this.#db.prepare(sql).get(...params) as T) ?? null;
 		} catch (error) {
 			return this.#handleError(error);
 		}
@@ -120,8 +147,8 @@ export default class SQLiteDriver implements Driver {
 
 	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const sql = buildSQL(strings, values);
-			const result = this.#db.prepare(sql).run(...values);
+			const {sql, params} = buildSQL(strings, values);
+			const result = this.#db.prepare(sql).run(...params);
 			return result.changes;
 		} catch (error) {
 			return this.#handleError(error);
@@ -133,11 +160,11 @@ export default class SQLiteDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values);
+			const {sql, params} = buildSQL(strings, values);
 			return this.#db
 				.prepare(sql)
 				.pluck()
-				.get(...values) as T;
+				.get(...params) as T;
 		} catch (error) {
 			return this.#handleError(error);
 		}

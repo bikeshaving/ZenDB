@@ -8,18 +8,45 @@
  */
 
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError} from "./zen.js";
+import {ConstraintViolationError, isSQLSymbol, NOW} from "./zen.js";
 import mysql from "mysql2/promise";
 
 /**
- * Build SQL from template parts using ? placeholders.
+ * Resolve SQL symbol to dialect-specific SQL.
  */
-function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
-	let sql = strings[0];
-	for (let i = 1; i < strings.length; i++) {
-		sql += "?" + strings[i];
+function resolveSQLSymbol(sym: symbol): string {
+	switch (sym) {
+		case NOW:
+			return "CURRENT_TIMESTAMP";
+		default:
+			throw new Error(`Unknown SQL symbol: ${String(sym)}`);
 	}
-	return sql;
+}
+
+/**
+ * Build SQL from template parts using ? placeholders.
+ * SQL symbols in values are inlined directly; other values use placeholders.
+ */
+function buildSQL(
+	strings: TemplateStringsArray,
+	values: unknown[],
+): {sql: string; params: unknown[]} {
+	let sql = strings[0];
+	const params: unknown[] = [];
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLSymbol(value)) {
+			// Inline the symbol's SQL directly
+			sql += resolveSQLSymbol(value) + strings[i + 1];
+		} else {
+			// Add placeholder and keep value
+			sql += "?" + strings[i + 1];
+			params.push(value);
+		}
+	}
+
+	return {sql, params};
 }
 
 /**
@@ -127,8 +154,8 @@ export default class MySQLDriver implements Driver {
 
 	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			const sql = buildSQL(strings, values);
-			const [rows] = await this.#pool.execute(sql, values);
+			const {sql, params} = buildSQL(strings, values);
+			const [rows] = await this.#pool.execute(sql, params);
 			return rows as T[];
 		} catch (error) {
 			return this.#handleError(error);
@@ -140,8 +167,8 @@ export default class MySQLDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values);
-			const [rows] = await this.#pool.execute(sql, values);
+			const {sql, params} = buildSQL(strings, values);
+			const [rows] = await this.#pool.execute(sql, params);
 			return ((rows as unknown[])[0] as T) ?? null;
 		} catch (error) {
 			return this.#handleError(error);
@@ -150,8 +177,8 @@ export default class MySQLDriver implements Driver {
 
 	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const sql = buildSQL(strings, values);
-			const [result] = await this.#pool.execute(sql, values);
+			const {sql, params} = buildSQL(strings, values);
+			const [result] = await this.#pool.execute(sql, params);
 			return (result as mysql.ResultSetHeader).affectedRows ?? 0;
 		} catch (error) {
 			return this.#handleError(error);
@@ -163,8 +190,8 @@ export default class MySQLDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values);
-			const [rows] = await this.#pool.execute(sql, values);
+			const {sql, params} = buildSQL(strings, values);
+			const [rows] = await this.#pool.execute(sql, params);
 			const row = (rows as unknown[])[0];
 			if (!row) return null;
 			const rowValues = Object.values(row as object);
@@ -192,8 +219,8 @@ export default class MySQLDriver implements Driver {
 					values: unknown[],
 				): Promise<R[]> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const [rows] = await connection.execute(sql, values);
+						const {sql, params} = buildSQL(strings, values);
+						const [rows] = await connection.execute(sql, params);
 						return rows as R[];
 					} catch (error) {
 						return handleError(error);
@@ -204,8 +231,8 @@ export default class MySQLDriver implements Driver {
 					values: unknown[],
 				): Promise<R | null> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const [rows] = await connection.execute(sql, values);
+						const {sql, params} = buildSQL(strings, values);
+						const [rows] = await connection.execute(sql, params);
 						return ((rows as unknown[])[0] as R) ?? null;
 					} catch (error) {
 						return handleError(error);
@@ -216,8 +243,8 @@ export default class MySQLDriver implements Driver {
 					values: unknown[],
 				): Promise<number> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const [result] = await connection.execute(sql, values);
+						const {sql, params} = buildSQL(strings, values);
+						const [result] = await connection.execute(sql, params);
 						return (result as mysql.ResultSetHeader).affectedRows ?? 0;
 					} catch (error) {
 						return handleError(error);
@@ -228,8 +255,8 @@ export default class MySQLDriver implements Driver {
 					values: unknown[],
 				): Promise<R | null> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const [rows] = await connection.execute(sql, values);
+						const {sql, params} = buildSQL(strings, values);
+						const [rows] = await connection.execute(sql, params);
 						const row = (rows as unknown[])[0];
 						if (!row) return null;
 						const rowValues = Object.values(row as object);

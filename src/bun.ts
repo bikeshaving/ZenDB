@@ -7,7 +7,7 @@
 
 import {SQL} from "bun";
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError} from "./zen.js";
+import {ConstraintViolationError, isSQLSymbol, NOW} from "./zen.js";
 
 type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
@@ -30,20 +30,45 @@ function detectDialect(url: string): SQLDialect {
 }
 
 /**
+ * Resolve SQL symbol to dialect-specific SQL.
+ */
+function resolveSQLSymbol(sym: symbol): string {
+	switch (sym) {
+		case NOW:
+			return "CURRENT_TIMESTAMP";
+		default:
+			throw new Error(`Unknown SQL symbol: ${String(sym)}`);
+	}
+}
+
+/**
  * Build SQL from template parts using the appropriate placeholder style.
  * SQLite/MySQL use ?, PostgreSQL uses $1, $2, etc.
+ * SQL symbols in values are inlined directly; other values use placeholders.
  */
 function buildSQL(
 	strings: TemplateStringsArray,
 	values: unknown[],
 	dialect: SQLDialect,
-): string {
+): {sql: string; params: unknown[]} {
 	let sql = strings[0];
-	for (let i = 1; i < strings.length; i++) {
-		const placeholder = dialect === "postgresql" ? `$${i}` : "?";
-		sql += placeholder + strings[i];
+	const params: unknown[] = [];
+	let paramIndex = 1;
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLSymbol(value)) {
+			// Inline the symbol's SQL directly
+			sql += resolveSQLSymbol(value) + strings[i + 1];
+		} else {
+			// Add placeholder and keep value
+			const placeholder = dialect === "postgresql" ? `$${paramIndex++}` : "?";
+			sql += placeholder + strings[i + 1];
+			params.push(value);
+		}
 	}
-	return sql;
+
+	return {sql, params};
 }
 
 /**
@@ -227,8 +252,8 @@ export default class BunDriver implements Driver {
 
 	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			const sql = buildSQL(strings, values, this.#dialect);
-			const result = await this.#sql.unsafe(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values, this.#dialect);
+			const result = await this.#sql.unsafe(sql, params as any[]);
 			return result as T[];
 		} catch (error) {
 			this.#handleError(error);
@@ -240,8 +265,8 @@ export default class BunDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values, this.#dialect);
-			const result = await this.#sql.unsafe(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values, this.#dialect);
+			const result = await this.#sql.unsafe(sql, params as any[]);
 			return (result[0] as T) ?? null;
 		} catch (error) {
 			this.#handleError(error);
@@ -250,8 +275,8 @@ export default class BunDriver implements Driver {
 
 	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const sql = buildSQL(strings, values, this.#dialect);
-			const result = await this.#sql.unsafe(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values, this.#dialect);
+			const result = await this.#sql.unsafe(sql, params as any[]);
 			// Bun.SQL: .count for postgres/sqlite, .affectedRows for mysql
 			return (
 				(result as any).count ?? (result as any).affectedRows ?? result.length
@@ -266,8 +291,8 @@ export default class BunDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values, this.#dialect);
-			const result = await this.#sql.unsafe(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values, this.#dialect);
+			const result = await this.#sql.unsafe(sql, params as any[]);
 			if (result.length === 0) return null;
 			const row = result[0] as Record<string, unknown>;
 			const firstKey = Object.keys(row)[0];
@@ -296,8 +321,8 @@ export default class BunDriver implements Driver {
 					values: unknown[],
 				): Promise<R[]> => {
 					try {
-						const sql = buildSQL(strings, values, dialect);
-						const result = await txSql.unsafe(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values, dialect);
+						const result = await txSql.unsafe(sql, params as any[]);
 						return result as R[];
 					} catch (error) {
 						return handleError(error);
@@ -308,8 +333,8 @@ export default class BunDriver implements Driver {
 					values: unknown[],
 				): Promise<R | null> => {
 					try {
-						const sql = buildSQL(strings, values, dialect);
-						const result = await txSql.unsafe(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values, dialect);
+						const result = await txSql.unsafe(sql, params as any[]);
 						return (result[0] as R) ?? null;
 					} catch (error) {
 						return handleError(error);
@@ -320,8 +345,8 @@ export default class BunDriver implements Driver {
 					values: unknown[],
 				): Promise<number> => {
 					try {
-						const sql = buildSQL(strings, values, dialect);
-						const result = await txSql.unsafe(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values, dialect);
+						const result = await txSql.unsafe(sql, params as any[]);
 						return (
 							(result as any).count ??
 							(result as any).affectedRows ??
@@ -336,8 +361,8 @@ export default class BunDriver implements Driver {
 					values: unknown[],
 				): Promise<R | null> => {
 					try {
-						const sql = buildSQL(strings, values, dialect);
-						const result = await txSql.unsafe(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values, dialect);
+						const result = await txSql.unsafe(sql, params as any[]);
 						if (result.length === 0) return null;
 						const row = result[0] as Record<string, unknown>;
 						const firstKey = Object.keys(row)[0];

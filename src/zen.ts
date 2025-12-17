@@ -62,10 +62,10 @@ export {
 	type Driver,
 	type TaggedQuery,
 
-	// DB expressions (runtime values evaluated by database)
-	db,
-	isDBExpression,
-	type DBExpression,
+	// SQL symbols (dialect-aware expressions resolved at query time)
+	NOW,
+	isSQLSymbol,
+	type SQLSymbol,
 } from "./impl/database.js";
 
 export {

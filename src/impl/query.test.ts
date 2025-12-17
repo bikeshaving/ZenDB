@@ -24,7 +24,7 @@ const posts = table("posts", {
 	authorId: z.string().uuid().db.references(users, {as: "author"}),
 	title: z.string(),
 	body: z.string(),
-	published: z.boolean().default(false),
+	published: z.boolean(),
 });
 
 describe("buildSelectColumns", () => {

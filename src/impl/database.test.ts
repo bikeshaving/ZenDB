@@ -1,7 +1,7 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
-import {Database, type Driver} from "./database.js";
+import {Database, NOW, isSQLSymbol, type Driver} from "./database.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -22,14 +22,24 @@ const Posts = table("posts", {
 	authorId: z.string().uuid().db.references(Users, {as: "author"}),
 	title: z.string(),
 	body: z.string(),
-	published: z.boolean().default(false),
+	published: z.boolean().db.inserted(() => false),
 });
 
 // Helper to build SQL from template parts (for assertions)
-function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
+// Matches real driver behavior: inlines SQL symbols, uses ? for other values
+function buildSQL(
+	strings: TemplateStringsArray,
+	values: unknown[],
+): string {
 	let sql = strings[0];
-	for (let i = 1; i < strings.length; i++) {
-		sql += "?" + strings[i];
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLSymbol(value)) {
+			// Inline the symbol's SQL directly (matches driver behavior)
+			sql += (value === NOW ? "CURRENT_TIMESTAMP" : "?") + strings[i + 1];
+		} else {
+			sql += "?" + strings[i + 1];
+		}
 	}
 	return sql;
 }
@@ -324,7 +334,9 @@ describe("Database", () => {
 		});
 
 		test("throws when using DB expression on field with encode", async () => {
-			const {db: dbHelpers} = require("./database.js");
+			// Create a DBExpression manually for testing
+			const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
+			const dbExpr = {[DB_EXPR]: true, sql: "CURRENT_TIMESTAMP"};
 
 			const EncodedField = table("encoded", {
 				id: z.string().db.primary(),
@@ -334,7 +346,7 @@ describe("Database", () => {
 			await expect(
 				db.insert(EncodedField, {
 					id: "1",
-					value: dbHelpers.now() as any, // Try to pass DB expression
+					value: dbExpr as any, // Try to pass DB expression
 				}),
 			).rejects.toThrow(
 				'Cannot use DB expression for field "value" which has encode/decode',
@@ -342,7 +354,9 @@ describe("Database", () => {
 		});
 
 		test("throws when using DB expression on field with decode", async () => {
-			const {db: dbHelpers} = require("./database.js");
+			// Create a DBExpression manually for testing
+			const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
+			const dbExpr = {[DB_EXPR]: true, sql: "CURRENT_TIMESTAMP"};
 
 			const DecodedField = table("decoded", {
 				id: z.string().db.primary(),
@@ -352,7 +366,7 @@ describe("Database", () => {
 			await expect(
 				db.insert(DecodedField, {
 					id: "1",
-					value: dbHelpers.now() as any, // Try to pass DB expression
+					value: dbExpr as any, // Try to pass DB expression
 				}),
 			).rejects.toThrow(
 				'Cannot use DB expression for field "value" which has encode/decode',
@@ -648,8 +662,8 @@ describe("supportsReturning fallback", () => {
 		const TableWithDefaults = table("with_defaults", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			metadata: z.object({source: z.string()}).default({source: "unknown"}),
-			version: z.number().default(0),
+			metadata: z.object({source: z.string()}).optional(),
+			version: z.number().optional(),
 		});
 
 		// Without RETURNING, it should:
@@ -712,8 +726,8 @@ describe("supportsReturning fallback", () => {
 		expect((driver.run as any).mock.calls.length).toBe(0);
 
 		// Check RETURNING was added
-		const [strings] = (driver.get as any).mock.calls[0];
-		const sql = buildSQL(strings, []);
+		const [strings, values] = (driver.get as any).mock.calls[0];
+		const sql = buildSQL(strings, values);
 		expect(sql).toContain("RETURNING *");
 	});
 });
@@ -785,13 +799,11 @@ describe("transaction()", () => {
 	});
 
 	test("applies schema markers (inserted/updated) in transaction", async () => {
-		const {db: dbHelpers} = require("./database.js");
-
 		const AutoTable = table("auto_tx", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			createdAt: z.date().db.inserted(dbHelpers.now()),
-			updatedAt: z.date().db.updated(dbHelpers.now()),
+			createdAt: z.date().db.inserted(NOW),
+			updatedAt: z.date().db.updated(NOW),
 		});
 
 		const driver = createMockDriver();
@@ -961,12 +973,10 @@ describe("Soft Delete", () => {
 		});
 
 		test("applies updated() markers on soft delete", async () => {
-			const {db: dbHelpers} = require("./database.js");
-
 			const SoftDeleteWithUpdatedAt = table("soft_with_updated", {
 				id: z.string().db.primary(),
 				name: z.string(),
-				updatedAt: z.date().db.updated(dbHelpers.now()),
+				updatedAt: z.date().db.updated(NOW),
 				deletedAt: z.date().nullable().db.softDelete(),
 			});
 
@@ -1025,12 +1035,10 @@ describe("Soft Delete", () => {
 		});
 
 		test("applies updated() markers on soft delete", async () => {
-			const {db: dbHelpers} = require("./database.js");
-
 			const SoftDeleteWithUpdatedAt = table("soft_with_updated", {
 				id: z.string().db.primary(),
 				name: z.string(),
-				updatedAt: z.date().db.updated(dbHelpers.now()),
+				updatedAt: z.date().db.updated(NOW),
 				deletedAt: z.date().nullable().db.softDelete(),
 			});
 
@@ -1086,8 +1094,12 @@ describe("DB Expressions", () => {
 		updatedAt: z.date().optional(),
 	});
 
-	describe("db.now()", () => {
-		test("insert with db.now() generates CURRENT_TIMESTAMP in SQL", async () => {
+	describe("DB Expressions in insert/update", () => {
+		// Create a DBExpression manually for testing
+		const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
+		const dbNow = () => ({[DB_EXPR]: true, sql: "CURRENT_TIMESTAMP"});
+
+		test("insert with DBExpression generates raw SQL", async () => {
 			const driver = createMockDriver();
 			(driver.get as any).mockImplementation(async () => ({
 				id: "123",
@@ -1099,18 +1111,18 @@ describe("DB Expressions", () => {
 			await database.insert(TimestampTable, {
 				id: "123",
 				name: "Test",
-				createdAt: db.now(),
+				createdAt: dbNow() as any,
 			});
 
 			const [strings, values] = (driver.get as any).mock.calls[0];
 			const sql = buildSQL(strings, values);
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 
-			// Values should NOT include the db.now() expression
+			// Values should NOT include the DBExpression
 			expect(values).toEqual(["123", "Test"]);
 		});
 
-		test("update with db.now() generates CURRENT_TIMESTAMP in SQL", async () => {
+		test("update with DBExpression generates raw SQL", async () => {
 			const driver = createMockDriver();
 			(driver.get as any).mockImplementation(async () => ({
 				id: "123",
@@ -1123,7 +1135,7 @@ describe("DB Expressions", () => {
 			await database.update(
 				TimestampTable,
 				{
-					updatedAt: db.now(),
+					updatedAt: dbNow() as any,
 				},
 				"123",
 			);
@@ -1133,7 +1145,7 @@ describe("DB Expressions", () => {
 			expect(sql).toContain('"updatedAt" = CURRENT_TIMESTAMP');
 		});
 
-		test("db.now() works alongside regular values in insert", async () => {
+		test("DBExpression works alongside regular values in insert", async () => {
 			const driver = createMockDriver();
 			(driver.get as any).mockImplementation(async () => ({
 				id: "456",
@@ -1145,7 +1157,7 @@ describe("DB Expressions", () => {
 			await database.insert(TimestampTable, {
 				id: "456",
 				name: "Combined",
-				createdAt: db.now(),
+				createdAt: dbNow() as any,
 			});
 
 			const [strings, values] = (driver.get as any).mock.calls[0];
@@ -1156,7 +1168,7 @@ describe("DB Expressions", () => {
 			expect(values).toEqual(["456", "Combined"]);
 		});
 
-		test("db.now() works alongside regular values in update", async () => {
+		test("DBExpression works alongside regular values in update", async () => {
 			const driver = createMockDriver();
 			(driver.get as any).mockImplementation(async () => ({
 				id: "123",
@@ -1170,7 +1182,7 @@ describe("DB Expressions", () => {
 				TimestampTable,
 				{
 					name: "Updated",
-					updatedAt: db.now(),
+					updatedAt: dbNow() as any,
 				},
 				"123",
 			);
@@ -1186,8 +1198,8 @@ describe("DB Expressions", () => {
 		const AutoTable = table("auto", {
 			id: z.string().db.primary(),
 			name: z.string(),
-			createdAt: z.date().db.inserted(db.now()),
-			updatedAt: z.date().db.updated(db.now()),
+			createdAt: z.date().db.inserted(NOW),
+			updatedAt: z.date().db.updated(NOW),
 		});
 
 		test("insert auto-applies inserted() and updated() expressions", async () => {
@@ -1260,8 +1272,10 @@ describe("DB Expressions", () => {
 			const sql = buildSQL(strings, values);
 
 			// createdAt should be a parameter, not CURRENT_TIMESTAMP
-			// Params include: id, name, createdAt (Date encoded to ISO string)
-			expect(values.length).toBe(3);
+			// Values array includes 4 items: id, name, createdAt, NOW symbol for updatedAt
+			// After buildSQL inlines symbols, only 3 actual params remain
+			const nonSymbolValues = values.filter((v: unknown) => !isSQLSymbol(v));
+			expect(nonSymbolValues.length).toBe(3);
 			// Should only have one CURRENT_TIMESTAMP (for updatedAt)
 			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(1);
 		});
@@ -1296,7 +1310,7 @@ describe("DB Expressions", () => {
 		test("inserted() only - update without data throws", async () => {
 			const InsertOnlyTable = table("insert_only", {
 				id: z.string().db.primary(),
-				createdAt: z.date().db.inserted(db.now()),
+				createdAt: z.date().db.inserted(NOW),
 			});
 
 			const driver = createMockDriver();

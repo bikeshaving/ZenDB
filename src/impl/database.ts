@@ -22,19 +22,17 @@ import {
 const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
 
 /**
- * A DB expression that gets injected as raw SQL, not parameterized.
+ * Internal type for resolved DB expressions (raw SQL to inject).
  */
-export interface DBExpression {
+interface DBExpression {
 	readonly [DB_EXPR]: true;
 	readonly sql: string;
-	/** For increment, the field name is needed to build "field + n" */
-	readonly field?: string;
 }
 
 /**
- * Check if a value is a DB expression.
+ * Check if a value is a resolved DB expression.
  */
-export function isDBExpression(value: unknown): value is DBExpression {
+function isDBExpression(value: unknown): value is DBExpression {
 	return (
 		value !== null &&
 		typeof value === "object" &&
@@ -44,32 +42,52 @@ export function isDBExpression(value: unknown): value is DBExpression {
 }
 
 /**
- * DB expression helpers - runtime values evaluated by the database.
- *
- * @example
- * await db.insert(Users, { id, name, createdAt: db.now() });
- * await db.update(Users, id, { updatedAt: db.now() });
+ * Create a DB expression from raw SQL.
  */
-export const db = {
-	/**
-	 * Current timestamp from the database server.
-	 * Evaluates to CURRENT_TIMESTAMP at query execution time.
-	 *
-	 * @example
-	 * await db.insert(Users, { id, name, createdAt: db.now() });
-	 * await db.update(Users, id, { updatedAt: db.now() });
-	 */
-	now(): DBExpression {
-		return {[DB_EXPR]: true, sql: "CURRENT_TIMESTAMP"};
-	},
-};
+function createDBExpr(sql: string): DBExpression {
+	return {[DB_EXPR]: true, sql};
+}
+
+// ============================================================================
+// SQL Symbols - Named expressions resolved at query time
+// ============================================================================
 
 /**
- * Separate DB expressions from regular data values.
- * DB expressions skip validation and encoding - they're raw SQL.
+ * Current timestamp. Resolves to CURRENT_TIMESTAMP (standard SQL).
+ *
+ * @example
+ * createdAt: z.date().db.inserted(NOW)
+ * updatedAt: z.date().db.updated(NOW)
+ */
+export const NOW = Symbol.for("@b9g/zen:now");
+
+/** Known SQL symbols that can be used in inserted()/updated() */
+export type SQLSymbol = typeof NOW;
+
+/**
+ * Check if a value is a known SQL symbol.
+ */
+export function isSQLSymbol(value: unknown): value is SQLSymbol {
+	return value === NOW;
+}
+
+/**
+ * Resolve a SQL symbol to SQL.
+ */
+function resolveSQLSymbol(sym: symbol): string {
+	if (sym === NOW) {
+		// CURRENT_TIMESTAMP is standard SQL, works across all databases
+		return "CURRENT_TIMESTAMP";
+	}
+	throw new Error(`Unknown SQL symbol: ${String(sym)}`);
+}
+
+/**
+ * Separate DB expressions and SQL symbols from regular data values.
+ * Both skip validation and encoding - they're raw SQL resolved at query time.
  *
  * @param data - User-provided data
- * @param table - Optional table to validate DB expressions aren't used with encoded fields
+ * @param table - Optional table to validate expressions aren't used with encoded fields
  */
 function extractDBExpressions(
 	data: Record<string, unknown>,
@@ -77,9 +95,11 @@ function extractDBExpressions(
 ): {
 	regularData: Record<string, unknown>;
 	expressions: Record<string, DBExpression>;
+	symbols: Record<string, SQLSymbol>;
 } {
 	const regularData: Record<string, unknown> = {};
 	const expressions: Record<string, DBExpression> = {};
+	const symbols: Record<string, SQLSymbol> = {};
 
 	for (const [key, value] of Object.entries(data)) {
 		if (isDBExpression(value)) {
@@ -94,22 +114,34 @@ function extractDBExpressions(
 				}
 			}
 			expressions[key] = value;
+		} else if (isSQLSymbol(value)) {
+			// Validate: SQL symbols cannot be used with encoded/decoded fields
+			if (table) {
+				const fieldMeta = table.meta.fields[key];
+				if (fieldMeta?.encode || fieldMeta?.decode) {
+					throw new Error(
+						`Cannot use SQL symbol for field "${key}" which has encode/decode. ` +
+							`SQL symbols bypass encoding and are sent directly to the database.`,
+					);
+				}
+			}
+			symbols[key] = value;
 		} else {
 			regularData[key] = value;
 		}
 	}
 
-	return {regularData, expressions};
+	return {regularData, expressions, symbols};
 }
 
 /**
- * Inject schema-defined DB expressions for insert/update operations.
+ * Inject schema-defined values for insert/update operations.
  * Checks field metadata for .db.inserted() and .db.updated() markers.
  *
  * @param table - Table definition with schema metadata
  * @param data - User-provided data
  * @param operation - "insert" or "update"
- * @returns Data with schema expressions injected (user values take precedence)
+ * @returns Data with schema defaults injected (user values take precedence)
  */
 function injectSchemaExpressions<T extends Table<any>>(
 	table: T,
@@ -122,33 +154,25 @@ function injectSchemaExpressions<T extends Table<any>>(
 		// Skip if user already provided a value
 		if (fieldName in data) continue;
 
-		if (operation === "insert") {
-			// On insert: apply both inserted() and updated() expressions
-			if (fieldMeta.inserted) {
-				if (!isDBExpression(fieldMeta.inserted)) {
-					throw new Error(
-						`Field "${fieldName}" has invalid inserted() value. Expected a DB expression (e.g., db.now()).`,
-					);
-				}
-				result[fieldName] = fieldMeta.inserted;
-			} else if (fieldMeta.updated) {
-				if (!isDBExpression(fieldMeta.updated)) {
-					throw new Error(
-						`Field "${fieldName}" has invalid updated() value. Expected a DB expression (e.g., db.now()).`,
-					);
-				}
-				result[fieldName] = fieldMeta.updated;
-			}
-		} else {
-			// On update: only apply updated() expressions
-			if (fieldMeta.updated) {
-				if (!isDBExpression(fieldMeta.updated)) {
-					throw new Error(
-						`Field "${fieldName}" has invalid updated() value. Expected a DB expression (e.g., db.now()).`,
-					);
-				}
-				result[fieldName] = fieldMeta.updated;
-			}
+		// Skip auto-increment fields (database handles)
+		if (fieldMeta.autoIncrement) continue;
+
+		// Determine which metadata to use
+		const meta =
+			operation === "insert"
+				? fieldMeta.inserted ?? fieldMeta.updated // inserted() or updated() on insert
+				: fieldMeta.updated; // only updated() on update
+
+		if (!meta) continue;
+
+		// Resolve the value based on type
+		if (meta.type === "sql") {
+			result[fieldName] = createDBExpr(meta.sql!);
+		} else if (meta.type === "symbol") {
+			// Pass symbol through - resolved at query build time
+			result[fieldName] = meta.symbol;
+		} else if (meta.type === "function") {
+			result[fieldName] = meta.fn!();
 		}
 	}
 
@@ -395,42 +419,37 @@ function quoteIdent(name: string): string {
 /**
  * Build INSERT template: INSERT INTO "table" ("col1", "col2") VALUES (?, ?)
  * Returns template parts and values array.
+ * Symbols are included as placeholder values - resolved at driver call time.
  */
 function buildInsertParts(
 	tableName: string,
 	data: Record<string, unknown>,
 	expressions: Record<string, DBExpression>,
+	symbols: Record<string, SQLSymbol> = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const regularCols = Object.keys(data);
 	const exprCols = Object.keys(expressions);
-	const allCols = [...regularCols, ...exprCols];
+	const symbolCols = Object.keys(symbols);
+	const allCols = [...regularCols, ...symbolCols, ...exprCols];
+
+	if (allCols.length === 0) {
+		throw new Error("Insert requires at least one column");
+	}
 
 	const columnList = allCols.map((c) => quoteIdent(c)).join(", ");
 
-	// Build value placeholders: regular values get ?, expressions get raw SQL
-	const valueParts: string[] = [];
-	for (let i = 0; i < regularCols.length; i++) {
-		valueParts.push(i === 0 ? "" : ", ");
-	}
-	for (const col of exprCols) {
-		valueParts.push(
-			valueParts.length === 0
-				? expressions[col].sql
-				: `, ${expressions[col].sql}`,
-		);
-	}
-
-	// Template: INSERT INTO "table" ("cols") VALUES (<placeholder>, <placeholder>, ...)
-	// For 2 regular values: ["INSERT INTO ... VALUES (", ", ", ")"]
+	// Build template: regular values and symbols get placeholders, expressions get raw SQL
+	// Values order: regular data, then symbols (expressions are inlined, not in values)
+	const valueCols = [...regularCols, ...symbolCols];
 	const parts: string[] = [
 		`INSERT INTO ${quoteIdent(tableName)} (${columnList}) VALUES (`,
 	];
-	for (let i = 1; i < regularCols.length; i++) {
+	for (let i = 1; i < valueCols.length; i++) {
 		parts.push(", ");
 	}
 	// Add expression SQL inline (not parameterized)
 	const exprSql = exprCols.map((c) => expressions[c].sql).join(", ");
-	if (regularCols.length > 0 && exprCols.length > 0) {
+	if (valueCols.length > 0 && exprCols.length > 0) {
 		parts.push(`, ${exprSql})`);
 	} else if (exprCols.length > 0) {
 		parts[0] += `${exprSql})`;
@@ -438,15 +457,22 @@ function buildInsertParts(
 		parts.push(")");
 	}
 
+	// Values: regular data values, then symbol values (symbols resolved at driver call)
+	const values = [
+		...regularCols.map((c) => data[c]),
+		...symbolCols.map((c) => symbols[c]),
+	];
+
 	return {
 		strings: makeTemplate(parts),
-		values: regularCols.map((c) => data[c]),
+		values,
 	};
 }
 
 /**
  * Build UPDATE template: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE "pk" = ?
  * Returns template parts and values array.
+ * Symbols are included as placeholder values - resolved at driver call time.
  */
 function buildUpdateByIdParts(
 	tableName: string,
@@ -454,33 +480,27 @@ function buildUpdateByIdParts(
 	data: Record<string, unknown>,
 	expressions: Record<string, DBExpression>,
 	id: unknown,
+	symbols: Record<string, SQLSymbol> = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const regularCols = Object.keys(data);
 	const exprCols = Object.keys(expressions);
-
-	// Build SET clause
-	const setParts: string[] = [];
-	for (const col of regularCols) {
-		setParts.push(`${quoteIdent(col)} = `);
-	}
-	for (const col of exprCols) {
-		setParts.push(`${quoteIdent(col)} = ${expressions[col].sql}`);
-	}
+	const symbolCols = Object.keys(symbols);
+	const valueCols = [...regularCols, ...symbolCols];
 
 	// Template: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE "pk" = ?
 	const parts: string[] = [`UPDATE ${quoteIdent(tableName)} SET `];
-	for (let i = 0; i < regularCols.length; i++) {
+	for (let i = 0; i < valueCols.length; i++) {
 		if (i === 0) {
-			parts[0] += `${quoteIdent(regularCols[i])} = `;
+			parts[0] += `${quoteIdent(valueCols[i])} = `;
 		} else {
-			parts.push(`, ${quoteIdent(regularCols[i])} = `);
+			parts.push(`, ${quoteIdent(valueCols[i])} = `);
 		}
 	}
 	// Add expression assignments
 	const exprAssignments = exprCols
 		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
 		.join(", ");
-	if (regularCols.length > 0 && exprCols.length > 0) {
+	if (valueCols.length > 0 && exprCols.length > 0) {
 		parts.push(`, ${exprAssignments} WHERE ${quoteIdent(pk)} = `);
 	} else if (exprCols.length > 0) {
 		parts[0] += `${exprAssignments} WHERE ${quoteIdent(pk)} = `;
@@ -489,14 +509,22 @@ function buildUpdateByIdParts(
 	}
 	parts.push("");
 
+	// Values: regular data, symbols, then id
+	const values = [
+		...regularCols.map((c) => data[c]),
+		...symbolCols.map((c) => symbols[c]),
+		id,
+	];
+
 	return {
 		strings: makeTemplate(parts),
-		values: [...regularCols.map((c) => data[c]), id],
+		values,
 	};
 }
 
 /**
  * Build UPDATE template for multiple IDs: UPDATE "table" SET ... WHERE "pk" IN (?, ?, ?)
+ * Symbols are included as placeholder values - resolved at driver call time.
  */
 function buildUpdateByIdsParts(
 	tableName: string,
@@ -504,17 +532,20 @@ function buildUpdateByIdsParts(
 	data: Record<string, unknown>,
 	expressions: Record<string, DBExpression>,
 	ids: unknown[],
+	symbols: Record<string, SQLSymbol> = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const regularCols = Object.keys(data);
 	const exprCols = Object.keys(expressions);
+	const symbolCols = Object.keys(symbols);
+	const valueCols = [...regularCols, ...symbolCols];
 
 	// Build SET clause parts
 	const parts: string[] = [`UPDATE ${quoteIdent(tableName)} SET `];
-	for (let i = 0; i < regularCols.length; i++) {
+	for (let i = 0; i < valueCols.length; i++) {
 		if (i === 0) {
-			parts[0] += `${quoteIdent(regularCols[i])} = `;
+			parts[0] += `${quoteIdent(valueCols[i])} = `;
 		} else {
-			parts.push(`, ${quoteIdent(regularCols[i])} = `);
+			parts.push(`, ${quoteIdent(valueCols[i])} = `);
 		}
 	}
 
@@ -523,7 +554,7 @@ function buildUpdateByIdsParts(
 		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
 		.join(", ");
 
-	if (regularCols.length > 0 && exprCols.length > 0) {
+	if (valueCols.length > 0 && exprCols.length > 0) {
 		parts.push(`, ${exprAssignments} WHERE ${quoteIdent(pk)} IN (`);
 	} else if (exprCols.length > 0) {
 		parts[0] += `${exprAssignments} WHERE ${quoteIdent(pk)} IN (`;
@@ -537,9 +568,16 @@ function buildUpdateByIdsParts(
 	}
 	parts.push(")");
 
+	// Values: regular data, symbols, then ids
+	const values = [
+		...regularCols.map((c) => data[c]),
+		...symbolCols.map((c) => symbols[c]),
+		...ids,
+	];
+
 	return {
 		strings: makeTemplate(parts),
-		values: [...regularCols.map((c) => data[c]), ...ids],
+		values,
 	};
 }
 
@@ -908,21 +946,22 @@ export class Transaction {
 			"insert",
 		);
 
-		const {regularData, expressions} = extractDBExpressions(
+		const {regularData, expressions, symbols} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
 
 		let schema = table.schema;
-		if (Object.keys(expressions).length > 0) {
-			const exprFields = Object.keys(expressions).reduce(
+		const skipFields = {...expressions, ...symbols};
+		if (Object.keys(skipFields).length > 0) {
+			const skipFieldSchemas = Object.keys(skipFields).reduce(
 				(acc, key) => {
 					acc[key] = (table.schema.shape as any)[key].optional();
 					return acc;
 				},
 				{} as Record<string, z.ZodTypeAny>,
 			);
-			schema = table.schema.extend(exprFields);
+			schema = table.schema.extend(skipFieldSchemas);
 		}
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
 			schema,
@@ -930,7 +969,7 @@ export class Transaction {
 		);
 		const encoded = encodeData(table, validated);
 
-		const insertParts = buildInsertParts(table.name, encoded, expressions);
+		const insertParts = buildInsertParts(table.name, encoded, expressions, symbols);
 
 		if (this.#driver.supportsReturning) {
 			const {strings, values} = appendReturning(insertParts);
@@ -1027,7 +1066,7 @@ export class Transaction {
 			"update",
 		);
 
-		const {regularData, expressions} = extractDBExpressions(
+		const {regularData, expressions, symbols} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
@@ -1038,7 +1077,11 @@ export class Transaction {
 			regularData,
 		);
 
-		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		const allColumns = [
+			...Object.keys(validated),
+			...Object.keys(expressions),
+			...Object.keys(symbols),
+		];
 		if (allColumns.length === 0) {
 			throw new Error("No fields to update");
 		}
@@ -1050,6 +1093,7 @@ export class Transaction {
 			encoded,
 			expressions,
 			id,
+			symbols,
 		);
 
 		if (this.#driver.supportsReturning) {
@@ -1112,7 +1156,7 @@ export class Transaction {
 			"update",
 		);
 
-		const {regularData, expressions} = extractDBExpressions(
+		const {regularData, expressions, symbols} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
@@ -1123,7 +1167,11 @@ export class Transaction {
 			regularData,
 		);
 
-		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		const allColumns = [
+			...Object.keys(validated),
+			...Object.keys(expressions),
+			...Object.keys(symbols),
+		];
 		if (allColumns.length === 0) {
 			throw new Error("No fields to update");
 		}
@@ -1135,6 +1183,7 @@ export class Transaction {
 			encoded,
 			expressions,
 			ids,
+			symbols,
 		);
 
 		if (this.#driver.supportsReturning) {
@@ -1421,7 +1470,7 @@ export class Transaction {
 		const softDeleteField = table.meta.softDeleteField!;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
-		const {expressions} = extractDBExpressions(schemaExprs);
+		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
 		const setClauses: string[] = [
 			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
@@ -1429,6 +1478,11 @@ export class Transaction {
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
 				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
@@ -1454,7 +1508,7 @@ export class Transaction {
 		const softDeleteField = table.meta.softDeleteField!;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
-		const {expressions} = extractDBExpressions(schemaExprs);
+		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
 		const setClauses: string[] = [
 			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
@@ -1462,6 +1516,11 @@ export class Transaction {
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
 				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
@@ -1485,7 +1544,7 @@ export class Transaction {
 		const softDeleteField = table.meta.softDeleteField!;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
-		const {expressions} = extractDBExpressions(schemaExprs);
+		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
 		const setClauses: string[] = [
 			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
@@ -1493,6 +1552,11 @@ export class Transaction {
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
 				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
@@ -1868,21 +1932,22 @@ export class Database extends EventTarget {
 			"insert",
 		);
 
-		const {regularData, expressions} = extractDBExpressions(
+		const {regularData, expressions, symbols} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
 
 		let schema = table.schema;
-		if (Object.keys(expressions).length > 0) {
-			const exprFields = Object.keys(expressions).reduce(
+		const skipFields = {...expressions, ...symbols};
+		if (Object.keys(skipFields).length > 0) {
+			const skipFieldSchemas = Object.keys(skipFields).reduce(
 				(acc, key) => {
 					acc[key] = (table.schema.shape as any)[key].optional();
 					return acc;
 				},
 				{} as Record<string, z.ZodTypeAny>,
 			);
-			schema = table.schema.extend(exprFields);
+			schema = table.schema.extend(skipFieldSchemas);
 		}
 		const validated = validateWithStandardSchema<Record<string, unknown>>(
 			schema,
@@ -1890,7 +1955,7 @@ export class Database extends EventTarget {
 		);
 		const encoded = encodeData(table, validated);
 
-		const insertParts = buildInsertParts(table.name, encoded, expressions);
+		const insertParts = buildInsertParts(table.name, encoded, expressions, symbols);
 
 		if (this.#driver.supportsReturning) {
 			const {strings, values} = appendReturning(insertParts);
@@ -2003,7 +2068,7 @@ export class Database extends EventTarget {
 			"update",
 		);
 
-		const {regularData, expressions} = extractDBExpressions(
+		const {regularData, expressions, symbols} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
@@ -2014,7 +2079,11 @@ export class Database extends EventTarget {
 			regularData,
 		);
 
-		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		const allColumns = [
+			...Object.keys(validated),
+			...Object.keys(expressions),
+			...Object.keys(symbols),
+		];
 		if (allColumns.length === 0) {
 			throw new Error("No fields to update");
 		}
@@ -2026,6 +2095,7 @@ export class Database extends EventTarget {
 			encoded,
 			expressions,
 			id,
+			symbols,
 		);
 
 		if (this.#driver.supportsReturning) {
@@ -2088,7 +2158,7 @@ export class Database extends EventTarget {
 			"update",
 		);
 
-		const {regularData, expressions} = extractDBExpressions(
+		const {regularData, expressions, symbols} = extractDBExpressions(
 			dataWithSchemaExprs,
 			table,
 		);
@@ -2099,7 +2169,11 @@ export class Database extends EventTarget {
 			regularData,
 		);
 
-		const allColumns = [...Object.keys(validated), ...Object.keys(expressions)];
+		const allColumns = [
+			...Object.keys(validated),
+			...Object.keys(expressions),
+			...Object.keys(symbols),
+		];
 		if (allColumns.length === 0) {
 			throw new Error("No fields to update");
 		}
@@ -2111,6 +2185,7 @@ export class Database extends EventTarget {
 			encoded,
 			expressions,
 			ids,
+			symbols,
 		);
 
 		if (this.#driver.supportsReturning) {
@@ -2421,7 +2496,7 @@ export class Database extends EventTarget {
 		const softDeleteField = table.meta.softDeleteField!;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
-		const {expressions} = extractDBExpressions(schemaExprs);
+		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
 		const setClauses: string[] = [
 			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
@@ -2429,6 +2504,11 @@ export class Database extends EventTarget {
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
 				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
@@ -2454,7 +2534,7 @@ export class Database extends EventTarget {
 		const softDeleteField = table.meta.softDeleteField!;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
-		const {expressions} = extractDBExpressions(schemaExprs);
+		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
 		const setClauses: string[] = [
 			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
@@ -2462,6 +2542,11 @@ export class Database extends EventTarget {
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
 				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
@@ -2485,7 +2570,7 @@ export class Database extends EventTarget {
 		const softDeleteField = table.meta.softDeleteField!;
 
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
-		const {expressions} = extractDBExpressions(schemaExprs);
+		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
 		const setClauses: string[] = [
 			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
@@ -2493,6 +2578,11 @@ export class Database extends EventTarget {
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
 				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+			}
+		}
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 

@@ -8,18 +8,46 @@
  */
 
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError} from "./zen.js";
+import {ConstraintViolationError, isSQLSymbol, NOW} from "./zen.js";
 import postgres from "postgres";
 
 /**
- * Build SQL from template parts using $1, $2, etc. placeholders.
+ * Resolve SQL symbol to dialect-specific SQL.
  */
-function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
-	let sql = strings[0];
-	for (let i = 1; i < strings.length; i++) {
-		sql += `$${i}` + strings[i];
+function resolveSQLSymbol(sym: symbol): string {
+	switch (sym) {
+		case NOW:
+			return "CURRENT_TIMESTAMP";
+		default:
+			throw new Error(`Unknown SQL symbol: ${String(sym)}`);
 	}
-	return sql;
+}
+
+/**
+ * Build SQL from template parts using $1, $2, etc. placeholders.
+ * SQL symbols in values are inlined directly; other values use placeholders.
+ */
+function buildSQL(
+	strings: TemplateStringsArray,
+	values: unknown[],
+): {sql: string; params: unknown[]} {
+	let sql = strings[0];
+	const params: unknown[] = [];
+	let paramIndex = 1;
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i];
+		if (isSQLSymbol(value)) {
+			// Inline the symbol's SQL directly
+			sql += resolveSQLSymbol(value) + strings[i + 1];
+		} else {
+			// Add placeholder and keep value
+			sql += `$${paramIndex++}` + strings[i + 1];
+			params.push(value);
+		}
+	}
+
+	return {sql, params};
 }
 
 /**
@@ -104,8 +132,8 @@ export default class PostgresDriver implements Driver {
 
 	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
 		try {
-			const sql = buildSQL(strings, values);
-			const result = await this.#sql.unsafe<T[]>(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values);
+			const result = await this.#sql.unsafe<T[]>(sql, params as any[]);
 			return result;
 		} catch (error) {
 			return this.#handleError(error);
@@ -117,8 +145,8 @@ export default class PostgresDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values);
-			const result = await this.#sql.unsafe<T[]>(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values);
+			const result = await this.#sql.unsafe<T[]>(sql, params as any[]);
 			return result[0] ?? null;
 		} catch (error) {
 			return this.#handleError(error);
@@ -127,8 +155,8 @@ export default class PostgresDriver implements Driver {
 
 	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
 		try {
-			const sql = buildSQL(strings, values);
-			const result = await this.#sql.unsafe(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values);
+			const result = await this.#sql.unsafe(sql, params as any[]);
 			return result.count;
 		} catch (error) {
 			return this.#handleError(error);
@@ -140,8 +168,8 @@ export default class PostgresDriver implements Driver {
 		values: unknown[],
 	): Promise<T | null> {
 		try {
-			const sql = buildSQL(strings, values);
-			const result = await this.#sql.unsafe(sql, values as any[]);
+			const {sql, params} = buildSQL(strings, values);
+			const result = await this.#sql.unsafe(sql, params as any[]);
 			const row = result[0];
 			if (!row) return null;
 			const rowValues = Object.values(row as object);
@@ -166,8 +194,8 @@ export default class PostgresDriver implements Driver {
 					values: unknown[],
 				): Promise<R[]> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const result = await txSql.unsafe<R[]>(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values);
+						const result = await txSql.unsafe<R[]>(sql, params as any[]);
 						return result;
 					} catch (error) {
 						return handleError(error);
@@ -178,8 +206,8 @@ export default class PostgresDriver implements Driver {
 					values: unknown[],
 				): Promise<R | null> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const result = await txSql.unsafe<R[]>(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values);
+						const result = await txSql.unsafe<R[]>(sql, params as any[]);
 						return result[0] ?? null;
 					} catch (error) {
 						return handleError(error);
@@ -190,8 +218,8 @@ export default class PostgresDriver implements Driver {
 					values: unknown[],
 				): Promise<number> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const result = await txSql.unsafe(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values);
+						const result = await txSql.unsafe(sql, params as any[]);
 						return result.count;
 					} catch (error) {
 						return handleError(error);
@@ -202,8 +230,8 @@ export default class PostgresDriver implements Driver {
 					values: unknown[],
 				): Promise<R | null> => {
 					try {
-						const sql = buildSQL(strings, values);
-						const result = await txSql.unsafe(sql, values as any[]);
+						const {sql, params} = buildSQL(strings, values);
+						const result = await txSql.unsafe(sql, params as any[]);
 						const row = result[0];
 						if (!row) return null;
 						const rowValues = Object.values(row as object);

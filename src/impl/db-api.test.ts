@@ -45,7 +45,7 @@ describe(".db namespace API", () => {
 	test("z.date().db.softDelete() works", () => {
 		const Users = table("users", {
 			id: z.string().db.primary(),
-			deletedAt: z.date().nullable().default(null).db.softDelete(),
+			deletedAt: z.date().nullable().db.softDelete(),
 		});
 
 		expect(Users.meta.softDeleteField).toBe("deletedAt");
@@ -84,7 +84,7 @@ describe(".db namespace API", () => {
 			id: z.string().uuid().db.primary(),
 			email: z.string().email().db.unique(),
 			age: z.number().min(0).max(150).optional(),
-			role: z.enum(["user", "admin"]).default("user"),
+			role: z.enum(["user", "admin"]),
 		});
 
 		expect(Users.meta.primary).toBe("id");

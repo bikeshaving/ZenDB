@@ -11,7 +11,7 @@ const Users = table("users", {
 	id: z.string().uuid().db.primary(),
 	email: z.string().email(),
 	name: z.string(),
-	role: z.enum(["user", "admin"]).default("user"),
+	role: z.enum(["user", "admin"]),
 	createdAt: z.date(),
 });
 
@@ -19,8 +19,8 @@ const Posts = table("posts", {
 	id: z.string().uuid().db.primary(),
 	authorId: z.string().uuid().db.references(Users, {as: "author"}),
 	title: z.string(),
-	published: z.boolean().default(false),
-	viewCount: z.number().int().default(0),
+	published: z.boolean(),
+	viewCount: z.number().int(),
 });
 
 describe("Table.set()", () => {

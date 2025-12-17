@@ -14,6 +14,10 @@ import {
 	createDDLFragment,
 	type DDLFragment,
 } from "./query.js";
+import {
+	isSQLSymbol,
+	type SQLSymbol,
+} from "./database.js";
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
@@ -213,15 +217,43 @@ export interface FieldDbMeta {
 	decode?: (value: any) => any;
 	/** Explicit column type override for DDL generation */
 	columnType?: string;
-	/** DB expression to apply on insert (e.g., db.now()) */
-	inserted?: unknown;
-	/** DB expression to apply on insert and update (e.g., db.now()) */
-	updated?: unknown;
+	/** Auto-increment flag */
+	autoIncrement?: boolean;
+	/** Value to apply on INSERT */
+	inserted?: {
+		type: "sql" | "symbol" | "function";
+		sql?: string;
+		symbol?: SQLSymbol;
+		fn?: () => unknown;
+	};
+	/** Value to apply on INSERT and UPDATE */
+	updated?: {
+		type: "sql" | "symbol" | "function";
+		sql?: string;
+		symbol?: SQLSymbol;
+		fn?: () => unknown;
+	};
 }
 
 // ============================================================================
 // .db namespace - Fluent API for database metadata
 // ============================================================================
+
+/**
+ * Check if a value is a TemplateStringsArray (for tagged template detection).
+ */
+function isTemplateStringsArray(
+	value: unknown,
+): value is TemplateStringsArray {
+	return Array.isArray(value) && "raw" in value;
+}
+
+/**
+ * Check if a schema uses Zod's .default() wrapper.
+ */
+function hasZodDefault(schema: ZodTypeAny): boolean {
+	return typeof (schema as any).removeDefault === "function";
+}
 
 /**
  * Create the .db methods object that will be added to all Zod schemas.
@@ -356,65 +388,118 @@ function createDbMethods(schema: ZodTypeAny) {
 		},
 
 		/**
-		 * Auto-apply a DB expression on insert.
-		 * Field becomes optional for insert - the expression provides the value.
+		 * Set a value to apply on INSERT.
+		 *
+		 * Three forms:
+		 * - Tagged template: .db.inserted`CURRENT_TIMESTAMP` → raw SQL
+		 * - Symbol: .db.inserted(NOW) → dialect-aware SQL
+		 * - Function: .db.inserted(() => "draft") → client-side per-insert
+		 *
+		 * Field becomes optional for insert.
 		 *
 		 * @example
-		 * createdAt: z.date().db.inserted(db.now())
+		 * createdAt: z.date().db.inserted(NOW)
+		 * token: z.string().db.inserted(() => crypto.randomUUID())
+		 * slug: z.string().db.inserted`LOWER(name)`
 		 */
-		inserted(expr: unknown) {
-			// Validate at definition time that this is a DBExpression
-			const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
-			if (
-				expr === null ||
-				typeof expr !== "object" ||
-				!(DB_EXPR in expr) ||
-				(expr as any)[DB_EXPR] !== true
-			) {
+		inserted(
+			stringsOrValue:
+				| TemplateStringsArray
+				| SQLSymbol
+				| (() => unknown),
+			...templateValues: unknown[]
+		) {
+			let insertedMeta: FieldDbMeta["inserted"];
+
+			if (isTemplateStringsArray(stringsOrValue)) {
+				// Tagged template → SQL expression
+				const sql = stringsOrValue.join("");
+				insertedMeta = {type: "sql", sql};
+			} else if (isSQLSymbol(stringsOrValue)) {
+				insertedMeta = {type: "symbol", symbol: stringsOrValue};
+			} else if (typeof stringsOrValue === "function") {
+				insertedMeta = {type: "function", fn: stringsOrValue};
+			} else {
 				throw new TableDefinitionError(
-					`inserted() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
+					`inserted() requires a tagged template, symbol (NOW), or function. Got: ${typeof stringsOrValue}`,
 				);
 			}
+
 			// Validate: inserted cannot be combined with encode/decode
 			const existing = getDBMeta(schema);
 			if (existing.encode || existing.decode) {
 				throw new TableDefinitionError(
 					`inserted() cannot be combined with encode() or decode(). ` +
-						`DB expressions bypass encoding/decoding and are sent directly to the database.`,
+						`DB expressions and functions bypass encoding/decoding.`,
 				);
 			}
-			return setDBMeta(schema, {inserted: expr});
+
+			// Make schema optional for input type
+			const optionalSchema = schema.optional();
+			return setDBMeta(optionalSchema, {inserted: insertedMeta});
 		},
 
 		/**
-		 * Auto-apply a DB expression on insert and update.
-		 * Field becomes optional for insert/update - the expression provides the value.
+		 * Set a value to apply on INSERT and UPDATE.
+		 *
+		 * Same forms as inserted().
+		 *
+		 * Field becomes optional for insert/update.
 		 *
 		 * @example
-		 * updatedAt: z.date().db.updated(db.now())
+		 * updatedAt: z.date().db.updated(NOW)
+		 * lastModified: z.date().db.updated(() => new Date())
 		 */
-		updated(expr: unknown) {
-			// Validate at definition time that this is a DBExpression
-			const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
-			if (
-				expr === null ||
-				typeof expr !== "object" ||
-				!(DB_EXPR in expr) ||
-				(expr as any)[DB_EXPR] !== true
-			) {
+		updated(
+			stringsOrValue:
+				| TemplateStringsArray
+				| SQLSymbol
+				| (() => unknown),
+			...templateValues: unknown[]
+		) {
+			let updatedMeta: FieldDbMeta["updated"];
+
+			if (isTemplateStringsArray(stringsOrValue)) {
+				// Tagged template → SQL expression
+				const sql = stringsOrValue.join("");
+				updatedMeta = {type: "sql", sql};
+			} else if (isSQLSymbol(stringsOrValue)) {
+				updatedMeta = {type: "symbol", symbol: stringsOrValue};
+			} else if (typeof stringsOrValue === "function") {
+				updatedMeta = {type: "function", fn: stringsOrValue};
+			} else {
 				throw new TableDefinitionError(
-					`updated() requires a DB expression (e.g., db.now()), got ${typeof expr}`,
+					`updated() requires a tagged template, symbol (NOW), or function. Got: ${typeof stringsOrValue}`,
 				);
 			}
+
 			// Validate: updated cannot be combined with encode/decode
 			const existing = getDBMeta(schema);
 			if (existing.encode || existing.decode) {
 				throw new TableDefinitionError(
 					`updated() cannot be combined with encode() or decode(). ` +
-						`DB expressions bypass encoding/decoding and are sent directly to the database.`,
+						`DB expressions and functions bypass encoding/decoding.`,
 				);
 			}
-			return setDBMeta(schema, {updated: expr});
+
+			// Make schema optional for input type
+			const optionalSchema = schema.optional();
+			return setDBMeta(optionalSchema, {updated: updatedMeta});
+		},
+
+		/**
+		 * Mark this field as auto-incrementing.
+		 *
+		 * Field becomes optional for insert - the database generates the value.
+		 * Typically used for integer primary keys.
+		 *
+		 * @example
+		 * id: z.number().db.primary().autoIncrement()
+		 */
+		autoIncrement() {
+			// Make schema optional for input type
+			const optionalSchema = schema.optional();
+			return setDBMeta(optionalSchema, {autoIncrement: true});
 		},
 	};
 }
@@ -1024,6 +1109,16 @@ export function table<T extends Record<string, ZodTypeAny>>(
 
 		const fieldSchema = value as ZodTypeAny;
 		zodShape[key] = fieldSchema;
+
+		// Check for Zod .default() - this is a footgun, should use .db.inserted()/.db.updated()
+		if (hasZodDefault(fieldSchema)) {
+			throw new TableDefinitionError(
+				`Field "${key}" uses Zod .default() which applies at parse time, not write time. ` +
+					`Use .db.inserted() or .db.updated() instead.`,
+				name,
+				key,
+			);
+		}
 
 		// Read database metadata from namespaced .meta()
 		const fieldDbMeta = getDBMeta(fieldSchema);
@@ -1864,16 +1959,55 @@ export interface ZodDBMethods<Schema extends ZodTypeAny> {
 	type(columnType: string): Schema;
 
 	/**
-	 * Set a DB expression to be used on INSERT.
-	 * @example createdAt: z.date().db.inserted(db.now())
+	 * Set a value to apply on INSERT.
+	 *
+	 * Three forms:
+	 * - Tagged template: .db.inserted`CURRENT_TIMESTAMP`
+	 * - Symbol: .db.inserted(NOW)
+	 * - Function: .db.inserted(() => "draft")
+	 *
+	 * Field becomes optional for insert.
+	 *
+	 * @example
+	 * createdAt: z.date().db.inserted(NOW)
+	 * token: z.string().db.inserted(() => crypto.randomUUID())
+	 * slug: z.string().db.inserted`LOWER(name)`
 	 */
-	inserted(expr: import("./database.js").DBExpression): Schema;
+	inserted(
+		value:
+			| import("./database.js").SQLSymbol
+			| (() => z.infer<Schema>),
+	): Schema;
+	inserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
 
 	/**
-	 * Set a DB expression to be used on UPDATE (and INSERT).
-	 * @example updatedAt: z.date().db.updated(db.now())
+	 * Set a value to apply on INSERT and UPDATE.
+	 *
+	 * Same forms as inserted().
+	 *
+	 * Field becomes optional for insert/update.
+	 *
+	 * @example
+	 * updatedAt: z.date().db.updated(NOW)
+	 * lastModified: z.date().db.updated(() => new Date())
 	 */
-	updated(expr: import("./database.js").DBExpression): Schema;
+	updated(
+		value:
+			| import("./database.js").SQLSymbol
+			| (() => z.infer<Schema>),
+	): Schema;
+	updated(strings: TemplateStringsArray, ...values: unknown[]): Schema;
+
+	/**
+	 * Mark this field as auto-incrementing.
+	 *
+	 * Field becomes optional for insert - the database generates the value.
+	 * Typically used for integer primary keys.
+	 *
+	 * @example
+	 * id: z.number().db.primary().autoIncrement()
+	 */
+	autoIncrement(): Schema;
 }
 
 declare module "zod" {

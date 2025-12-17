@@ -22,9 +22,9 @@ describe("table", () => {
 			name: z.string().max(100),
 			bio: z.string().max(2000),
 			age: z.number().int().min(0).max(150),
-			role: z.enum(["user", "admin", "moderator"]).default("user"),
-			active: z.boolean().default(true),
-			createdAt: z.date().default(() => new Date()),
+			role: z.enum(["user", "admin", "moderator"]),
+			active: z.boolean(),
+			createdAt: z.date(),
 		});
 
 		const fields = users.fields();
@@ -54,16 +54,14 @@ describe("table", () => {
 		// Enum becomes select
 		expect(fields.role.type).toBe("select");
 		expect(fields.role.options).toEqual(["user", "admin", "moderator"]);
-		expect(fields.role.default).toBe("user");
-		expect(fields.role.required).toBe(false); // has default
+		expect(fields.role.required).toBe(true); // no default
 
 		// Boolean
 		expect(fields.active.type).toBe("checkbox");
-		expect(fields.active.default).toBe(true);
 
 		// Date
 		expect(fields.createdAt.type).toBe("datetime");
-		expect(fields.createdAt.required).toBe(false); // has default
+		expect(fields.createdAt.required).toBe(true); // no default
 	});
 
 	test("detects primary key", () => {
@@ -197,7 +195,7 @@ describe("table", () => {
 				.db.unique(),
 			role: z
 				.enum(["user", "admin"])
-				.default("user")
+				.db.inserted(() => "user" as const)
 				.meta({label: "User Role", widget: "radio"}),
 			bio: z.string().optional().meta({label: "Biography", widget: "textarea"}),
 		});
@@ -289,7 +287,7 @@ describe("Table.pick()", () => {
 		authorId: z.string().uuid().db.references(Users, {as: "author"}),
 		title: z.string(),
 		body: z.string(),
-		published: z.boolean().default(false),
+		published: z.boolean(),
 	});
 
 	test("creates partial table with picked fields", () => {
@@ -704,146 +702,154 @@ describe("Table.cols", () => {
 });
 
 describe("Schema marker validation", () => {
-	test("inserted() throws for non-DBExpression values", () => {
+	test("inserted() throws for invalid values", () => {
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted("invalid"),
-		).toThrow("inserted() requires a DB expression");
+		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted(new Date()),
-		).toThrow("inserted() requires a DB expression");
+		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted(null),
-		).toThrow("inserted() requires a DB expression");
+		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.inserted(123),
-		).toThrow("inserted() requires a DB expression");
+		).toThrow("inserted() requires a tagged template, symbol (NOW), or function");
 	});
 
-	test("updated() throws for non-DBExpression values", () => {
+	test("updated() throws for invalid values", () => {
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.updated("invalid"),
-		).toThrow("updated() requires a DB expression");
+		).toThrow("updated() requires a tagged template, symbol (NOW), or function");
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.updated(new Date()),
-		).toThrow("updated() requires a DB expression");
+		).toThrow("updated() requires a tagged template, symbol (NOW), or function");
 
 		expect(() =>
 			// @ts-expect-error - Testing runtime validation for JS callers
 			z.date().db.updated(undefined),
-		).toThrow("updated() requires a DB expression");
+		).toThrow("updated() requires a tagged template, symbol (NOW), or function");
 	});
 
-	test("inserted() accepts valid DBExpression", () => {
-		const {db} = require("./database.js");
+	test("inserted() accepts valid values", () => {
+		const {NOW} = require("./database.js");
 
-		// Should not throw
-		const schema = z.date().db.inserted(db.now());
-		expect(schema).toBeDefined();
+		// Should not throw - symbol
+		const schema1 = z.date().db.inserted(NOW);
+		expect(schema1).toBeDefined();
+
+		// Should not throw - function
+		const schema2 = z.date().db.inserted(() => new Date());
+		expect(schema2).toBeDefined();
 	});
 
-	test("updated() accepts valid DBExpression", () => {
-		const {db} = require("./database.js");
+	test("updated() accepts valid values", () => {
+		const {NOW} = require("./database.js");
 
-		// Should not throw
-		const schema = z.date().db.updated(db.now());
-		expect(schema).toBeDefined();
+		// Should not throw - symbol
+		const schema1 = z.date().db.updated(NOW);
+		expect(schema1).toBeDefined();
+
+		// Should not throw - function
+		const schema2 = z.date().db.updated(() => new Date());
+		expect(schema2).toBeDefined();
 	});
 
 	test("encode() throws when combined with inserted()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
-				.db.inserted(db.now())
+				.db.inserted(NOW)
 				.db.encode(() => "encoded"),
 		).toThrow("encode() cannot be combined with inserted() or updated()");
 	});
 
 	test("encode() throws when combined with updated()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
-				.db.updated(db.now())
+				.db.updated(NOW)
 				.db.encode(() => "encoded"),
 		).toThrow("encode() cannot be combined with inserted() or updated()");
 	});
 
 	test("decode() throws when combined with inserted()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
-				.db.inserted(db.now())
+				.db.inserted(NOW)
 				.db.decode(() => new Date()),
 		).toThrow("decode() cannot be combined with inserted() or updated()");
 	});
 
 	test("decode() throws when combined with updated()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
-				.db.updated(db.now())
+				.db.updated(NOW)
 				.db.decode(() => new Date()),
 		).toThrow("decode() cannot be combined with inserted() or updated()");
 	});
 
 	test("inserted() throws when combined with encode()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
 				.db.encode(() => "encoded")
-				.db.inserted(db.now()),
+				.db.inserted(NOW),
 		).toThrow("inserted() cannot be combined with encode() or decode()");
 	});
 
 	test("inserted() throws when combined with decode()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
 				.db.decode(() => new Date())
-				.db.inserted(db.now()),
+				.db.inserted(NOW),
 		).toThrow("inserted() cannot be combined with encode() or decode()");
 	});
 
 	test("updated() throws when combined with encode()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
 				.db.encode(() => "encoded")
-				.db.updated(db.now()),
+				.db.updated(NOW),
 		).toThrow("updated() cannot be combined with encode() or decode()");
 	});
 
 	test("updated() throws when combined with decode()", () => {
-		const {db} = require("./database.js");
+		const {NOW} = require("./database.js");
 
 		expect(() =>
 			z
 				.date()
 				.db.decode(() => new Date())
-				.db.updated(db.now()),
+				.db.updated(NOW),
 		).toThrow("updated() cannot be combined with encode() or decode()");
 	});
 });

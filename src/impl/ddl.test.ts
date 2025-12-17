@@ -48,19 +48,19 @@ describe("DDL generation", () => {
 		expect(ddl).not.toContain('"avatar" TEXT NOT NULL');
 	});
 
-	test("default values", () => {
+	test("required fields", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			role: z.string().default("user"),
-			active: z.boolean().default(true),
-			score: z.number().default(0),
+			role: z.string(),
+			active: z.boolean(),
+			score: z.number(),
 		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
-		expect(ddl).toContain("DEFAULT 'user'");
-		expect(ddl).toContain("DEFAULT 1"); // SQLite boolean
-		expect(ddl).toContain("DEFAULT 0");
+		expect(ddl).toContain('"role" TEXT NOT NULL');
+		expect(ddl).toContain('"active" INTEGER NOT NULL'); // SQLite boolean
+		expect(ddl).toContain('"score" REAL NOT NULL');
 	});
 
 	test("integer vs real", () => {
@@ -79,25 +79,23 @@ describe("DDL generation", () => {
 	test("enum as text", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
-			role: z.enum(["user", "admin", "moderator"]).default("user"),
+			role: z.enum(["user", "admin", "moderator"]),
 		});
 
 		const ddl = generateDDL(users, {dialect: "sqlite"});
 
-		expect(ddl).toContain('"role" TEXT');
-		expect(ddl).toContain("DEFAULT 'user'");
+		expect(ddl).toContain('"role" TEXT NOT NULL');
 	});
 
 	test("date field", () => {
 		const posts = table("posts", {
 			id: z.string().uuid().db.primary(),
-			createdAt: z.date().default(() => new Date()),
+			createdAt: z.date(),
 		});
 
 		const ddl = generateDDL(posts, {dialect: "sqlite"});
 
 		expect(ddl).toContain('"createdAt" TEXT');
-		expect(ddl).toContain("DEFAULT CURRENT_TIMESTAMP");
 	});
 
 	test("indexed field", () => {
@@ -150,8 +148,8 @@ describe("DDL generation", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
 			score: z.number(),
-			active: z.boolean().default(true),
-			createdAt: z.date().default(() => new Date()),
+			active: z.boolean(),
+			createdAt: z.date(),
 			settings: z.object({theme: z.string()}),
 		});
 
@@ -159,9 +157,7 @@ describe("DDL generation", () => {
 
 		expect(ddl).toContain('"score" DOUBLE PRECISION');
 		expect(ddl).toContain('"active" BOOLEAN');
-		expect(ddl).toContain("DEFAULT TRUE");
 		expect(ddl).toContain('"createdAt" TIMESTAMPTZ');
-		expect(ddl).toContain("DEFAULT NOW()");
 		expect(ddl).toContain('"settings" JSONB');
 		// PostgreSQL uses separate PRIMARY KEY constraint
 		expect(ddl).toContain('PRIMARY KEY ("id")');
@@ -395,12 +391,11 @@ describe("DDL generation", () => {
 		expect(ddl).toContain('"data" BLOB');
 	});
 
-	test("explicit column type works with default values", () => {
+	test("explicit column type with encode/decode", () => {
 		const custom = table("custom", {
 			id: z.string().uuid().db.primary(),
 			tags: z
 				.array(z.string())
-				.default([])
 				.db.encode((arr) => arr.join(","))
 				.db.decode((str: string) => str.split(","))
 				.db.type("TEXT"),
@@ -409,7 +404,6 @@ describe("DDL generation", () => {
 		const ddl = generateDDL(custom, {dialect: "sqlite"});
 
 		expect(ddl).toContain('"tags" TEXT');
-		expect(ddl).toContain("DEFAULT '[]'");
 	});
 
 	test("explicit column type across dialects", () => {
