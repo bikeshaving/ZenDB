@@ -15,6 +15,7 @@ import {
 	type DDLFragment,
 } from "./query.js";
 import {isSQLSymbol, type SQLSymbol} from "./database.js";
+import {ident, makeTemplate} from "./template.js";
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
@@ -260,80 +261,28 @@ function isTemplateStringsArray(value: unknown): value is TemplateStringsArray {
 }
 
 /**
- * Build a TemplateStringsArray from string parts.
- * Used to construct templates programmatically while preserving the .raw property.
- */
-function makeTemplate(parts: string[]): TemplateStringsArray {
-	return Object.assign([...parts], {raw: parts}) as TemplateStringsArray;
-}
-
-/**
- * Split SQL containing ? placeholders into template parts.
- * Respects string literals (won't split on ? inside 'quoted strings').
- */
-function splitSQLOnPlaceholders(sql: string): string[] {
-	const parts: string[] = [];
-	let current = "";
-	let inSingleQuote = false;
-	let inDoubleQuote = false;
-
-	for (let i = 0; i < sql.length; i++) {
-		const char = sql[i];
-
-		// Handle escaped quotes
-		if (char === "'" && !inDoubleQuote) {
-			if (sql[i + 1] === "'") {
-				current += "''";
-				i++;
-				continue;
-			}
-			inSingleQuote = !inSingleQuote;
-		} else if (char === '"' && !inSingleQuote) {
-			if (sql[i + 1] === '"') {
-				current += '""';
-				i++;
-				continue;
-			}
-			inDoubleQuote = !inDoubleQuote;
-		}
-
-		// Split on ? only outside quotes
-		if (char === "?" && !inSingleQuote && !inDoubleQuote) {
-			parts.push(current);
-			current = "";
-		} else {
-			current += char;
-		}
-	}
-	parts.push(current);
-	return parts;
-}
-
-/**
  * Merge a SQLFragment into strings/values arrays, maintaining the template invariant.
- * Splits fragment.sql on ? and interleaves with fragment.params.
+ * Fragment templates merge naturally without string parsing.
  *
  * @param strings - Mutable string array to append to
  * @param values - Mutable values array to append to
- * @param fragment - Fragment with {sql, params} to merge
+ * @param fragment - Fragment with {strings, values} template format
  * @param suffix - String to append after the fragment
  */
 function mergeFragment(
 	strings: string[],
 	values: unknown[],
-	fragment: {sql: string; params: readonly unknown[]},
+	fragment: {strings: TemplateStringsArray; values: readonly unknown[]},
 	suffix: string,
 ): void {
-	const sqlParts = splitSQLOnPlaceholders(fragment.sql);
+	// Append fragment.strings[0] to last string
+	strings[strings.length - 1] += fragment.strings[0];
 
-	// Merge first part into last string
-	strings[strings.length - 1] += sqlParts[0];
-
-	// Interleave remaining parts with params
-	for (let j = 0; j < fragment.params.length; j++) {
-		strings.push(sqlParts[j + 1]);
-		values.push(fragment.params[j]);
+	// Push remaining fragment strings and all fragment values
+	for (let j = 1; j < fragment.strings.length; j++) {
+		strings.push(fragment.strings[j]);
 	}
+	values.push(...fragment.values);
 
 	// Append suffix
 	strings[strings.length - 1] += suffix;
@@ -522,10 +471,10 @@ function createDbMethods(schema: ZodTypeAny) {
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
 							const fragment = value as unknown as {
-								sql: string;
-								params: readonly unknown[];
+								strings: TemplateStringsArray;
+								values: readonly unknown[];
 							};
-							// Merge fragment properly, splitting on ? to maintain template invariant
+							// Merge fragment template to maintain invariant
 							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
@@ -594,10 +543,10 @@ function createDbMethods(schema: ZodTypeAny) {
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
 							const fragment = value as unknown as {
-								sql: string;
-								params: readonly unknown[];
+								strings: TemplateStringsArray;
+								values: readonly unknown[];
 							};
-							// Merge fragment properly, splitting on ? to maintain template invariant
+							// Merge fragment template to maintain invariant
 							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
@@ -666,10 +615,10 @@ function createDbMethods(schema: ZodTypeAny) {
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
 							const fragment = value as unknown as {
-								sql: string;
-								params: readonly unknown[];
+								strings: TemplateStringsArray;
+								values: readonly unknown[];
 							};
-							// Merge fragment properly, splitting on ? to maintain template invariant
+							// Merge fragment template to maintain invariant
 							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
@@ -873,8 +822,9 @@ const SQL_FRAGMENT = Symbol.for("@b9g/zen:fragment");
 
 interface ColumnFragment {
 	readonly [SQL_FRAGMENT]: true;
-	readonly sql: string;
-	readonly params: readonly unknown[];
+	readonly strings: TemplateStringsArray;
+	readonly values: readonly unknown[];
+	toString(): string;
 }
 
 /**
@@ -1437,20 +1387,6 @@ export function table<T extends Record<string, ZodTypeAny>>(
 /**
  * Create a Table object with all methods. Shared between table() and pick().
  */
-/**
- * Quote an identifier with double quotes (ANSI SQL standard).
- * MySQL users should enable ANSI_QUOTES mode.
- */
-function quoteIdentifier(id: string): string {
-	return `"${id.replace(/"/g, '""')}"`;
-}
-
-/**
- * Create a fully qualified column name: "table"."column"
- */
-function qualifiedColumn(tableName: string, fieldName: string): string {
-	return `${quoteIdentifier(tableName)}.${quoteIdentifier(fieldName)}`;
-}
 
 /**
  * Create a column fragment proxy for Table.cols access.
@@ -1462,10 +1398,15 @@ function createColsProxy(
 	return new Proxy({} as Record<string, ColumnFragment>, {
 		get(_target, prop: string): ColumnFragment | undefined {
 			if (prop in zodShape) {
+				const strings = makeTemplate(["", ".", ""]);
+				const values = [ident(tableName), ident(prop)];
 				return {
 					[SQL_FRAGMENT]: true,
-					sql: `${quoteIdentifier(tableName)}.${quoteIdentifier(prop)}`,
-					params: [],
+					strings,
+					values,
+					toString() {
+						return `ColumnFragment { ${tableName}.${prop} }`;
+					},
 				};
 			}
 			return undefined;
@@ -1505,8 +1446,11 @@ function createTableObject(
 	const primary: ColumnFragment | null = meta.primary
 		? {
 				[SQL_FRAGMENT]: true,
-				sql: `${quoteIdentifier(name)}.${quoteIdentifier(meta.primary)}`,
-				params: [],
+				strings: makeTemplate(["", ".", ""]),
+				values: [ident(name), ident(meta.primary)],
+				toString() {
+					return `ColumnFragment { ${name}.${meta.primary} }`;
+				},
 			}
 		: null;
 
@@ -1555,10 +1499,10 @@ function createTableObject(
 					`Table "${name}" does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
 				);
 			}
-			return createFragment(
-				`${quoteIdentifier(name)}.${quoteIdentifier(softDeleteField)} IS NOT NULL`,
-				[],
-			);
+			return createFragment(makeTemplate(["", ".", " IS NOT NULL"]), [
+				ident(name),
+				ident(softDeleteField),
+			]);
 		},
 
 		in(field: string, values: unknown[]): SQLFragment {
@@ -1571,7 +1515,7 @@ function createTableObject(
 
 			// Handle empty array - return always-false condition
 			if (values.length === 0) {
-				return createFragment("1 = 0", []);
+				return createFragment(makeTemplate(["1 = 0"]), []);
 			}
 
 			// PostgreSQL has a limit of 32767 parameters per query
@@ -1584,11 +1528,18 @@ function createTableObject(
 				);
 			}
 
-			// Generate IN clause with placeholders
-			const placeholders = values.map(() => "?").join(", ");
-			const sql = `${quoteIdentifier(name)}.${quoteIdentifier(field)} IN (${placeholders})`;
+			// Build template: table.field IN (val1, val2, ...)
+			// strings: ["", ".", " IN (", ", ", ..., ")"]
+			// values: [ident(name), ident(field), val1, val2, ...]
+			const strings: string[] = ["", ".", " IN ("];
+			const templateValues: unknown[] = [ident(name), ident(field)];
 
-			return createFragment(sql, values);
+			for (let i = 0; i < values.length; i++) {
+				templateValues.push(values[i]);
+				strings.push(i < values.length - 1 ? ", " : ")");
+			}
+
+			return createFragment(makeTemplate(strings), templateValues);
 		},
 
 		pick(...fields: any[]): PartialTable<any> {
@@ -1674,7 +1625,10 @@ function createTableObject(
 			fieldName: N,
 			fieldType: V,
 		) {
-			return (stringsOrValue: TemplateStringsArray, ...templateValues: unknown[]) => {
+			return (
+				stringsOrValue: TemplateStringsArray,
+				...templateValues: unknown[]
+			) => {
 				// Build template by flattening any SQL fragments
 				const strings: string[] = [];
 				const values: unknown[] = [];
@@ -1689,10 +1643,10 @@ function createTableObject(
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
 							const fragment = value as unknown as {
-								sql: string;
-								params: readonly unknown[];
+								strings: TemplateStringsArray;
+								values: readonly unknown[];
 							};
-							// Merge fragment properly, splitting on ? to maintain template invariant
+							// Merge fragment template to maintain invariant
 							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
@@ -1745,26 +1699,26 @@ function createTableObject(
 		},
 
 		set(values: Record<string, unknown>): SQLFragment {
-			const entries = Object.entries(values);
+			const entries = Object.entries(values).filter(([, v]) => v !== undefined);
 			if (entries.length === 0) {
-				throw new Error("set() requires at least one field");
-			}
-
-			const parts: string[] = [];
-			const params: unknown[] = [];
-
-			for (const [field, value] of entries) {
-				if (value === undefined) continue;
-
-				parts.push(`${quoteIdentifier(field)} = ?`);
-				params.push(value);
-			}
-
-			if (parts.length === 0) {
 				throw new Error("set() requires at least one non-undefined field");
 			}
 
-			return createFragment(parts.join(", "), params);
+			// Build template: col1 = val1, col2 = val2, ...
+			// strings: ["", " = ", ", ", " = ", ""]
+			// values: [ident(col1), val1, ident(col2), val2]
+			const strings: string[] = [""];
+			const templateValues: unknown[] = [];
+
+			for (let i = 0; i < entries.length; i++) {
+				const [field, value] = entries[i];
+				templateValues.push(ident(field));
+				strings.push(" = ");
+				templateValues.push(value);
+				strings.push(i < entries.length - 1 ? ", " : "");
+			}
+
+			return createFragment(makeTemplate(strings), templateValues);
 		},
 
 		on(field: string): SQLFragment {
@@ -1776,10 +1730,15 @@ function createTableObject(
 				);
 			}
 
-			const refColumn = qualifiedColumn(ref.table.name, ref.referencedField);
-			const fkColumn = qualifiedColumn(name, field);
-
-			return createFragment(`${refColumn} = ${fkColumn}`, []);
+			// Build template: ref_table.ref_field = this_table.fk_field
+			// strings: ["", ".", " = ", ".", ""]
+			// values: [ident(ref.table.name), ident(ref.referencedField), ident(name), ident(field)]
+			return createFragment(makeTemplate(["", ".", " = ", ".", ""]), [
+				ident(ref.table.name),
+				ident(ref.referencedField),
+				ident(name),
+				ident(field),
+			]);
 		},
 
 		ddl(options?: {ifNotExists?: boolean}): DDLFragment {
@@ -1842,32 +1801,40 @@ function createTableObject(
 			}
 
 			const partialSchema = schema.partial();
-			const params: unknown[] = [];
-			const tuples: string[] = [];
+			const strings: string[] = ["("];
+			const templateValues: unknown[] = [];
 
-			for (const row of rows) {
+			// Add column identifiers: (col1, col2, col3) VALUES
+			for (let i = 0; i < columns.length; i++) {
+				templateValues.push(ident(columns[i]));
+				strings.push(i < columns.length - 1 ? ", " : ") VALUES ");
+			}
+
+			// Add value tuples: (val1, val2, val3), (val4, val5, val6)
+			for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+				const row = rows[rowIdx];
 				const validated = validateWithStandardSchema(partialSchema, row);
-				const rowPlaceholders: string[] = [];
 
-				for (const col of columns) {
+				strings[strings.length - 1] += "(";
+
+				for (let colIdx = 0; colIdx < columns.length; colIdx++) {
+					const col = columns[colIdx];
 					if (!(col in row)) {
 						throw new Error(
 							`All rows must have the same columns. Row is missing column "${col}"`,
 						);
 					}
-					rowPlaceholders.push("?");
-					params.push((validated as Record<string, unknown>)[col]);
+					templateValues.push((validated as Record<string, unknown>)[col]);
+					strings.push(colIdx < columns.length - 1 ? ", " : ")");
 				}
 
-				tuples.push(`(${rowPlaceholders.join(", ")})`);
+				// Add comma between rows, or empty string for last row
+				if (rowIdx < rows.length - 1) {
+					strings[strings.length - 1] += ", ";
+				}
 			}
 
-			// Include column list and VALUES keyword
-			const columnList = columns.map((c) => quoteIdentifier(c)).join(", ");
-			return createFragment(
-				`(${columnList}) VALUES ${tuples.join(", ")}`,
-				params,
-			);
+			return createFragment(makeTemplate(strings), templateValues);
 		},
 	};
 

@@ -1,6 +1,7 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, isTable, extendZod} from "./table.js";
+import {renderFragment} from "./query.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -72,8 +73,9 @@ describe("table", () => {
 
 		expect(users.meta.primary).toBe("id");
 		expect(users.primary).not.toBeNull();
-		expect(users.primary!.sql).toBe('"users"."id"');
-		expect(users.primary!.params).toEqual([]);
+		const {sql, params} = renderFragment(users.primary!);
+		expect(sql).toBe('"users"."id"');
+		expect(params).toEqual([]);
 	});
 
 	test("handles optional and nullable fields", () => {
@@ -457,9 +459,11 @@ describe("Table.derive()", () => {
 
 		const expr = (PostsWithCount.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("likeCount");
-		// Template format: strings: ['COUNT("likes"."id")'], values: []
-		expect(Array.from(expr.strings)).toEqual(['COUNT("likes"."id")']);
-		expect(expr.values).toEqual([]);
+		// Template format with ident markers for table.column
+		expect(Array.from(expr.strings)).toEqual(["COUNT(", ".", ")"]);
+		expect(expr.values).toHaveLength(2);
+		expect(expr.values[0]).toHaveProperty("name", "likes");
+		expect(expr.values[1]).toHaveProperty("name", "id");
 	});
 
 	test("tracks derived fields in meta.derivedFields", () => {
@@ -512,10 +516,12 @@ describe("Table.derive()", () => {
 		const PostsWithCount = Posts.derive("likeCount", z.number())`COUNT(*)`;
 
 		// Original fields still work
-		expect(PostsWithCount.cols.id.sql).toBe('"posts"."id"');
+		expect(renderFragment(PostsWithCount.cols.id).sql).toBe('"posts"."id"');
 
 		// Derived fields should also work via cols proxy
-		expect(PostsWithCount.cols.likeCount.sql).toBe('"posts"."likeCount"');
+		expect(renderFragment(PostsWithCount.cols.likeCount).sql).toBe(
+			'"posts"."likeCount"',
+		);
 	});
 
 	test("preserves base table primary key", () => {
@@ -659,23 +665,25 @@ describe("Table.cols", () => {
 	});
 
 	test("returns SQL fragment for column", () => {
-		const fragment = Users.cols.id;
+		const {sql, params} = renderFragment(Users.cols.id);
 
-		expect(fragment.sql).toBe('"users"."id"');
-		expect(fragment.params).toEqual([]);
+		expect(sql).toBe('"users"."id"');
+		expect(params).toEqual([]);
 	});
 
 	test("quotes table and column names", () => {
-		expect(Users.cols.email.sql).toBe('"users"."email"');
-		expect(Users.cols.name.sql).toBe('"users"."name"');
-		expect(Users.cols.createdAt.sql).toBe('"users"."createdAt"');
+		expect(renderFragment(Users.cols.email).sql).toBe('"users"."email"');
+		expect(renderFragment(Users.cols.name).sql).toBe('"users"."name"');
+		expect(renderFragment(Users.cols.createdAt).sql).toBe(
+			'"users"."createdAt"',
+		);
 	});
 
 	test("works with picked tables", () => {
 		const UserSummary = Users.pick("id", "name");
 
-		expect(UserSummary.cols.id.sql).toBe('"users"."id"');
-		expect(UserSummary.cols.name.sql).toBe('"users"."name"');
+		expect(renderFragment(UserSummary.cols.id).sql).toBe('"users"."id"');
+		expect(renderFragment(UserSummary.cols.name).sql).toBe('"users"."name"');
 	});
 
 	test("returns undefined for non-existent columns", () => {
@@ -856,12 +864,12 @@ describe("Schema marker validation", () => {
 		});
 		const insertedMeta = TestTable1.meta.fields.computed.inserted;
 		expect(insertedMeta?.type).toBe("sql");
-		// Column reference is inlined: "users"."score" + 1
-		// strings: ['"users"."score" + 1'], values: []
-		expect(Array.from(insertedMeta?.strings ?? [])).toEqual([
-			'"users"."score" + 1',
-		]);
-		expect(insertedMeta?.values).toEqual([]);
+		// Column reference is merged: template parts with ident markers
+		// strings: ['', '.', ' + 1'], values: [ident('users'), ident('score')]
+		expect(Array.from(insertedMeta?.strings ?? [])).toEqual(["", ".", " + 1"]);
+		expect(insertedMeta?.values).toHaveLength(2);
+		expect(insertedMeta?.values?.[0]).toHaveProperty("name", "users");
+		expect(insertedMeta?.values?.[1]).toHaveProperty("name", "score");
 
 		// Test updated() with SQL fragment
 		const TestTable2 = table("test2", {
@@ -870,12 +878,16 @@ describe("Schema marker validation", () => {
 		});
 		const updatedMeta = TestTable2.meta.fields.computed.updated;
 		expect(updatedMeta?.type).toBe("sql");
-		// Fragment is inlined: COALESCE("users"."score", 0) * 2
-		// strings: ['COALESCE("users"."score", 0) * 2'], values: []
+		// Fragment is merged: template parts with ident markers
+		// strings: ['COALESCE(', '.', ', 0) * 2'], values: [ident('users'), ident('score')]
 		expect(Array.from(updatedMeta?.strings ?? [])).toEqual([
-			'COALESCE("users"."score", 0) * 2',
+			"COALESCE(",
+			".",
+			", 0) * 2",
 		]);
-		expect(updatedMeta?.values).toEqual([]);
+		expect(updatedMeta?.values).toHaveLength(2);
+		expect(updatedMeta?.values?.[0]).toHaveProperty("name", "users");
+		expect(updatedMeta?.values?.[1]).toHaveProperty("name", "score");
 	});
 
 	test("encode() throws when combined with inserted()", () => {

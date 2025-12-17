@@ -46,13 +46,20 @@ export {
 } from "./impl/table.js";
 
 export {
-	// SQL dialect
+	// SQL dialect (for test utilities and DDL)
 	type SQLDialect,
 	// SQL fragments
 	type SQLFragment,
 	// DDL fragments
 	type DDLFragment,
 } from "./impl/query.js";
+
+export {
+	// SQL identifiers (table/column names quoted by drivers)
+	ident,
+	isSQLIdentifier,
+	type SQLIdentifier,
+} from "./impl/template.js";
 
 export {
 	// Database wrapper
@@ -66,11 +73,6 @@ export {
 	NOW,
 	isSQLSymbol,
 	type SQLSymbol,
-
-	// SQL identifiers (table/column names quoted by drivers)
-	ident,
-	isSQLIdentifier,
-	type SQLIdentifier,
 } from "./impl/database.js";
 
 export {

@@ -1,7 +1,7 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
-import {parseTemplate} from "./query.js";
+import {parseTemplate, renderFragment} from "./query.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -25,31 +25,37 @@ const Posts = table("posts", {
 
 describe("Table.set()", () => {
 	test("single field with quoted name", () => {
-		const fragment = Posts.set({title: "New Title"});
-		expect(fragment.sql).toBe('"title" = ?');
-		expect(fragment.params).toEqual(["New Title"]);
+		const {sql, params} = renderFragment(Posts.set({title: "New Title"}));
+		expect(sql).toBe('"title" = ?');
+		expect(params).toEqual(["New Title"]);
 	});
 
 	test("multiple fields", () => {
-		const fragment = Posts.set({title: "New Title", published: true});
-		expect(fragment.sql).toBe('"title" = ?, "published" = ?');
-		expect(fragment.params).toEqual(["New Title", true]);
+		const {sql, params} = renderFragment(
+			Posts.set({title: "New Title", published: true}),
+		);
+		expect(sql).toBe('"title" = ?, "published" = ?');
+		expect(params).toEqual(["New Title", true]);
 	});
 
 	test("quotes field names", () => {
-		const fragment = Posts.set({viewCount: 42});
-		expect(fragment.sql).toBe('"viewCount" = ?');
-		expect(fragment.params).toEqual([42]);
+		const {sql, params} = renderFragment(Posts.set({viewCount: 42}));
+		expect(sql).toBe('"viewCount" = ?');
+		expect(params).toEqual([42]);
 	});
 
 	test("skips undefined values", () => {
-		const fragment = Posts.set({title: "New", published: undefined});
-		expect(fragment.sql).toBe('"title" = ?');
-		expect(fragment.params).toEqual(["New"]);
+		const {sql, params} = renderFragment(
+			Posts.set({title: "New", published: undefined}),
+		);
+		expect(sql).toBe('"title" = ?');
+		expect(params).toEqual(["New"]);
 	});
 
 	test("throws on empty object", () => {
-		expect(() => Posts.set({})).toThrow("set() requires at least one field");
+		expect(() => Posts.set({})).toThrow(
+			"set() requires at least one non-undefined field",
+		);
 	});
 
 	test("throws when all values undefined", () => {
@@ -61,9 +67,9 @@ describe("Table.set()", () => {
 
 describe("Table.on()", () => {
 	test("generates FK equality with qualified names", () => {
-		const fragment = Posts.on("authorId");
-		expect(fragment.sql).toBe('"users"."id" = "posts"."authorId"');
-		expect(fragment.params).toEqual([]);
+		const {sql, params} = renderFragment(Posts.on("authorId"));
+		expect(sql).toBe('"users"."id" = "posts"."authorId"');
+		expect(params).toEqual([]);
 	});
 
 	test("throws for non-FK field", () => {
@@ -79,9 +85,11 @@ describe("Table.values()", () => {
 	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
 
 	test("single row with inferred columns", () => {
-		const fragment = Posts.values([{id: uuid1, title: "Hello"}]);
-		expect(fragment.sql).toBe('("id", "title") VALUES (?, ?)');
-		expect(fragment.params).toEqual([uuid1, "Hello"]);
+		const {sql, params} = renderFragment(
+			Posts.values([{id: uuid1, title: "Hello"}]),
+		);
+		expect(sql).toBe('("id", "title") VALUES (?, ?)');
+		expect(params).toEqual([uuid1, "Hello"]);
 	});
 
 	test("multiple rows", () => {
@@ -90,23 +98,18 @@ describe("Table.values()", () => {
 			{id: uuid2, title: "Second"},
 			{id: uuid3, title: "Third"},
 		];
-		const fragment = Posts.values(rows);
-		expect(fragment.sql).toBe('("id", "title") VALUES (?, ?), (?, ?), (?, ?)');
-		expect(fragment.params).toEqual([
-			uuid1,
-			"First",
-			uuid2,
-			"Second",
-			uuid3,
-			"Third",
-		]);
+		const {sql, params} = renderFragment(Posts.values(rows));
+		expect(sql).toBe('("id", "title") VALUES (?, ?), (?, ?), (?, ?)');
+		expect(params).toEqual([uuid1, "First", uuid2, "Second", uuid3, "Third"]);
 	});
 
 	test("columns inferred from first row keys", () => {
-		const fragment = Posts.values([{title: "Hello", id: uuid1}]);
-		expect(fragment.sql).toBe('("title", "id") VALUES (?, ?)');
+		const {sql, params} = renderFragment(
+			Posts.values([{title: "Hello", id: uuid1}]),
+		);
+		expect(sql).toBe('("title", "id") VALUES (?, ?)');
 		// Order based on Object.keys() of first row
-		expect(fragment.params).toEqual(["Hello", uuid1]);
+		expect(params).toEqual(["Hello", uuid1]);
 	});
 
 	test("validates rows against schema", () => {
@@ -186,27 +189,29 @@ describe("Table.in()", () => {
 	const uuid3 = "550e8400-e29b-41d4-a716-446655440003";
 
 	test("generates IN clause with single value", () => {
-		const fragment = Posts.in("id", [uuid1]);
-		expect(fragment.sql).toBe('"posts"."id" IN (?)');
-		expect(fragment.params).toEqual([uuid1]);
+		const {sql, params} = renderFragment(Posts.in("id", [uuid1]));
+		expect(sql).toBe('"posts"."id" IN (?)');
+		expect(params).toEqual([uuid1]);
 	});
 
 	test("generates IN clause with multiple values", () => {
-		const fragment = Posts.in("id", [uuid1, uuid2, uuid3]);
-		expect(fragment.sql).toBe('"posts"."id" IN (?, ?, ?)');
-		expect(fragment.params).toEqual([uuid1, uuid2, uuid3]);
+		const {sql, params} = renderFragment(Posts.in("id", [uuid1, uuid2, uuid3]));
+		expect(sql).toBe('"posts"."id" IN (?, ?, ?)');
+		expect(params).toEqual([uuid1, uuid2, uuid3]);
 	});
 
 	test("handles empty array with always-false condition", () => {
-		const fragment = Posts.in("id", []);
-		expect(fragment.sql).toBe("1 = 0");
-		expect(fragment.params).toEqual([]);
+		const {sql, params} = renderFragment(Posts.in("id", []));
+		expect(sql).toBe("1 = 0");
+		expect(params).toEqual([]);
 	});
 
 	test("works with different field types", () => {
-		const fragment = Posts.in("title", ["First", "Second"]);
-		expect(fragment.sql).toBe('"posts"."title" IN (?, ?)');
-		expect(fragment.params).toEqual(["First", "Second"]);
+		const {sql, params} = renderFragment(
+			Posts.in("title", ["First", "Second"]),
+		);
+		expect(sql).toBe('"posts"."title" IN (?, ?)');
+		expect(params).toEqual(["First", "Second"]);
 	});
 
 	test("throws on invalid field", () => {

@@ -14,6 +14,12 @@ import {
 	isSQLFragment,
 	type SQLFragment,
 } from "./query.js";
+import {
+	ident,
+	isSQLIdentifier,
+	makeTemplate,
+	type SQLIdentifier,
+} from "./template.js";
 
 // ============================================================================
 // DB Expressions - Runtime values evaluated by the database
@@ -87,43 +93,6 @@ function resolveSQLSymbol(sym: symbol): string {
 	throw new Error(`Unknown SQL symbol: ${String(sym)}`);
 }
 
-// ============================================================================
-// SQL Identifiers - Table/column names quoted by drivers
-// ============================================================================
-
-const SQL_IDENT = Symbol.for("@b9g/zen:ident");
-
-/**
- * SQL identifier (table name, column name) to be quoted by drivers.
- *
- * Database.ts passes these through values; drivers quote them per dialect:
- * - MySQL: backticks (`name`)
- * - PostgreSQL/SQLite: double quotes ("name")
- */
-export interface SQLIdentifier {
-	readonly [SQL_IDENT]: true;
-	readonly name: string;
-}
-
-/**
- * Create an SQL identifier marker.
- * Drivers will quote this appropriately for their dialect.
- */
-export function ident(name: string): SQLIdentifier {
-	return {[SQL_IDENT]: true, name};
-}
-
-/**
- * Check if a value is an SQL identifier marker.
- */
-export function isSQLIdentifier(value: unknown): value is SQLIdentifier {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		SQL_IDENT in value &&
-		(value as any)[SQL_IDENT] === true
-	);
-}
 
 /**
  * Separate DB expressions and SQL symbols from regular data values.
@@ -446,15 +415,6 @@ export interface Driver {
 // ============================================================================
 
 /**
- * Build a TemplateStringsArray from string parts.
- * Used to construct queries programmatically while still using the driver's
- * template-based interface.
- */
-function makeTemplate(parts: string[]): TemplateStringsArray {
-	return Object.assign([...parts], {raw: parts}) as TemplateStringsArray;
-}
-
-/**
  * Merge an expression's template into a base template.
  * Operates on mutable string[] and values[], maintains invariant:
  *   strings.length === values.length + 1
@@ -479,7 +439,6 @@ function mergeExpression(
 	// Push expr values
 	baseValues.push(...expr.values);
 }
-
 
 /**
  * Build INSERT template: INSERT INTO <table> (<col1>, <col2>) VALUES (<val1>, <val2>)
@@ -733,12 +692,7 @@ function buildSelectByPkParts(
 	id: unknown,
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	return {
-		strings: makeTemplate([
-			"SELECT * FROM ",
-			" WHERE ",
-			" = ",
-			"",
-		]),
+		strings: makeTemplate(["SELECT * FROM ", " WHERE ", " = ", ""]),
 		values: [ident(tableName), ident(pk), id],
 	};
 }
@@ -774,12 +728,7 @@ function buildDeleteByPkParts(
 	id: unknown,
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	return {
-		strings: makeTemplate([
-			"DELETE FROM ",
-			" WHERE ",
-			" = ",
-			"",
-		]),
+		strings: makeTemplate(["DELETE FROM ", " WHERE ", " = ", ""]),
 		values: [ident(tableName), ident(pk), id],
 	};
 }
@@ -825,48 +774,6 @@ function appendReturning(parts: {
  * Expand SQLFragment objects within template values.
  * Returns flattened strings and values arrays.
  */
-/**
- * Split SQL containing ? placeholders into template parts.
- * Respects string literals (won't split on ? inside 'quoted strings').
- */
-function splitSQLOnPlaceholders(sql: string): string[] {
-	const parts: string[] = [];
-	let current = "";
-	let inSingleQuote = false;
-	let inDoubleQuote = false;
-
-	for (let i = 0; i < sql.length; i++) {
-		const char = sql[i];
-
-		// Handle escaped quotes
-		if (char === "'" && !inDoubleQuote) {
-			if (sql[i + 1] === "'") {
-				current += "''";
-				i++;
-				continue;
-			}
-			inSingleQuote = !inSingleQuote;
-		} else if (char === '"' && !inSingleQuote) {
-			if (sql[i + 1] === '"') {
-				current += '""';
-				i++;
-				continue;
-			}
-			inDoubleQuote = !inDoubleQuote;
-		}
-
-		// Split on ? only outside quotes
-		if (char === "?" && !inSingleQuote && !inDoubleQuote) {
-			parts.push(current);
-			current = "";
-		} else {
-			current += char;
-		}
-	}
-	parts.push(current);
-	return parts;
-}
-
 function expandFragments(
 	strings: TemplateStringsArray,
 	values: unknown[],
@@ -877,19 +784,17 @@ function expandFragments(
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
 		if (isSQLFragment(value)) {
-			// Expand fragment: split its SQL on ? and interleave with params
+			// Expand fragment: merge its template parts directly
 			const fragment = value as SQLFragment;
-			const sqlParts = splitSQLOnPlaceholders(fragment.sql);
 
-			// sqlParts.length should be fragment.params.length + 1
-			// Merge first part into last string
-			newStrings[newStrings.length - 1] += sqlParts[0];
+			// Append fragment.strings[0] to last newString
+			newStrings[newStrings.length - 1] += fragment.strings[0];
 
-			// Interleave remaining parts with params
-			for (let j = 0; j < fragment.params.length; j++) {
-				newStrings.push(sqlParts[j + 1]);
-				newValues.push(fragment.params[j]);
+			// Push remaining fragment strings and all fragment values
+			for (let j = 1; j < fragment.strings.length; j++) {
+				newStrings.push(fragment.strings[j]);
 			}
+			newValues.push(...fragment.values);
 
 			// Append the next template string part
 			newStrings[newStrings.length - 1] += strings[i + 1];

@@ -7,7 +7,9 @@ import {
 	buildQuery,
 	createQuery,
 	rawQuery,
+	createFragment,
 } from "./query.js";
+import {makeTemplate} from "./template.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -352,11 +354,9 @@ describe("buildSelectColumns with derived tables", () => {
 
 describe("SQL fragment placeholder handling", () => {
 	test("preserves literal ? inside single-quoted strings", () => {
-		const {createFragment} = require("./query.js");
-
-		// SQL with a literal '?' in a string literal - should not be replaced
+		// SQL with a literal '?' in a string literal - template format
 		const fragment = createFragment(
-			`"users"."name" = '?' AND "users"."email" = ?`,
+			makeTemplate([`"users"."name" = '?' AND "users"."email" = `, ""]),
 			["test@example.com"],
 		);
 
@@ -371,10 +371,9 @@ describe("SQL fragment placeholder handling", () => {
 	});
 
 	test("fragment with multiple params replaces placeholders in order", () => {
-		const {createFragment} = require("./query.js");
-
+		// Template format: strings around placeholders
 		const fragment = createFragment(
-			'"posts"."title" = ? AND "posts"."body" LIKE ?',
+			makeTemplate(['"posts"."title" = ', ' AND "posts"."body" LIKE ', ""]),
 			["Hello", "%test%"],
 		);
 
@@ -389,10 +388,10 @@ describe("SQL fragment placeholder handling", () => {
 	});
 
 	test("preserves literal ? inside double-quoted identifiers", () => {
-		const {createFragment} = require("./query.js");
-
-		// Unusual but valid: column name containing ?
-		const fragment = createFragment('"weird?col" = ?', ["value"]);
+		// Unusual but valid: column name containing ? - new template format
+		const fragment = createFragment(makeTemplate(['"weird?col" = ', ""]), [
+			"value",
+		]);
 
 		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [fragment], "postgresql");
@@ -402,11 +401,10 @@ describe("SQL fragment placeholder handling", () => {
 	});
 
 	test("handles escaped single quotes", () => {
-		const {createFragment} = require("./query.js");
-
 		// SQL with escaped single quote: WHERE name = 'O''Brien' AND id = ?
+		// New template format: strings with value placeholder
 		const fragment = createFragment(
-			`"users"."name" = 'O''Brien' AND "users"."id" = ?`,
+			makeTemplate([`"users"."name" = 'O''Brien' AND "users"."id" = `, ""]),
 			["123"],
 		);
 
@@ -420,10 +418,10 @@ describe("SQL fragment placeholder handling", () => {
 	});
 
 	test("handles escaped double quotes", () => {
-		const {createFragment} = require("./query.js");
-
-		// Column with escaped double quote in name
-		const fragment = createFragment(`"weird""col" = ?`, ["value"]);
+		// Column with escaped double quote in name - new template format
+		const fragment = createFragment(makeTemplate([`"weird""col" = `, ""]), [
+			"value",
+		]);
 
 		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [fragment], "postgresql");
@@ -433,10 +431,11 @@ describe("SQL fragment placeholder handling", () => {
 	});
 
 	test("handles multiple ? in string literals", () => {
-		const {createFragment} = require("./query.js");
-
-		// Multiple literal ? characters in a string
-		const fragment = createFragment(`"col" = '???' AND "other" = ?`, ["value"]);
+		// Multiple literal ? characters in a string - new template format
+		const fragment = createFragment(
+			makeTemplate([`"col" = '???' AND "other" = `, ""]),
+			["value"],
+		);
 
 		const strings = ["WHERE ", ""] as unknown as TemplateStringsArray;
 		const result = parseTemplate(strings, [fragment], "postgresql");

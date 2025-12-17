@@ -6,6 +6,7 @@ import {test, expect, describe} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
 import {Database, type Driver} from "./database.js";
+import {renderFragment} from "./query.js";
 
 extendZod(z);
 
@@ -53,9 +54,9 @@ describe("Issue #3: Empty array in in() clause", () => {
 	});
 
 	test("in() with empty array returns 1 = 0 (always false)", () => {
-		const fragment = Users.in("id", []);
-		expect(fragment.sql).toBe("1 = 0");
-		expect(fragment.params).toEqual([]);
+		const {sql, params} = renderFragment(Users.in("id", []));
+		expect(sql).toBe("1 = 0");
+		expect(params).toEqual([]);
 	});
 });
 

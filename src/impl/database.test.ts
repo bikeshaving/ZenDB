@@ -1,13 +1,9 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
-import {
-	Database,
-	NOW,
-	isSQLSymbol,
-	isSQLIdentifier,
-	type Driver,
-} from "./database.js";
+import {Database, NOW, isSQLSymbol, type Driver} from "./database.js";
+import {isSQLIdentifier} from "./template.js";
+import {renderFragment} from "./query.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -200,7 +196,11 @@ describe("Database", () => {
 			expect(sql).toContain('"id", "email", "name"');
 			expect(sql).toContain("VALUES (?, ?, ?)");
 			expect(sql).toContain("RETURNING *");
-			expect(getParams(values)).toEqual([USER_ID, "alice@example.com", "Alice"]);
+			expect(getParams(values)).toEqual([
+				USER_ID,
+				"alice@example.com",
+				"Alice",
+			]);
 		});
 
 		test("validates through Zod schema", async () => {
@@ -899,10 +899,11 @@ describe("Soft Delete", () => {
 	describe("Table.deleted()", () => {
 		test("generates SQL fragment for soft delete check", () => {
 			const fragment = SoftDeleteUsers.deleted();
-			expect(fragment).toHaveProperty("sql");
-			expect(fragment).toHaveProperty("params");
-			expect(fragment.sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
-			expect(fragment.params).toEqual([]);
+			expect(fragment).toHaveProperty("strings");
+			expect(fragment).toHaveProperty("values");
+			const {sql, params} = renderFragment(fragment);
+			expect(sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
+			expect(params).toEqual([]);
 		});
 
 		test("throws if table has no soft delete field", () => {
@@ -1087,7 +1088,9 @@ describe("Soft Delete", () => {
 		test("deleted() works on partial table with soft delete field", () => {
 			const PartialUsers = SoftDeleteUsers.pick("id", "name", "deletedAt");
 			const fragment = PartialUsers.deleted();
-			expect(fragment.sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
+			expect(renderFragment(fragment).sql).toBe(
+				'"soft_delete_users"."deletedAt" IS NOT NULL',
+			);
 		});
 
 		test("deleted() throws on partial table without soft delete field", () => {

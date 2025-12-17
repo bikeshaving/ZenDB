@@ -8,7 +8,12 @@
  */
 
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError, isSQLSymbol, isSQLIdentifier, NOW} from "./zen.js";
+import {
+	ConstraintViolationError,
+	isSQLSymbol,
+	isSQLIdentifier,
+	NOW,
+} from "./zen.js";
 import Database from "better-sqlite3";
 
 /**

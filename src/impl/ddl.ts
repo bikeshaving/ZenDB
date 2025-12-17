@@ -7,6 +7,7 @@
 
 import {z} from "zod";
 import type {Table} from "./table.js";
+import {ident, isSQLIdentifier, makeTemplate} from "./template.js";
 
 // ============================================================================
 // Types
@@ -19,14 +20,42 @@ export interface DDLOptions {
 	ifNotExists?: boolean;
 }
 
-interface ColumnDef {
-	name: string;
-	sqlType: string;
-	nullable: boolean;
-	primaryKey: boolean;
-	unique: boolean;
-	autoIncrement: boolean;
-	defaultValue?: string;
+// ============================================================================
+// DDL Rendering (internal)
+// ============================================================================
+
+/**
+ * Quote an identifier based on dialect.
+ */
+function quoteIdent(name: string, dialect: SQLDialect): string {
+	if (dialect === "mysql") {
+		return `\`${name.replace(/`/g, "``")}\``;
+	}
+	return `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Render a DDL template to a SQL string.
+ * DDL templates only contain identifiers (no parameter placeholders).
+ */
+function renderDDL(
+	strings: TemplateStringsArray,
+	values: readonly unknown[],
+	dialect: SQLDialect,
+): string {
+	let sql = "";
+	for (let i = 0; i < strings.length; i++) {
+		sql += strings[i];
+		if (i < values.length) {
+			const value = values[i];
+			if (isSQLIdentifier(value)) {
+				sql += quoteIdent(value.name, dialect);
+			} else {
+				throw new Error(`Unexpected value in DDL template: ${value}`);
+			}
+		}
+	}
+	return sql;
 }
 
 // ============================================================================
@@ -207,15 +236,6 @@ function mapZodToSQL(
 // DDL Generation
 // ============================================================================
 
-function quoteIdent(name: string, dialect: SQLDialect): string {
-	if (dialect === "mysql") {
-		// MySQL: backticks, doubled to escape
-		return `\`${name.replace(/`/g, "``")}\``;
-	}
-	// PostgreSQL and SQLite: double quotes, doubled to escape
-	return `"${name.replace(/"/g, '""')}"`;
-}
-
 /**
  * Generate a single column definition for ALTER TABLE ADD COLUMN.
  * @internal Used by Table.ensureColumn()
@@ -226,32 +246,13 @@ export function generateColumnDDL(
 	fieldMeta: Record<string, any>,
 	dialect: SQLDialect = "sqlite",
 ): string {
-	const {isOptional, isNullable, hasDefault} = unwrapType(zodType);
-	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(
+	const template = generateColumnDDLTemplate(
+		fieldName,
 		zodType,
-		dialect,
 		fieldMeta,
+		dialect,
 	);
-
-	let def = `${quoteIdent(fieldName, dialect)} ${sqlType}`;
-
-	const nullable = isOptional || isNullable || hasDefault;
-	if (!nullable) {
-		def += " NOT NULL";
-	}
-
-	if (sqlDefault !== undefined) {
-		def += ` DEFAULT ${sqlDefault}`;
-	}
-
-	// Primary key handled at table level for ALTER TABLE
-	// SQLite doesn't allow adding PRIMARY KEY via ALTER TABLE anyway
-
-	if (fieldMeta.unique === true) {
-		def += " UNIQUE";
-	}
-
-	return def;
+	return renderDDL(template.strings, template.values, dialect);
 }
 
 /**
@@ -261,12 +262,94 @@ export function generateDDL<T extends Table<any>>(
 	table: T,
 	options: DDLOptions = {},
 ): string {
+	const {dialect = "sqlite"} = options;
+	const template = generateDDLTemplate(table, options);
+	return renderDDL(template.strings, template.values, dialect);
+}
+
+/**
+ * Convenience function for generating DDL.
+ */
+export function ddl(table: Table<any>, dialect: SQLDialect = "sqlite"): string {
+	return generateDDL(table, {dialect});
+}
+
+// ============================================================================
+// Template-based DDL (defers quoting to drivers)
+// ============================================================================
+
+/**
+ * Generate a single column definition as a template with ident markers.
+ * @internal Used by transformDDLFragmentToTemplate
+ */
+export function generateColumnDDLTemplate(
+	fieldName: string,
+	zodType: z.ZodType,
+	fieldMeta: Record<string, any>,
+	dialect: SQLDialect = "sqlite",
+): {strings: TemplateStringsArray; values: unknown[]} {
+	const {isOptional, isNullable, hasDefault} = unwrapType(zodType);
+	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(
+		zodType,
+		dialect,
+		fieldMeta,
+	);
+
+	// Build: ${ident(col)} TYPE [NOT NULL] [DEFAULT ...]
+	const strings: string[] = [""];
+	const values: unknown[] = [ident(fieldName)];
+
+	let suffix = ` ${sqlType}`;
+	const nullable = isOptional || isNullable || hasDefault;
+	if (!nullable) {
+		suffix += " NOT NULL";
+	}
+	if (sqlDefault !== undefined) {
+		suffix += ` DEFAULT ${sqlDefault}`;
+	}
+	if (fieldMeta.unique === true) {
+		suffix += " UNIQUE";
+	}
+	strings.push(suffix);
+
+	return {strings: makeTemplate(strings), values};
+}
+
+/**
+ * Generate CREATE TABLE DDL as a template with ident markers.
+ * @internal Used by transformDDLFragmentToTemplate
+ */
+export function generateDDLTemplate<T extends Table<any>>(
+	table: T,
+	options: DDLOptions = {},
+): {strings: TemplateStringsArray; values: unknown[]} {
 	const {dialect = "sqlite", ifNotExists = true} = options;
 	const shape = table.schema.shape;
 	const meta = table.meta;
 
-	const columns: ColumnDef[] = [];
+	// We'll build a template that looks like:
+	// CREATE TABLE [IF NOT EXISTS] ${tableName} (
+	//   ${col1} TYPE...,
+	//   ${col2} TYPE...,
+	//   PRIMARY KEY (${pk}),
+	//   FOREIGN KEY (${fk}) REFERENCES ${refTable}(${refCol}),
+	//   ...
+	// );
+	// CREATE INDEX IF NOT EXISTS ${idx} ON ${table} (${col});
 
+	const strings: string[] = [];
+	const values: unknown[] = [];
+
+	// Start: CREATE TABLE [IF NOT EXISTS] ${tableName} (
+	const exists = ifNotExists ? "IF NOT EXISTS " : "";
+	strings.push(`CREATE TABLE ${exists}`);
+	values.push(ident(table.name));
+	strings.push(" (\n  ");
+
+	// Collect all column definitions and constraints as template parts
+	let needsComma = false;
+
+	// Process columns
 	for (const [name, zodType] of Object.entries(shape)) {
 		const fieldMeta = meta.fields[name] || {};
 		const {isOptional, isNullable, hasDefault} = unwrapType(
@@ -278,134 +361,170 @@ export function generateDDL<T extends Table<any>>(
 			fieldMeta,
 		);
 
-		const column: ColumnDef = {
-			name,
-			sqlType,
-			nullable: isOptional || isNullable || hasDefault,
-			primaryKey: fieldMeta.primaryKey === true,
-			unique: fieldMeta.unique === true,
-			autoIncrement: fieldMeta.autoIncrement === true,
-			defaultValue: sqlDefault,
-		};
+		if (needsComma) {
+			strings[strings.length - 1] += ",\n  ";
+		}
+		needsComma = true;
 
-		columns.push(column);
-	}
+		// Column: ${name} TYPE [modifiers]
+		values.push(ident(name));
+		let colDef = ` ${sqlType}`;
 
-	// Build column definitions
-	const columnDefs: string[] = [];
-
-	for (const col of columns) {
-		let def = `${quoteIdent(col.name, dialect)} ${col.sqlType}`;
-
-		// Handle auto-increment based on dialect
-		if (col.autoIncrement) {
+		// Handle auto-increment (dialect-specific keywords)
+		if (fieldMeta.autoIncrement) {
 			if (dialect === "sqlite") {
-				// SQLite: INTEGER PRIMARY KEY is auto-increment by default
-				// Adding AUTOINCREMENT prevents rowid reuse (usually not needed)
-				def += " PRIMARY KEY AUTOINCREMENT";
+				colDef += " PRIMARY KEY AUTOINCREMENT";
 			} else if (dialect === "postgresql") {
-				// PostgreSQL: Use GENERATED ALWAYS AS IDENTITY (SQL standard, PG 10+)
-				def += " GENERATED ALWAYS AS IDENTITY";
+				colDef += " GENERATED ALWAYS AS IDENTITY";
 			} else if (dialect === "mysql") {
-				// MySQL: AUTO_INCREMENT (must be a key, handled with PRIMARY KEY below)
-				def += " AUTO_INCREMENT";
+				colDef += " AUTO_INCREMENT";
 			}
 		}
 
-		if (!col.nullable && !col.autoIncrement) {
-			// Auto-increment columns are implicitly NOT NULL
-			def += " NOT NULL";
+		const nullable = isOptional || isNullable || hasDefault;
+		if (!nullable && !fieldMeta.autoIncrement) {
+			colDef += " NOT NULL";
 		}
 
-		if (col.defaultValue !== undefined && !col.autoIncrement) {
-			// Auto-increment columns shouldn't have DEFAULT
-			def += ` DEFAULT ${col.defaultValue}`;
+		if (sqlDefault !== undefined && !fieldMeta.autoIncrement) {
+			colDef += ` DEFAULT ${sqlDefault}`;
 		}
 
 		// SQLite primary key is inline (and already added for autoIncrement)
-		if (col.primaryKey && dialect === "sqlite" && !col.autoIncrement) {
-			def += " PRIMARY KEY";
+		if (
+			fieldMeta.primaryKey &&
+			dialect === "sqlite" &&
+			!fieldMeta.autoIncrement
+		) {
+			colDef += " PRIMARY KEY";
 		}
 
-		if (col.unique && !col.primaryKey) {
-			def += " UNIQUE";
+		if (fieldMeta.unique && !fieldMeta.primaryKey) {
+			colDef += " UNIQUE";
 		}
 
-		columnDefs.push(def);
+		strings.push(colDef);
 	}
 
-	// PRIMARY KEY constraint for non-SQLite or composite keys
+	// PRIMARY KEY constraint for non-SQLite
 	if (meta.primary && dialect !== "sqlite") {
-		columnDefs.push(`PRIMARY KEY (${quoteIdent(meta.primary, dialect)})`);
+		if (needsComma) {
+			strings[strings.length - 1] += ",\n  PRIMARY KEY (";
+		} else {
+			strings[strings.length - 1] += "PRIMARY KEY (";
+			needsComma = true;
+		}
+		values.push(ident(meta.primary));
+		strings.push(")");
 	}
 
 	// FOREIGN KEY constraints (single-field)
 	for (const ref of meta.references) {
-		const fkColumn = quoteIdent(ref.fieldName, dialect);
-		const refTable = quoteIdent(ref.table.name, dialect);
-		const refColumn = quoteIdent(ref.referencedField, dialect);
+		if (needsComma) {
+			strings[strings.length - 1] += ",\n  FOREIGN KEY (";
+		} else {
+			strings[strings.length - 1] += "FOREIGN KEY (";
+			needsComma = true;
+		}
 
-		let fk = `FOREIGN KEY (${fkColumn}) REFERENCES ${refTable}(${refColumn})`;
+		values.push(ident(ref.fieldName));
+		strings.push(") REFERENCES ");
+		values.push(ident(ref.table.name));
+		strings.push("(");
+		values.push(ident(ref.referencedField));
 
-		// Add ON DELETE behavior
+		let fkSuffix = ")";
 		if (ref.onDelete) {
 			const onDeleteSQL =
 				ref.onDelete === "set null" ? "SET NULL" : ref.onDelete.toUpperCase();
-			fk += ` ON DELETE ${onDeleteSQL}`;
+			fkSuffix += ` ON DELETE ${onDeleteSQL}`;
 		}
-
-		columnDefs.push(fk);
+		strings.push(fkSuffix);
 	}
 
 	// Compound FOREIGN KEY constraints
 	for (const ref of table.compoundReferences) {
-		const fkColumns = ref.fields.map((f) => quoteIdent(f, dialect)).join(", ");
-		const refTable = quoteIdent(ref.table.name, dialect);
-		// Use referencedFields if provided, otherwise use the same field names
+		if (needsComma) {
+			strings[strings.length - 1] += ",\n  FOREIGN KEY (";
+		} else {
+			strings[strings.length - 1] += "FOREIGN KEY (";
+			needsComma = true;
+		}
+
+		// Add columns: ${col1}, ${col2}, ...
+		for (let i = 0; i < ref.fields.length; i++) {
+			if (i > 0) strings[strings.length - 1] += ", ";
+			values.push(ident(ref.fields[i]));
+			strings.push("");
+		}
+		strings[strings.length - 1] += ") REFERENCES ";
+		values.push(ident(ref.table.name));
+		strings.push("(");
+
 		const refFields = ref.referencedFields ?? ref.fields;
-		const refColumns = refFields.map((f) => quoteIdent(f, dialect)).join(", ");
+		for (let i = 0; i < refFields.length; i++) {
+			if (i > 0) strings[strings.length - 1] += ", ";
+			values.push(ident(refFields[i]));
+			strings.push("");
+		}
 
-		let fk = `FOREIGN KEY (${fkColumns}) REFERENCES ${refTable}(${refColumns})`;
-
+		let fkSuffix = ")";
 		if (ref.onDelete) {
 			const onDeleteSQL =
 				ref.onDelete === "set null" ? "SET NULL" : ref.onDelete.toUpperCase();
-			fk += ` ON DELETE ${onDeleteSQL}`;
+			fkSuffix += ` ON DELETE ${onDeleteSQL}`;
 		}
-
-		columnDefs.push(fk);
+		strings[strings.length - 1] += fkSuffix;
 	}
 
 	// Compound UNIQUE constraints
 	for (const uniqueCols of table.unique) {
-		const cols = uniqueCols.map((c) => quoteIdent(c, dialect)).join(", ");
-		columnDefs.push(`UNIQUE (${cols})`);
+		if (needsComma) {
+			strings[strings.length - 1] += ",\n  UNIQUE (";
+		} else {
+			strings[strings.length - 1] += "UNIQUE (";
+			needsComma = true;
+		}
+
+		for (let i = 0; i < uniqueCols.length; i++) {
+			if (i > 0) strings[strings.length - 1] += ", ";
+			values.push(ident(uniqueCols[i]));
+			strings.push("");
+		}
+		strings[strings.length - 1] += ")";
 	}
 
-	// Build CREATE TABLE
-	const tableName = quoteIdent(table.name, dialect);
-	const exists = ifNotExists ? "IF NOT EXISTS " : "";
-	let sql = `CREATE TABLE ${exists}${tableName} (\n  ${columnDefs.join(",\n  ")}\n);`;
+	// Close CREATE TABLE
+	strings[strings.length - 1] += "\n);";
 
 	// Add indexes for indexed fields
 	for (const indexedField of meta.indexed) {
 		const indexName = `idx_${table.name}_${indexedField}`;
-		sql += `\n\nCREATE INDEX ${exists}${quoteIdent(indexName, dialect)} ON ${tableName} (${quoteIdent(indexedField, dialect)});`;
+		strings[strings.length - 1] += `\n\nCREATE INDEX ${exists}`;
+		values.push(ident(indexName));
+		strings.push(" ON ");
+		values.push(ident(table.name));
+		strings.push(" (");
+		values.push(ident(indexedField));
+		strings.push(");");
 	}
 
-	// Add compound indexes from table options
+	// Add compound indexes
 	for (const indexCols of table.indexes) {
 		const indexName = `idx_${table.name}_${indexCols.join("_")}`;
-		const cols = indexCols.map((c) => quoteIdent(c, dialect)).join(", ");
-		sql += `\n\nCREATE INDEX ${exists}${quoteIdent(indexName, dialect)} ON ${tableName} (${cols});`;
+		strings[strings.length - 1] += `\n\nCREATE INDEX ${exists}`;
+		values.push(ident(indexName));
+		strings.push(" ON ");
+		values.push(ident(table.name));
+		strings.push(" (");
+
+		for (let i = 0; i < indexCols.length; i++) {
+			if (i > 0) strings[strings.length - 1] += ", ";
+			values.push(ident(indexCols[i]));
+			strings.push("");
+		}
+		strings[strings.length - 1] += ");";
 	}
 
-	return sql;
-}
-
-/**
- * Convenience function for generating DDL.
- */
-export function ddl(table: Table<any>, dialect: SQLDialect = "sqlite"): string {
-	return generateDDL(table, {dialect});
+	return {strings: makeTemplate(strings), values};
 }
