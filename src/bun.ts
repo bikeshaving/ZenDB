@@ -7,7 +7,7 @@
 
 import {SQL} from "bun";
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError, isSQLSymbol, NOW} from "./zen.js";
+import {ConstraintViolationError, isSQLSymbol, isSQLIdentifier, NOW} from "./zen.js";
 
 type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
@@ -42,9 +42,21 @@ function resolveSQLSymbol(sym: symbol): string {
 }
 
 /**
+ * Quote an identifier (table name, column name) per dialect.
+ * MySQL: backticks, PostgreSQL/SQLite: double quotes.
+ */
+function quoteIdent(name: string, dialect: SQLDialect): string {
+	if (dialect === "mysql") {
+		return `\`${name.replace(/`/g, "``")}\``;
+	}
+	// PostgreSQL and SQLite use double quotes
+	return `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
  * Build SQL from template parts using the appropriate placeholder style.
  * SQLite/MySQL use ?, PostgreSQL uses $1, $2, etc.
- * SQL symbols in values are inlined directly; other values use placeholders.
+ * SQL symbols and identifiers are inlined directly; other values use placeholders.
  */
 function buildSQL(
 	strings: TemplateStringsArray,
@@ -60,6 +72,9 @@ function buildSQL(
 		if (isSQLSymbol(value)) {
 			// Inline the symbol's SQL directly
 			sql += resolveSQLSymbol(value) + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			// Quote identifier per dialect
+			sql += quoteIdent(value.name, dialect) + strings[i + 1];
 		} else {
 			// Add placeholder and keep value
 			const placeholder = dialect === "postgresql" ? `$${paramIndex++}` : "?";

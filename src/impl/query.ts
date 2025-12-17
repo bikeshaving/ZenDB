@@ -206,8 +206,13 @@ export function buildSelectColumns(
 		for (const expr of derivedExprs) {
 			// Generate alias from fieldName - no parsing needed
 			const alias = `${tableName}.${expr.fieldName}`;
-			columns.push(`(${expr.sql}) AS ${quoteIdent(alias, dialect)}`);
-			params.push(...expr.params);
+			// Build SQL from template strings/values
+			let exprSql = expr.strings[0];
+			for (let i = 0; i < expr.values.length; i++) {
+				exprSql += "?" + expr.strings[i + 1];
+			}
+			columns.push(`(${exprSql}) AS ${quoteIdent(alias, dialect)}`);
+			params.push(...expr.values);
 		}
 	}
 
@@ -381,30 +386,27 @@ function transformDDLFragment(
 					// For MySQL, document that this will fail if column exists
 					// Users should wrap in try/catch or check column existence first
 				}
-				const quote = dialect === "mysql" ? "`" : '"';
 
-				return `ALTER TABLE ${quote}${table.name}${quote} ADD COLUMN ${ifNotExists}${columnDef}`;
+				return `ALTER TABLE ${quoteIdent(table.name, dialect)} ADD COLUMN ${ifNotExists}${columnDef}`;
 			}
 
 			case "create-index": {
 				const {fields, name: indexName} = options;
 				const finalIndexName =
 					indexName || `idx_${table.name}_${fields.join("_")}`;
-				const quote = dialect === "mysql" ? "`" : '"';
 				const quotedColumns = fields
-					.map((f: string) => `${quote}${f}${quote}`)
+					.map((f: string) => quoteIdent(f, dialect))
 					.join(", ");
 
 				// All three dialects support CREATE INDEX IF NOT EXISTS
-				return `CREATE INDEX IF NOT EXISTS ${quote}${finalIndexName}${quote} ON ${quote}${table.name}${quote}(${quotedColumns})`;
+				return `CREATE INDEX IF NOT EXISTS ${quoteIdent(finalIndexName, dialect)} ON ${quoteIdent(table.name, dialect)}(${quotedColumns})`;
 			}
 
 			case "update": {
 				const {fromField, toField} = options;
-				const quote = dialect === "mysql" ? "`" : '"';
 
 				// UPDATE with WHERE IS NULL is supported by all dialects
-				return `UPDATE ${quote}${table.name}${quote} SET ${quote}${toField}${quote} = ${quote}${fromField}${quote} WHERE ${quote}${toField}${quote} IS NULL`;
+				return `UPDATE ${quoteIdent(table.name, dialect)} SET ${quoteIdent(toField, dialect)} = ${quoteIdent(fromField, dialect)} WHERE ${quoteIdent(toField, dialect)} IS NULL`;
 			}
 
 			default:

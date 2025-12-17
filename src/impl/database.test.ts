@@ -1,7 +1,13 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
-import {Database, NOW, isSQLSymbol, type Driver} from "./database.js";
+import {
+	Database,
+	NOW,
+	isSQLSymbol,
+	isSQLIdentifier,
+	type Driver,
+} from "./database.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -26,7 +32,7 @@ const Posts = table("posts", {
 });
 
 // Helper to build SQL from template parts (for assertions)
-// Matches real driver behavior: inlines SQL symbols, uses ? for other values
+// Matches real driver behavior: inlines SQL symbols, quotes identifiers, uses ? for other values
 function buildSQL(strings: TemplateStringsArray, values: unknown[]): string {
 	let sql = strings[0];
 	for (let i = 0; i < values.length; i++) {
@@ -34,11 +40,20 @@ function buildSQL(strings: TemplateStringsArray, values: unknown[]): string {
 		if (isSQLSymbol(value)) {
 			// Inline the symbol's SQL directly (matches driver behavior)
 			sql += (value === NOW ? "CURRENT_TIMESTAMP" : "?") + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			// Quote identifiers using double quotes (like sqlite/postgres)
+			const name = value.name.replace(/"/g, '""');
+			sql += `"${name}"` + strings[i + 1];
 		} else {
 			sql += "?" + strings[i + 1];
 		}
 	}
 	return sql;
+}
+
+// Helper to extract actual parameter values (not identifiers or symbols)
+function getParams(values: unknown[]): unknown[] {
+	return values.filter((v) => !isSQLIdentifier(v) && !isSQLSymbol(v));
 }
 
 // Mock driver factory
@@ -94,7 +109,7 @@ describe("Database", () => {
 			expect(sql).toContain('SELECT "posts"."id" AS "posts.id"');
 			expect(sql).toContain('FROM "posts"');
 			expect(sql).toContain("WHERE published = ?");
-			expect(values).toEqual([true]);
+			expect(getParams(values)).toEqual([true]);
 		});
 
 		test("returns empty array for no results", async () => {
@@ -141,7 +156,7 @@ describe("Database", () => {
 			const sql = buildSQL(strings, values);
 			expect(sql).toContain('SELECT * FROM "posts"');
 			expect(sql).toContain('WHERE "id" = ?');
-			expect(values).toEqual([POST_ID]);
+			expect(getParams(values)).toEqual([POST_ID]);
 		});
 
 		test("returns null for no match", async () => {
@@ -185,7 +200,7 @@ describe("Database", () => {
 			expect(sql).toContain('"id", "email", "name"');
 			expect(sql).toContain("VALUES (?, ?, ?)");
 			expect(sql).toContain("RETURNING *");
-			expect(values).toEqual([USER_ID, "alice@example.com", "Alice"]);
+			expect(getParams(values)).toEqual([USER_ID, "alice@example.com", "Alice"]);
 		});
 
 		test("validates through Zod schema", async () => {
@@ -251,12 +266,13 @@ describe("Database", () => {
 			let capturedValues: any;
 			(driver.get as any).mockImplementation(
 				async (sql: string, values: unknown[]) => {
-					capturedValues = values;
+					const params = getParams(values);
+					capturedValues = params;
 					// Return the values as a row with field names
 					return {
-						id: values[0],
-						config: values[1],
-						tags: values[2],
+						id: params[0],
+						config: params[1],
+						tags: params[2],
 					};
 				},
 			);
@@ -282,10 +298,11 @@ describe("Database", () => {
 			// Mock driver.get to return JSON strings (SQLite behavior)
 			(driver.get as any).mockImplementation(
 				async (sql: string, values: unknown[]) => {
+					const params = getParams(values);
 					return {
-						id: values[0],
-						config: values[1], // Already JSON string from encoding
-						tags: values[2], // Already JSON string from encoding
+						id: params[0],
+						config: params[1], // Already JSON string from encoding
+						tags: params[2], // Already JSON string from encoding
 					};
 				},
 			);
@@ -313,10 +330,11 @@ describe("Database", () => {
 			let capturedValues: any;
 			(driver.get as any).mockImplementation(
 				async (sql: string, values: unknown[]) => {
-					capturedValues = values;
+					const params = getParams(values);
+					capturedValues = params;
 					return {
-						id: values[0],
-						data: values[1],
+						id: params[0],
+						data: params[1],
 					};
 				},
 			);
@@ -559,7 +577,7 @@ describe("Database", () => {
 			expect(sql).toContain('SET "name" = ?');
 			expect(sql).toContain('WHERE "id" = ?');
 			expect(sql).toContain("RETURNING *");
-			expect(values).toEqual(["Alice Updated", USER_ID]);
+			expect(getParams(values)).toEqual(["Alice Updated", USER_ID]);
 		});
 
 		test("throws on no fields to update", async () => {
@@ -597,7 +615,7 @@ describe("Database", () => {
 			const sql = buildSQL(strings, values);
 			expect(sql).toContain('DELETE FROM "users"');
 			expect(sql).toContain('WHERE "id" = ?');
-			expect(values).toEqual([USER_ID]);
+			expect(getParams(values)).toEqual([USER_ID]);
 		});
 
 		test("returns 0 if nothing deleted", async () => {
@@ -624,7 +642,7 @@ describe("Database", () => {
 			expect(sql).toContain(
 				"SELECT COUNT(*) as count FROM posts WHERE author_id = ?",
 			);
-			expect(values).toEqual([USER_ID]);
+			expect(getParams(values)).toEqual([USER_ID]);
 		});
 	});
 
@@ -688,14 +706,14 @@ describe("supportsReturning fallback", () => {
 		expect((driver.get as any).mock.calls.length).toBe(1);
 
 		// Check INSERT was called
-		const [insertStrings] = (driver.run as any).mock.calls[0];
-		const insertSql = buildSQL(insertStrings, []);
+		const [insertStrings, insertValues] = (driver.run as any).mock.calls[0];
+		const insertSql = buildSQL(insertStrings, insertValues);
 		expect(insertSql).toContain("INSERT INTO");
 		expect(insertSql).toContain('"with_defaults"');
 
 		// Check SELECT was called after INSERT
-		const [selectStrings] = (driver.get as any).mock.calls[0];
-		const selectSql = buildSQL(selectStrings, []);
+		const [selectStrings, selectValues] = (driver.get as any).mock.calls[0];
+		const selectSql = buildSQL(selectStrings, selectValues);
 		expect(selectSql).toContain("SELECT");
 		expect(selectSql).toContain('"with_defaults"');
 	});
@@ -934,8 +952,8 @@ describe("Soft Delete", () => {
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql).toContain('WHERE "id" = ?');
 			// Only the ID should be a parameter, not the timestamp
-			expect(values).toHaveLength(1);
-			expect(values[0]).toBe(USER_ID);
+			expect(getParams(values)).toHaveLength(1);
+			expect(getParams(values)[0]).toBe(USER_ID);
 		});
 
 		test("returns 0 if entity not found", async () => {
@@ -1012,8 +1030,8 @@ describe("Soft Delete", () => {
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 			expect(sql).toContain('WHERE "id" = ?');
 			// Only ID should be parameterized, not the timestamp
-			expect(values).toHaveLength(1);
-			expect(values[0]).toBe(USER_ID);
+			expect(getParams(values)).toHaveLength(1);
+			expect(getParams(values)[0]).toBe(USER_ID);
 		});
 
 		test("throws if table has no soft delete field", async () => {
@@ -1094,7 +1112,17 @@ describe("DB Expressions", () => {
 	describe("DB Expressions in insert/update", () => {
 		// Create a DBExpression manually for testing
 		const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
-		const dbNow = () => ({[DB_EXPR]: true, sql: "CURRENT_TIMESTAMP"});
+		// Helper to create fake TemplateStringsArray
+		const makeStrings = (strs: string[]): TemplateStringsArray => {
+			const arr = strs as unknown as TemplateStringsArray;
+			(arr as any).raw = strs;
+			return arr;
+		};
+		const dbNow = () => ({
+			[DB_EXPR]: true,
+			strings: makeStrings(["CURRENT_TIMESTAMP"]),
+			values: [] as unknown[],
+		});
 
 		test("insert with DBExpression generates raw SQL", async () => {
 			const driver = createMockDriver();
@@ -1116,7 +1144,7 @@ describe("DB Expressions", () => {
 			expect(sql).toContain("CURRENT_TIMESTAMP");
 
 			// Values should NOT include the DBExpression
-			expect(values).toEqual(["123", "Test"]);
+			expect(getParams(values)).toEqual(["123", "Test"]);
 		});
 
 		test("update with DBExpression generates raw SQL", async () => {
@@ -1162,7 +1190,7 @@ describe("DB Expressions", () => {
 
 			// SQL should have placeholders for regular values and raw SQL for expression
 			expect(sql).toContain("VALUES (?, ?, CURRENT_TIMESTAMP)");
-			expect(values).toEqual(["456", "Combined"]);
+			expect(getParams(values)).toEqual(["456", "Combined"]);
 		});
 
 		test("DBExpression works alongside regular values in update", async () => {
@@ -1269,10 +1297,10 @@ describe("DB Expressions", () => {
 			const sql = buildSQL(strings, values);
 
 			// createdAt should be a parameter, not CURRENT_TIMESTAMP
-			// Values array includes 4 items: id, name, createdAt, NOW symbol for updatedAt
-			// After buildSQL inlines symbols, only 3 actual params remain
-			const nonSymbolValues = values.filter((v: unknown) => !isSQLSymbol(v));
-			expect(nonSymbolValues.length).toBe(3);
+			// Values array includes identifiers, 3 actual params (id, name, createdAt), and NOW symbol for updatedAt
+			// After buildSQL inlines symbols and identifiers, only 3 actual params remain
+			const actualParams = getParams(values);
+			expect(actualParams.length).toBe(3);
 			// Should only have one CURRENT_TIMESTAMP (for updatedAt)
 			expect(sql.match(/CURRENT_TIMESTAMP/g)?.length).toBe(1);
 		});

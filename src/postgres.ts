@@ -8,7 +8,7 @@
  */
 
 import type {Driver} from "./zen.js";
-import {ConstraintViolationError, isSQLSymbol, NOW} from "./zen.js";
+import {ConstraintViolationError, isSQLSymbol, isSQLIdentifier, NOW} from "./zen.js";
 import postgres from "postgres";
 
 /**
@@ -24,8 +24,16 @@ function resolveSQLSymbol(sym: symbol): string {
 }
 
 /**
+ * Quote an identifier (table name, column name) using PostgreSQL double quotes.
+ * Double quotes inside the name are doubled to escape.
+ */
+function quoteIdent(name: string): string {
+	return `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
  * Build SQL from template parts using $1, $2, etc. placeholders.
- * SQL symbols in values are inlined directly; other values use placeholders.
+ * SQL symbols and identifiers are inlined directly; other values use placeholders.
  */
 function buildSQL(
 	strings: TemplateStringsArray,
@@ -40,6 +48,9 @@ function buildSQL(
 		if (isSQLSymbol(value)) {
 			// Inline the symbol's SQL directly
 			sql += resolveSQLSymbol(value) + strings[i + 1];
+		} else if (isSQLIdentifier(value)) {
+			// Quote identifier with PostgreSQL double quotes
+			sql += quoteIdent(value.name) + strings[i + 1];
 		} else {
 			// Add placeholder and keep value
 			sql += `$${paramIndex++}` + strings[i + 1];

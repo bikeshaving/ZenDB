@@ -66,6 +66,11 @@ export {
 	NOW,
 	isSQLSymbol,
 	type SQLSymbol,
+
+	// SQL identifiers (table/column names quoted by drivers)
+	ident,
+	isSQLIdentifier,
+	type SQLIdentifier,
 } from "./impl/database.js";
 
 export {

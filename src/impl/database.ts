@@ -22,12 +22,13 @@ import {
 const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
 
 /**
- * Internal type for resolved DB expressions (raw SQL to inject).
+ * Internal type for resolved DB expressions (template to inject).
+ * Uses TemplateStringsArray + values instead of SQL with ? placeholders.
  */
 interface DBExpression {
 	readonly [DB_EXPR]: true;
-	readonly sql: string;
-	readonly params: unknown[];
+	readonly strings: TemplateStringsArray;
+	readonly values: readonly unknown[];
 }
 
 /**
@@ -43,10 +44,13 @@ function isDBExpression(value: unknown): value is DBExpression {
 }
 
 /**
- * Create a DB expression from raw SQL and optional params.
+ * Create a DB expression from template strings and values.
  */
-function createDBExpr(sql: string, params: unknown[] = []): DBExpression {
-	return {[DB_EXPR]: true, sql, params};
+function createDBExpr(
+	strings: TemplateStringsArray,
+	values: readonly unknown[] = [],
+): DBExpression {
+	return {[DB_EXPR]: true, strings, values};
 }
 
 // ============================================================================
@@ -81,6 +85,44 @@ function resolveSQLSymbol(sym: symbol): string {
 		return "CURRENT_TIMESTAMP";
 	}
 	throw new Error(`Unknown SQL symbol: ${String(sym)}`);
+}
+
+// ============================================================================
+// SQL Identifiers - Table/column names quoted by drivers
+// ============================================================================
+
+const SQL_IDENT = Symbol.for("@b9g/zen:ident");
+
+/**
+ * SQL identifier (table name, column name) to be quoted by drivers.
+ *
+ * Database.ts passes these through values; drivers quote them per dialect:
+ * - MySQL: backticks (`name`)
+ * - PostgreSQL/SQLite: double quotes ("name")
+ */
+export interface SQLIdentifier {
+	readonly [SQL_IDENT]: true;
+	readonly name: string;
+}
+
+/**
+ * Create an SQL identifier marker.
+ * Drivers will quote this appropriately for their dialect.
+ */
+export function ident(name: string): SQLIdentifier {
+	return {[SQL_IDENT]: true, name};
+}
+
+/**
+ * Check if a value is an SQL identifier marker.
+ */
+export function isSQLIdentifier(value: unknown): value is SQLIdentifier {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		SQL_IDENT in value &&
+		(value as any)[SQL_IDENT] === true
+	);
 }
 
 /**
@@ -171,7 +213,7 @@ function injectSchemaExpressions<T extends Table<any>>(
 
 		// Resolve the value based on type
 		if (meta.type === "sql") {
-			result[fieldName] = createDBExpr(meta.sql!, meta.params ?? []);
+			result[fieldName] = createDBExpr(meta.strings!, meta.values ?? []);
 		} else if (meta.type === "symbol") {
 			// Pass symbol through - resolved at query build time
 			result[fieldName] = meta.symbol;
@@ -413,17 +455,37 @@ function makeTemplate(parts: string[]): TemplateStringsArray {
 }
 
 /**
- * Quote an identifier (table name, column name) using SQL standard double quotes.
- * All drivers use this - MySQL requires ANSI_QUOTES mode.
+ * Merge an expression's template into a base template.
+ * Operates on mutable string[] and values[], maintains invariant:
+ *   strings.length === values.length + 1
+ *
+ * @example
+ * // Merging expression ["COALESCE(", ", ", ")"] with values [a, b]
+ * // into base ["INSERT ... VALUES ("] with values []
+ * // Result: strings = ["INSERT ... VALUES (COALESCE(", ", ", ")"]
+ * //         values = [a, b]
  */
-function quoteIdent(name: string): string {
-	return `"${name.replace(/"/g, '""')}"`;
+function mergeExpression(
+	baseStrings: string[],
+	baseValues: unknown[],
+	expr: DBExpression,
+): void {
+	// Append expr.strings[0] to last baseString
+	baseStrings[baseStrings.length - 1] += expr.strings[0];
+	// Push remaining expr strings
+	for (let i = 1; i < expr.strings.length; i++) {
+		baseStrings.push(expr.strings[i]);
+	}
+	// Push expr values
+	baseValues.push(...expr.values);
 }
 
+
 /**
- * Build INSERT template: INSERT INTO "table" ("col1", "col2") VALUES (?, ?)
+ * Build INSERT template: INSERT INTO <table> (<col1>, <col2>) VALUES (<val1>, <val2>)
  * Returns template parts and values array.
- * Symbols are included as placeholder values - resolved at driver call time.
+ * Identifiers are passed as SQLIdentifier values - quoted by drivers per dialect.
+ * Expressions are merged using mergeExpression to maintain template invariant.
  */
 function buildInsertParts(
 	tableName: string,
@@ -440,44 +502,48 @@ function buildInsertParts(
 		throw new Error("Insert requires at least one column");
 	}
 
-	const columnList = allCols.map((c) => quoteIdent(c)).join(", ");
+	const strings: string[] = ["INSERT INTO "];
+	const values: unknown[] = [];
 
-	// Build template: regular values and symbols get placeholders, expressions get their SQL
-	// Expression SQL may contain ? placeholders for their params
+	// Table name (identifier)
+	values.push(ident(tableName));
+	strings.push(" (");
+
+	// Column names (identifiers)
+	for (let i = 0; i < allCols.length; i++) {
+		values.push(ident(allCols[i]));
+		strings.push(i < allCols.length - 1 ? ", " : ") VALUES (");
+	}
+
+	// Value placeholders: regular data values, then symbol values
 	const valueCols = [...regularCols, ...symbolCols];
-	const parts: string[] = [
-		`INSERT INTO ${quoteIdent(tableName)} (${columnList}) VALUES (`,
-	];
-	for (let i = 1; i < valueCols.length; i++) {
-		parts.push(", ");
-	}
-	// Add expression SQL (may contain ? placeholders for expression params)
-	const exprSql = exprCols.map((c) => expressions[c].sql).join(", ");
-	if (valueCols.length > 0 && exprCols.length > 0) {
-		parts.push(`, ${exprSql})`);
-	} else if (exprCols.length > 0) {
-		parts[0] += `${exprSql})`;
-	} else {
-		parts.push(")");
+	for (let i = 0; i < valueCols.length; i++) {
+		const col = valueCols[i];
+		values.push(col in data ? data[col] : symbols[col]);
+		strings.push(i < valueCols.length - 1 ? ", " : "");
 	}
 
-	// Values: regular data, symbols, then expression params (in column order)
-	const values = [
-		...regularCols.map((c) => data[c]),
-		...symbolCols.map((c) => symbols[c]),
-		...exprCols.flatMap((c) => expressions[c].params),
-	];
+	// Expression values using mergeExpression
+	for (let i = 0; i < exprCols.length; i++) {
+		if (valueCols.length > 0 || i > 0) {
+			strings[strings.length - 1] += ", ";
+		}
+		mergeExpression(strings, values, expressions[exprCols[i]]);
+	}
+
+	strings[strings.length - 1] += ")";
 
 	return {
-		strings: makeTemplate(parts),
+		strings: makeTemplate(strings),
 		values,
 	};
 }
 
 /**
- * Build UPDATE template: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE "pk" = ?
+ * Build UPDATE template: UPDATE <table> SET <col1> = <val1>, <col2> = <val2> WHERE <pk> = <id>
  * Returns template parts and values array.
- * Symbols are included as placeholder values - resolved at driver call time.
+ * Identifiers are passed as SQLIdentifier values - quoted by drivers per dialect.
+ * Expressions are merged using mergeExpression to maintain template invariant.
  */
 function buildUpdateByIdParts(
 	tableName: string,
@@ -492,45 +558,49 @@ function buildUpdateByIdParts(
 	const symbolCols = Object.keys(symbols);
 	const valueCols = [...regularCols, ...symbolCols];
 
-	// Template: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE "pk" = ?
-	const parts: string[] = [`UPDATE ${quoteIdent(tableName)} SET `];
-	for (let i = 0; i < valueCols.length; i++) {
-		if (i === 0) {
-			parts[0] += `${quoteIdent(valueCols[i])} = `;
-		} else {
-			parts.push(`, ${quoteIdent(valueCols[i])} = `);
-		}
-	}
-	// Add expression assignments (SQL may contain ? placeholders for expression params)
-	const exprAssignments = exprCols
-		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
-		.join(", ");
-	if (valueCols.length > 0 && exprCols.length > 0) {
-		parts.push(`, ${exprAssignments} WHERE ${quoteIdent(pk)} = `);
-	} else if (exprCols.length > 0) {
-		parts[0] += `${exprAssignments} WHERE ${quoteIdent(pk)} = `;
-	} else {
-		parts.push(` WHERE ${quoteIdent(pk)} = `);
-	}
-	parts.push("");
+	const strings: string[] = ["UPDATE "];
+	const values: unknown[] = [];
 
-	// Values: regular data, symbols, expression params, then id
-	const values = [
-		...regularCols.map((c) => data[c]),
-		...symbolCols.map((c) => symbols[c]),
-		...exprCols.flatMap((c) => expressions[c].params),
-		id,
-	];
+	// Table name
+	values.push(ident(tableName));
+	strings.push(" SET ");
+
+	// SET assignments for regular and symbol values
+	for (let i = 0; i < valueCols.length; i++) {
+		const col = valueCols[i];
+		values.push(ident(col));
+		strings.push(" = ");
+		values.push(col in data ? data[col] : symbols[col]);
+		strings.push(i < valueCols.length - 1 ? ", " : "");
+	}
+
+	// Expression assignments using mergeExpression
+	for (let i = 0; i < exprCols.length; i++) {
+		if (valueCols.length > 0 || i > 0) {
+			strings[strings.length - 1] += ", ";
+		}
+		values.push(ident(exprCols[i]));
+		strings.push(" = ");
+		mergeExpression(strings, values, expressions[exprCols[i]]);
+	}
+
+	// WHERE clause
+	strings[strings.length - 1] += " WHERE ";
+	values.push(ident(pk));
+	strings.push(" = ");
+	values.push(id);
+	strings.push("");
 
 	return {
-		strings: makeTemplate(parts),
+		strings: makeTemplate(strings),
 		values,
 	};
 }
 
 /**
- * Build UPDATE template for multiple IDs: UPDATE "table" SET ... WHERE "pk" IN (?, ?, ?)
- * Symbols are included as placeholder values - resolved at driver call time.
+ * Build UPDATE template for multiple IDs: UPDATE <table> SET ... WHERE <pk> IN (<id1>, <id2>, ...)
+ * Identifiers are passed as SQLIdentifier values - quoted by drivers per dialect.
+ * Expressions are merged using mergeExpression to maintain template invariant.
  */
 function buildUpdateByIdsParts(
 	tableName: string,
@@ -545,59 +615,61 @@ function buildUpdateByIdsParts(
 	const symbolCols = Object.keys(symbols);
 	const valueCols = [...regularCols, ...symbolCols];
 
-	// Build SET clause parts
-	const parts: string[] = [`UPDATE ${quoteIdent(tableName)} SET `];
+	const strings: string[] = ["UPDATE "];
+	const values: unknown[] = [];
+
+	// Table name
+	values.push(ident(tableName));
+	strings.push(" SET ");
+
+	// SET assignments for regular and symbol values
 	for (let i = 0; i < valueCols.length; i++) {
-		if (i === 0) {
-			parts[0] += `${quoteIdent(valueCols[i])} = `;
-		} else {
-			parts.push(`, ${quoteIdent(valueCols[i])} = `);
+		const col = valueCols[i];
+		values.push(ident(col));
+		strings.push(" = ");
+		values.push(col in data ? data[col] : symbols[col]);
+		strings.push(i < valueCols.length - 1 ? ", " : "");
+	}
+
+	// Expression assignments using mergeExpression
+	for (let i = 0; i < exprCols.length; i++) {
+		if (valueCols.length > 0 || i > 0) {
+			strings[strings.length - 1] += ", ";
 		}
+		values.push(ident(exprCols[i]));
+		strings.push(" = ");
+		mergeExpression(strings, values, expressions[exprCols[i]]);
 	}
 
-	// Add expression assignments (SQL may contain ? placeholders for expression params)
-	const exprAssignments = exprCols
-		.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
-		.join(", ");
+	// WHERE clause with IN
+	strings[strings.length - 1] += " WHERE ";
+	values.push(ident(pk));
+	strings.push(" IN (");
 
-	if (valueCols.length > 0 && exprCols.length > 0) {
-		parts.push(`, ${exprAssignments} WHERE ${quoteIdent(pk)} IN (`);
-	} else if (exprCols.length > 0) {
-		parts[0] += `${exprAssignments} WHERE ${quoteIdent(pk)} IN (`;
-	} else {
-		parts.push(` WHERE ${quoteIdent(pk)} IN (`);
+	// ID values
+	for (let i = 0; i < ids.length; i++) {
+		values.push(ids[i]);
+		strings.push(i < ids.length - 1 ? ", " : ")");
 	}
-
-	// Add ID placeholders
-	for (let i = 1; i < ids.length; i++) {
-		parts.push(", ");
-	}
-	parts.push(")");
-
-	// Values: regular data, symbols, expression params, then ids
-	const values = [
-		...regularCols.map((c) => data[c]),
-		...symbolCols.map((c) => symbols[c]),
-		...exprCols.flatMap((c) => expressions[c].params),
-		...ids,
-	];
 
 	return {
-		strings: makeTemplate(parts),
+		strings: makeTemplate(strings),
 		values,
 	};
 }
 
 /**
- * Build SELECT column list: "table"."col1" AS "table.col1", "table"."col2" AS "table.col2", ...
+ * Build SELECT column list: <table>.<col1> AS <alias1>, <table>.<col2> AS <alias2>, ...
+ * Returns template parts with identifiers as SQLIdentifier values.
  * Handles derived expressions too.
  */
 function buildSelectCols(tables: Table<any>[]): {
-	sql: string;
-	params: unknown[];
+	strings: string[];
+	values: unknown[];
 } {
-	const columns: string[] = [];
-	const params: unknown[] = [];
+	const strings: string[] = [""];
+	const values: unknown[] = [];
+	let needsComma = false;
 
 	for (const table of tables) {
 		const tableName = table.name;
@@ -612,25 +684,48 @@ function buildSelectCols(tables: Table<any>[]): {
 		for (const fieldName of Object.keys(shape)) {
 			if (derivedFields.has(fieldName)) continue;
 
-			const qualifiedCol = `${quoteIdent(tableName)}.${quoteIdent(fieldName)}`;
-			const alias = `${tableName}.${fieldName}`;
-			columns.push(`${qualifiedCol} AS ${quoteIdent(alias)}`);
+			if (needsComma) {
+				strings[strings.length - 1] += ", ";
+			}
+			// table.column AS alias
+			values.push(ident(tableName));
+			strings.push(".");
+			values.push(ident(fieldName));
+			strings.push(" AS ");
+			values.push(ident(`${tableName}.${fieldName}`));
+			strings.push("");
+			needsComma = true;
 		}
 
 		// Append derived expressions with auto-generated aliases
 		const derivedExprs = (table.meta as any).derivedExprs ?? [];
 		for (const expr of derivedExprs) {
+			if (needsComma) {
+				strings[strings.length - 1] += ", ";
+			}
 			const alias = `${tableName}.${expr.fieldName}`;
-			columns.push(`(${expr.sql}) AS ${quoteIdent(alias)}`);
-			params.push(...expr.params);
+			// For derived expressions, merge their template and wrap in parentheses
+			// expr.strings/values format: ["COUNT(", ")"] with values [ident(...)]
+			strings[strings.length - 1] += "(";
+			// Merge the expression template
+			strings[strings.length - 1] += expr.strings[0];
+			for (let i = 1; i < expr.strings.length; i++) {
+				strings.push(expr.strings[i]);
+			}
+			values.push(...expr.values);
+			// Add closing paren and AS alias
+			strings[strings.length - 1] += ") AS ";
+			values.push(ident(alias));
+			strings.push("");
+			needsComma = true;
 		}
 	}
 
-	return {sql: columns.join(", "), params};
+	return {strings, values};
 }
 
 /**
- * Build SELECT by primary key template: SELECT * FROM "table" WHERE "pk" = ?
+ * Build SELECT by primary key template: SELECT * FROM <table> WHERE <pk> = <id>
  */
 function buildSelectByPkParts(
 	tableName: string,
@@ -639,37 +734,39 @@ function buildSelectByPkParts(
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	return {
 		strings: makeTemplate([
-			`SELECT * FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} = `,
+			"SELECT * FROM ",
+			" WHERE ",
+			" = ",
 			"",
 		]),
-		values: [id],
+		values: [ident(tableName), ident(pk), id],
 	};
 }
 
 /**
- * Build SELECT by multiple IDs: SELECT * FROM "table" WHERE "pk" IN (?, ?, ?)
+ * Build SELECT by multiple IDs: SELECT * FROM <table> WHERE <pk> IN (<id1>, <id2>, ...)
  */
 function buildSelectByPksParts(
 	tableName: string,
 	pk: string,
 	ids: unknown[],
 ): {strings: TemplateStringsArray; values: unknown[]} {
-	const parts: string[] = [
-		`SELECT * FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} IN (`,
-	];
-	for (let i = 1; i < ids.length; i++) {
-		parts.push(", ");
+	const strings: string[] = ["SELECT * FROM ", " WHERE ", " IN ("];
+	const values: unknown[] = [ident(tableName), ident(pk)];
+
+	for (let i = 0; i < ids.length; i++) {
+		values.push(ids[i]);
+		strings.push(i < ids.length - 1 ? ", " : ")");
 	}
-	parts.push(")");
 
 	return {
-		strings: makeTemplate(parts),
-		values: ids,
+		strings: makeTemplate(strings),
+		values,
 	};
 }
 
 /**
- * Build DELETE by primary key template: DELETE FROM "table" WHERE "pk" = ?
+ * Build DELETE by primary key template: DELETE FROM <table> WHERE <pk> = <id>
  */
 function buildDeleteByPkParts(
 	tableName: string,
@@ -678,32 +775,34 @@ function buildDeleteByPkParts(
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	return {
 		strings: makeTemplate([
-			`DELETE FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} = `,
+			"DELETE FROM ",
+			" WHERE ",
+			" = ",
 			"",
 		]),
-		values: [id],
+		values: [ident(tableName), ident(pk), id],
 	};
 }
 
 /**
- * Build DELETE by multiple IDs: DELETE FROM "table" WHERE "pk" IN (?, ?, ?)
+ * Build DELETE by multiple IDs: DELETE FROM <table> WHERE <pk> IN (<id1>, <id2>, ...)
  */
 function buildDeleteByPksParts(
 	tableName: string,
 	pk: string,
 	ids: unknown[],
 ): {strings: TemplateStringsArray; values: unknown[]} {
-	const parts: string[] = [
-		`DELETE FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pk)} IN (`,
-	];
-	for (let i = 1; i < ids.length; i++) {
-		parts.push(", ");
+	const strings: string[] = ["DELETE FROM ", " WHERE ", " IN ("];
+	const values: unknown[] = [ident(tableName), ident(pk)];
+
+	for (let i = 0; i < ids.length; i++) {
+		values.push(ids[i]);
+		strings.push(i < ids.length - 1 ? ", " : ")");
 	}
-	parts.push(")");
 
 	return {
-		strings: makeTemplate(parts),
-		values: ids,
+		strings: makeTemplate(strings),
+		values,
 	};
 }
 
@@ -726,6 +825,48 @@ function appendReturning(parts: {
  * Expand SQLFragment objects within template values.
  * Returns flattened strings and values arrays.
  */
+/**
+ * Split SQL containing ? placeholders into template parts.
+ * Respects string literals (won't split on ? inside 'quoted strings').
+ */
+function splitSQLOnPlaceholders(sql: string): string[] {
+	const parts: string[] = [];
+	let current = "";
+	let inSingleQuote = false;
+	let inDoubleQuote = false;
+
+	for (let i = 0; i < sql.length; i++) {
+		const char = sql[i];
+
+		// Handle escaped quotes
+		if (char === "'" && !inDoubleQuote) {
+			if (sql[i + 1] === "'") {
+				current += "''";
+				i++;
+				continue;
+			}
+			inSingleQuote = !inSingleQuote;
+		} else if (char === '"' && !inSingleQuote) {
+			if (sql[i + 1] === '"') {
+				current += '""';
+				i++;
+				continue;
+			}
+			inDoubleQuote = !inDoubleQuote;
+		}
+
+		// Split on ? only outside quotes
+		if (char === "?" && !inSingleQuote && !inDoubleQuote) {
+			parts.push(current);
+			current = "";
+		} else {
+			current += char;
+		}
+	}
+	parts.push(current);
+	return parts;
+}
+
 function expandFragments(
 	strings: TemplateStringsArray,
 	values: unknown[],
@@ -736,11 +877,22 @@ function expandFragments(
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
 		if (isSQLFragment(value)) {
-			// Expand fragment: merge its SQL into strings, add its params to values
+			// Expand fragment: split its SQL on ? and interleave with params
 			const fragment = value as SQLFragment;
-			// Append fragment SQL to last string part
-			newStrings[newStrings.length - 1] += fragment.sql + strings[i + 1];
-			newValues.push(...fragment.params);
+			const sqlParts = splitSQLOnPlaceholders(fragment.sql);
+
+			// sqlParts.length should be fragment.params.length + 1
+			// Merge first part into last string
+			newStrings[newStrings.length - 1] += sqlParts[0];
+
+			// Interleave remaining parts with params
+			for (let j = 0; j < fragment.params.length; j++) {
+				newStrings.push(sqlParts[j + 1]);
+				newValues.push(fragment.params[j]);
+			}
+
+			// Append the next template string part
+			newStrings[newStrings.length - 1] += strings[i + 1];
 		} else {
 			// Regular value: add placeholder position
 			newStrings.push(strings[i + 1]);
@@ -835,17 +987,37 @@ export class Transaction {
 	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
-			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: colStrings, values: colValues} =
+				buildSelectCols(tableArray);
 			const {strings: expandedStrings, values: expandedValues} =
 				expandFragments(strings, values);
-			const prefixedStrings = makeTemplate([
-				prefix + expandedStrings[0],
-				...expandedStrings.slice(1),
-			]);
+
+			// Build: SELECT <cols> FROM <table> <where>
+			const queryStrings: string[] = ["SELECT "];
+			const queryValues: unknown[] = [];
+
+			// Merge column template
+			queryStrings[0] += colStrings[0];
+			for (let i = 1; i < colStrings.length; i++) {
+				queryStrings.push(colStrings[i]);
+			}
+			queryValues.push(...colValues);
+
+			// Add FROM <table>
+			queryStrings[queryStrings.length - 1] += " FROM ";
+			queryValues.push(ident(tableArray[0].name));
+			queryStrings.push(" ");
+
+			// Merge WHERE template
+			queryStrings[queryStrings.length - 1] += expandedStrings[0];
+			for (let i = 1; i < expandedStrings.length; i++) {
+				queryStrings.push(expandedStrings[i]);
+			}
+			queryValues.push(...expandedValues);
+
 			const rows = await this.#driver.all<Record<string, unknown>>(
-				prefixedStrings,
-				[...colParams, ...expandedValues],
+				makeTemplate(queryStrings),
+				queryValues,
 			);
 			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
 		};
@@ -885,17 +1057,37 @@ export class Transaction {
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
-			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: colStrings, values: colValues} =
+				buildSelectCols(tableArray);
 			const {strings: expandedStrings, values: expandedValues} =
 				expandFragments(strings, values);
-			const prefixedStrings = makeTemplate([
-				prefix + expandedStrings[0],
-				...expandedStrings.slice(1),
-			]);
+
+			// Build: SELECT <cols> FROM <table> <where>
+			const queryStrings: string[] = ["SELECT "];
+			const queryValues: unknown[] = [];
+
+			// Merge column template
+			queryStrings[0] += colStrings[0];
+			for (let i = 1; i < colStrings.length; i++) {
+				queryStrings.push(colStrings[i]);
+			}
+			queryValues.push(...colValues);
+
+			// Add FROM <table>
+			queryStrings[queryStrings.length - 1] += " FROM ";
+			queryValues.push(ident(tableArray[0].name));
+			queryStrings.push(" ");
+
+			// Merge WHERE template
+			queryStrings[queryStrings.length - 1] += expandedStrings[0];
+			for (let i = 1; i < expandedStrings.length; i++) {
+				queryStrings.push(expandedStrings[i]);
+			}
+			queryValues.push(...expandedValues);
+
 			const row = await this.#driver.get<Record<string, unknown>>(
-				prefixedStrings,
-				[...colParams, ...expandedValues],
+				makeTemplate(queryStrings),
+				queryValues,
 			);
 			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
 		};
@@ -1282,53 +1474,53 @@ export class Transaction {
 
 		const encoded = encodeData(table, validated);
 
-		// Build SET clause
-		const setCols = Object.keys(encoded);
-		const exprCols = Object.keys(expressions);
-		const setClauseParts: string[] = [];
-		for (const col of setCols) {
-			setClauseParts.push(`${quoteIdent(col)} = `);
-		}
-		const exprAssignments = exprCols
-			.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
-			.join(", ");
-
-		// Build complete UPDATE template
+		// Build UPDATE template: UPDATE <table> SET <col1> = <val1>, ... WHERE ...
 		const {strings: whereStrings, values: whereValues} = expandFragments(
 			strings,
 			templateValues,
 		);
-		const setValues = setCols.map((c) => encoded[c]);
 
-		// Construct: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE ...
-		const prefix = `UPDATE ${quoteIdent(table.name)} SET `;
-		const parts: string[] = [prefix];
+		const setCols = Object.keys(encoded);
+		const exprCols = Object.keys(expressions);
+
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		// Table name
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// SET assignments for regular values
 		for (let i = 0; i < setCols.length; i++) {
-			if (i === 0) {
-				parts[0] += `${quoteIdent(setCols[i])} = `;
-			} else {
-				parts.push(`, ${quoteIdent(setCols[i])} = `);
-			}
-		}
-		if (setCols.length > 0 && exprCols.length > 0) {
-			parts.push(`, ${exprAssignments} ${whereStrings[0]}`);
-		} else if (exprCols.length > 0) {
-			parts[0] += `${exprAssignments} ${whereStrings[0]}`;
-		} else {
-			parts.push(` ${whereStrings[0]}`);
-		}
-		// Add rest of WHERE template parts
-		for (let i = 1; i < whereStrings.length; i++) {
-			parts.push(whereStrings[i]);
+			const col = setCols[i];
+			queryValues.push(ident(col));
+			queryStrings.push(" = ");
+			queryValues.push(encoded[col]);
+			queryStrings.push(i < setCols.length - 1 ? ", " : "");
 		}
 
-		const allValues = [...setValues, ...whereValues];
+		// Expression assignments using mergeExpression
+		for (let i = 0; i < exprCols.length; i++) {
+			if (setCols.length > 0 || i > 0) {
+				queryStrings[queryStrings.length - 1] += ", ";
+			}
+			queryValues.push(ident(exprCols[i]));
+			queryStrings.push(" = ");
+			mergeExpression(queryStrings, queryValues, expressions[exprCols[i]]);
+		}
+
+		// Merge WHERE template
+		queryStrings[queryStrings.length - 1] += " " + whereStrings[0];
+		for (let i = 1; i < whereStrings.length; i++) {
+			queryStrings.push(whereStrings[i]);
+		}
+		queryValues.push(...whereValues);
 
 		if (this.#driver.supportsReturning) {
-			parts[parts.length - 1] += " RETURNING *";
+			queryStrings[queryStrings.length - 1] += " RETURNING *";
 			const rows = await this.#driver.all<Record<string, unknown>>(
-				makeTemplate(parts),
-				allValues,
+				makeTemplate(queryStrings),
+				queryValues,
 			);
 			return rows.map((row) => {
 				const decoded = decodeData(table, row);
@@ -1341,13 +1533,20 @@ export class Transaction {
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
 		// Build SELECT to get IDs first
-		const selectIdParts = [
-			`SELECT ${quoteIdent(pk)} FROM ${quoteIdent(table.name)} ${whereStrings[0]}`,
-			...whereStrings.slice(1),
-		];
+		const selectIdStrings: string[] = ["SELECT "];
+		const selectIdValues: unknown[] = [];
+		selectIdValues.push(ident(pk));
+		selectIdStrings.push(" FROM ");
+		selectIdValues.push(ident(table.name));
+		selectIdStrings.push(" " + whereStrings[0]);
+		for (let i = 1; i < whereStrings.length; i++) {
+			selectIdStrings.push(whereStrings[i]);
+		}
+		selectIdValues.push(...whereValues);
+
 		const idRows = await this.#driver.all<Record<string, unknown>>(
-			makeTemplate(selectIdParts),
-			whereValues,
+			makeTemplate(selectIdStrings),
+			selectIdValues,
 		);
 		const ids = idRows.map((r) => r[pk] as string | number);
 
@@ -1356,7 +1555,7 @@ export class Transaction {
 		}
 
 		// Run UPDATE
-		await this.#driver.run(makeTemplate(parts), allValues);
+		await this.#driver.run(makeTemplate(queryStrings), queryValues);
 
 		// SELECT by IDs
 		const {strings: selectStrings, values: selectVals} = buildSelectByPksParts(
@@ -1392,11 +1591,15 @@ export class Transaction {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 				const {strings: expandedStrings, values: expandedValues} =
 					expandFragments(strings, values);
-				const prefixedStrings = makeTemplate([
-					`DELETE FROM ${quoteIdent(table.name)} ${expandedStrings[0]}`,
-					...expandedStrings.slice(1),
-				]);
-				return this.#driver.run(prefixedStrings, expandedValues);
+				// Build: DELETE FROM <table> <where>
+				const deleteStrings: string[] = ["DELETE FROM "];
+				const deleteValues: unknown[] = [ident(table.name)];
+				deleteStrings.push(" " + expandedStrings[0]);
+				for (let i = 1; i < expandedStrings.length; i++) {
+					deleteStrings.push(expandedStrings[i]);
+				}
+				deleteValues.push(...expandedValues);
+				return this.#driver.run(makeTemplate(deleteStrings), deleteValues);
 			};
 		}
 
@@ -1484,24 +1687,44 @@ export class Transaction {
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
-		const setClauses: string[] = [
-			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
-		];
+		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... WHERE <pk> = <id>
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// First assignment: softDeleteField = CURRENT_TIMESTAMP
+		queryValues.push(ident(softDeleteField));
+		queryStrings.push(" = CURRENT_TIMESTAMP");
+
+		// Expression assignments
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
-			}
-		}
-		for (const [field, sym] of Object.entries(symbols)) {
-			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(" = ");
+				mergeExpression(queryStrings, queryValues, expr);
 			}
 		}
 
-		const setClause = setClauses.join(", ");
-		const sql = `UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} = `;
-		const parts = makeTemplate([sql, ""]);
-		return this.#driver.run(parts, [id]);
+		// Symbol assignments
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+			}
+		}
+
+		// WHERE clause
+		queryStrings[queryStrings.length - 1] += " WHERE ";
+		queryValues.push(ident(pk));
+		queryStrings.push(" = ");
+		queryValues.push(id);
+		queryStrings.push("");
+
+		return this.#driver.run(makeTemplate(queryStrings), queryValues);
 	}
 
 	async #softDeleteByIds<T extends Table<any>>(
@@ -1522,30 +1745,47 @@ export class Transaction {
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
-		const setClauses: string[] = [
-			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
-		];
+		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... WHERE <pk> IN (...)
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// First assignment: softDeleteField = CURRENT_TIMESTAMP
+		queryValues.push(ident(softDeleteField));
+		queryStrings.push(" = CURRENT_TIMESTAMP");
+
+		// Expression assignments
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(" = ");
+				mergeExpression(queryStrings, queryValues, expr);
 			}
 		}
+
+		// Symbol assignments
 		for (const [field, sym] of Object.entries(symbols)) {
 			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
-		const setClause = setClauses.join(", ");
-		const parts: string[] = [
-			`UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} IN (`,
-		];
-		for (let i = 1; i < ids.length; i++) {
-			parts.push(", ");
-		}
-		parts.push(")");
+		// WHERE clause with IN
+		queryStrings[queryStrings.length - 1] += " WHERE ";
+		queryValues.push(ident(pk));
+		queryStrings.push(" IN (");
 
-		return this.#driver.run(makeTemplate(parts), ids);
+		for (let i = 0; i < ids.length; i++) {
+			queryValues.push(ids[i]);
+			queryStrings.push(i < ids.length - 1 ? ", " : ")");
+		}
+
+		return this.#driver.run(makeTemplate(queryStrings), queryValues);
 	}
 
 	async #softDeleteWithWhere<T extends Table<any>>(
@@ -1558,31 +1798,49 @@ export class Transaction {
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
-		const setClauses: string[] = [
-			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
-		];
-		for (const [field, expr] of Object.entries(expressions)) {
-			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
-			}
-		}
-		for (const [field, sym] of Object.entries(symbols)) {
-			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
-			}
-		}
-
-		const setClause = setClauses.join(", ");
 		const {strings: expandedStrings, values: expandedValues} = expandFragments(
 			strings,
 			templateValues,
 		);
-		const prefixedStrings = makeTemplate([
-			`UPDATE ${quoteIdent(table.name)} SET ${setClause} ${expandedStrings[0]}`,
-			...expandedStrings.slice(1),
-		]);
 
-		return this.#driver.run(prefixedStrings, expandedValues);
+		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... <where>
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// First assignment: softDeleteField = CURRENT_TIMESTAMP
+		queryValues.push(ident(softDeleteField));
+		queryStrings.push(" = CURRENT_TIMESTAMP");
+
+		// Expression assignments
+		for (const [field, expr] of Object.entries(expressions)) {
+			if (field !== softDeleteField) {
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(" = ");
+				mergeExpression(queryStrings, queryValues, expr);
+			}
+		}
+
+		// Symbol assignments
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+			}
+		}
+
+		// Merge WHERE template
+		queryStrings[queryStrings.length - 1] += " " + expandedStrings[0];
+		for (let i = 1; i < expandedStrings.length; i++) {
+			queryStrings.push(expandedStrings[i]);
+		}
+		queryValues.push(...expandedValues);
+
+		return this.#driver.run(makeTemplate(queryStrings), queryValues);
 	}
 
 	// ==========================================================================
@@ -1789,17 +2047,37 @@ export class Database extends EventTarget {
 	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
-			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: colStrings, values: colValues} =
+				buildSelectCols(tableArray);
 			const {strings: expandedStrings, values: expandedValues} =
 				expandFragments(strings, values);
-			const prefixedStrings = makeTemplate([
-				prefix + expandedStrings[0],
-				...expandedStrings.slice(1),
-			]);
+
+			// Build: SELECT <cols> FROM <table> <where>
+			const queryStrings: string[] = ["SELECT "];
+			const queryValues: unknown[] = [];
+
+			// Merge column template
+			queryStrings[0] += colStrings[0];
+			for (let i = 1; i < colStrings.length; i++) {
+				queryStrings.push(colStrings[i]);
+			}
+			queryValues.push(...colValues);
+
+			// Add FROM <table>
+			queryStrings[queryStrings.length - 1] += " FROM ";
+			queryValues.push(ident(tableArray[0].name));
+			queryStrings.push(" ");
+
+			// Merge WHERE template
+			queryStrings[queryStrings.length - 1] += expandedStrings[0];
+			for (let i = 1; i < expandedStrings.length; i++) {
+				queryStrings.push(expandedStrings[i]);
+			}
+			queryValues.push(...expandedValues);
+
 			const rows = await this.#driver.all<Record<string, unknown>>(
-				prefixedStrings,
-				[...colParams, ...expandedValues],
+				makeTemplate(queryStrings),
+				queryValues,
 			);
 			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
 		};
@@ -1855,17 +2133,37 @@ export class Database extends EventTarget {
 		// Tagged template query
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
-			const {sql: cols, params: colParams} = buildSelectCols(tableArray);
-			const prefix = `SELECT ${cols} FROM ${quoteIdent(tableArray[0].name)} `;
+			const {strings: colStrings, values: colValues} =
+				buildSelectCols(tableArray);
 			const {strings: expandedStrings, values: expandedValues} =
 				expandFragments(strings, values);
-			const prefixedStrings = makeTemplate([
-				prefix + expandedStrings[0],
-				...expandedStrings.slice(1),
-			]);
+
+			// Build: SELECT <cols> FROM <table> <where>
+			const queryStrings: string[] = ["SELECT "];
+			const queryValues: unknown[] = [];
+
+			// Merge column template
+			queryStrings[0] += colStrings[0];
+			for (let i = 1; i < colStrings.length; i++) {
+				queryStrings.push(colStrings[i]);
+			}
+			queryValues.push(...colValues);
+
+			// Add FROM <table>
+			queryStrings[queryStrings.length - 1] += " FROM ";
+			queryValues.push(ident(tableArray[0].name));
+			queryStrings.push(" ");
+
+			// Merge WHERE template
+			queryStrings[queryStrings.length - 1] += expandedStrings[0];
+			for (let i = 1; i < expandedStrings.length; i++) {
+				queryStrings.push(expandedStrings[i]);
+			}
+			queryValues.push(...expandedValues);
+
 			const row = await this.#driver.get<Record<string, unknown>>(
-				prefixedStrings,
-				[...colParams, ...expandedValues],
+				makeTemplate(queryStrings),
+				queryValues,
 			);
 			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
 		};
@@ -2289,49 +2587,53 @@ export class Database extends EventTarget {
 
 		const encoded = encodeData(table, validated);
 
-		// Build SET clause
-		const setCols = Object.keys(encoded);
-		const exprCols = Object.keys(expressions);
-		const exprAssignments = exprCols
-			.map((c) => `${quoteIdent(c)} = ${expressions[c].sql}`)
-			.join(", ");
-
-		// Build complete UPDATE template
+		// Build UPDATE template: UPDATE <table> SET <col1> = <val1>, ... WHERE ...
 		const {strings: whereStrings, values: whereValues} = expandFragments(
 			strings,
 			templateValues,
 		);
-		const setValues = setCols.map((c) => encoded[c]);
 
-		// Construct: UPDATE "table" SET "col1" = ?, "col2" = ? WHERE ...
-		const prefix = `UPDATE ${quoteIdent(table.name)} SET `;
-		const parts: string[] = [prefix];
+		const setCols = Object.keys(encoded);
+		const exprCols = Object.keys(expressions);
+
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		// Table name
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// SET assignments for regular values
 		for (let i = 0; i < setCols.length; i++) {
-			if (i === 0) {
-				parts[0] += `${quoteIdent(setCols[i])} = `;
-			} else {
-				parts.push(`, ${quoteIdent(setCols[i])} = `);
-			}
-		}
-		if (setCols.length > 0 && exprCols.length > 0) {
-			parts.push(`, ${exprAssignments} ${whereStrings[0]}`);
-		} else if (exprCols.length > 0) {
-			parts[0] += `${exprAssignments} ${whereStrings[0]}`;
-		} else {
-			parts.push(` ${whereStrings[0]}`);
-		}
-		// Add rest of WHERE template parts
-		for (let i = 1; i < whereStrings.length; i++) {
-			parts.push(whereStrings[i]);
+			const col = setCols[i];
+			queryValues.push(ident(col));
+			queryStrings.push(" = ");
+			queryValues.push(encoded[col]);
+			queryStrings.push(i < setCols.length - 1 ? ", " : "");
 		}
 
-		const allValues = [...setValues, ...whereValues];
+		// Expression assignments using mergeExpression
+		for (let i = 0; i < exprCols.length; i++) {
+			if (setCols.length > 0 || i > 0) {
+				queryStrings[queryStrings.length - 1] += ", ";
+			}
+			queryValues.push(ident(exprCols[i]));
+			queryStrings.push(" = ");
+			mergeExpression(queryStrings, queryValues, expressions[exprCols[i]]);
+		}
+
+		// Merge WHERE template
+		queryStrings[queryStrings.length - 1] += " " + whereStrings[0];
+		for (let i = 1; i < whereStrings.length; i++) {
+			queryStrings.push(whereStrings[i]);
+		}
+		queryValues.push(...whereValues);
 
 		if (this.#driver.supportsReturning) {
-			parts[parts.length - 1] += " RETURNING *";
+			queryStrings[queryStrings.length - 1] += " RETURNING *";
 			const rows = await this.#driver.all<Record<string, unknown>>(
-				makeTemplate(parts),
-				allValues,
+				makeTemplate(queryStrings),
+				queryValues,
 			);
 			return rows.map((row) => {
 				const decoded = decodeData(table, row);
@@ -2343,13 +2645,21 @@ export class Database extends EventTarget {
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
-		const selectIdParts = [
-			`SELECT ${quoteIdent(pk)} FROM ${quoteIdent(table.name)} ${whereStrings[0]}`,
-			...whereStrings.slice(1),
-		];
+		// Build SELECT to get IDs first
+		const selectIdStrings: string[] = ["SELECT "];
+		const selectIdValues: unknown[] = [];
+		selectIdValues.push(ident(pk));
+		selectIdStrings.push(" FROM ");
+		selectIdValues.push(ident(table.name));
+		selectIdStrings.push(" " + whereStrings[0]);
+		for (let i = 1; i < whereStrings.length; i++) {
+			selectIdStrings.push(whereStrings[i]);
+		}
+		selectIdValues.push(...whereValues);
+
 		const idRows = await this.#driver.all<Record<string, unknown>>(
-			makeTemplate(selectIdParts),
-			whereValues,
+			makeTemplate(selectIdStrings),
+			selectIdValues,
 		);
 		const ids = idRows.map((r) => r[pk] as string | number);
 
@@ -2358,7 +2668,7 @@ export class Database extends EventTarget {
 		}
 
 		// Run UPDATE
-		await this.#driver.run(makeTemplate(parts), allValues);
+		await this.#driver.run(makeTemplate(queryStrings), queryValues);
 
 		// SELECT by IDs
 		const {strings: selectStrings, values: selectVals} = buildSelectByPksParts(
@@ -2407,11 +2717,15 @@ export class Database extends EventTarget {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 				const {strings: expandedStrings, values: expandedValues} =
 					expandFragments(strings, values);
-				const prefixedStrings = makeTemplate([
-					`DELETE FROM ${quoteIdent(table.name)} ${expandedStrings[0]}`,
-					...expandedStrings.slice(1),
-				]);
-				return this.#driver.run(prefixedStrings, expandedValues);
+				// Build: DELETE FROM <table> <where>
+				const deleteStrings: string[] = ["DELETE FROM "];
+				const deleteValues: unknown[] = [ident(table.name)];
+				deleteStrings.push(" " + expandedStrings[0]);
+				for (let i = 1; i < expandedStrings.length; i++) {
+					deleteStrings.push(expandedStrings[i]);
+				}
+				deleteValues.push(...expandedValues);
+				return this.#driver.run(makeTemplate(deleteStrings), deleteValues);
 			};
 		}
 
@@ -2515,24 +2829,44 @@ export class Database extends EventTarget {
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
-		const setClauses: string[] = [
-			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
-		];
+		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... WHERE <pk> = <id>
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// First assignment: softDeleteField = CURRENT_TIMESTAMP
+		queryValues.push(ident(softDeleteField));
+		queryStrings.push(" = CURRENT_TIMESTAMP");
+
+		// Expression assignments
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
-			}
-		}
-		for (const [field, sym] of Object.entries(symbols)) {
-			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(" = ");
+				mergeExpression(queryStrings, queryValues, expr);
 			}
 		}
 
-		const setClause = setClauses.join(", ");
-		const sql = `UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} = `;
-		const parts = makeTemplate([sql, ""]);
-		return this.#driver.run(parts, [id]);
+		// Symbol assignments
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+			}
+		}
+
+		// WHERE clause
+		queryStrings[queryStrings.length - 1] += " WHERE ";
+		queryValues.push(ident(pk));
+		queryStrings.push(" = ");
+		queryValues.push(id);
+		queryStrings.push("");
+
+		return this.#driver.run(makeTemplate(queryStrings), queryValues);
 	}
 
 	async #softDeleteByIds<T extends Table<any>>(
@@ -2553,30 +2887,47 @@ export class Database extends EventTarget {
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
-		const setClauses: string[] = [
-			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
-		];
+		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... WHERE <pk> IN (...)
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// First assignment: softDeleteField = CURRENT_TIMESTAMP
+		queryValues.push(ident(softDeleteField));
+		queryStrings.push(" = CURRENT_TIMESTAMP");
+
+		// Expression assignments
 		for (const [field, expr] of Object.entries(expressions)) {
 			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(" = ");
+				mergeExpression(queryStrings, queryValues, expr);
 			}
 		}
+
+		// Symbol assignments
 		for (const [field, sym] of Object.entries(symbols)) {
 			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
 			}
 		}
 
-		const setClause = setClauses.join(", ");
-		const parts: string[] = [
-			`UPDATE ${quoteIdent(table.name)} SET ${setClause} WHERE ${quoteIdent(pk)} IN (`,
-		];
-		for (let i = 1; i < ids.length; i++) {
-			parts.push(", ");
-		}
-		parts.push(")");
+		// WHERE clause with IN
+		queryStrings[queryStrings.length - 1] += " WHERE ";
+		queryValues.push(ident(pk));
+		queryStrings.push(" IN (");
 
-		return this.#driver.run(makeTemplate(parts), ids);
+		for (let i = 0; i < ids.length; i++) {
+			queryValues.push(ids[i]);
+			queryStrings.push(i < ids.length - 1 ? ", " : ")");
+		}
+
+		return this.#driver.run(makeTemplate(queryStrings), queryValues);
 	}
 
 	async #softDeleteWithWhere<T extends Table<any>>(
@@ -2589,31 +2940,49 @@ export class Database extends EventTarget {
 		const schemaExprs = injectSchemaExpressions(table, {}, "update");
 		const {expressions, symbols} = extractDBExpressions(schemaExprs);
 
-		const setClauses: string[] = [
-			`${quoteIdent(softDeleteField)} = CURRENT_TIMESTAMP`,
-		];
-		for (const [field, expr] of Object.entries(expressions)) {
-			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${expr.sql}`);
-			}
-		}
-		for (const [field, sym] of Object.entries(symbols)) {
-			if (field !== softDeleteField) {
-				setClauses.push(`${quoteIdent(field)} = ${resolveSQLSymbol(sym)}`);
-			}
-		}
-
-		const setClause = setClauses.join(", ");
 		const {strings: expandedStrings, values: expandedValues} = expandFragments(
 			strings,
 			templateValues,
 		);
-		const prefixedStrings = makeTemplate([
-			`UPDATE ${quoteIdent(table.name)} SET ${setClause} ${expandedStrings[0]}`,
-			...expandedStrings.slice(1),
-		]);
 
-		return this.#driver.run(prefixedStrings, expandedValues);
+		// Build: UPDATE <table> SET <softDeleteField> = CURRENT_TIMESTAMP, ... <where>
+		const queryStrings: string[] = ["UPDATE "];
+		const queryValues: unknown[] = [];
+
+		queryValues.push(ident(table.name));
+		queryStrings.push(" SET ");
+
+		// First assignment: softDeleteField = CURRENT_TIMESTAMP
+		queryValues.push(ident(softDeleteField));
+		queryStrings.push(" = CURRENT_TIMESTAMP");
+
+		// Expression assignments
+		for (const [field, expr] of Object.entries(expressions)) {
+			if (field !== softDeleteField) {
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(" = ");
+				mergeExpression(queryStrings, queryValues, expr);
+			}
+		}
+
+		// Symbol assignments
+		for (const [field, sym] of Object.entries(symbols)) {
+			if (field !== softDeleteField) {
+				queryStrings[queryStrings.length - 1] += ", ";
+				queryValues.push(ident(field));
+				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+			}
+		}
+
+		// Merge WHERE template
+		queryStrings[queryStrings.length - 1] += " " + expandedStrings[0];
+		for (let i = 1; i < expandedStrings.length; i++) {
+			queryStrings.push(expandedStrings[i]);
+		}
+		queryValues.push(...expandedValues);
+
+		return this.#driver.run(makeTemplate(queryStrings), queryValues);
 	}
 
 	// ==========================================================================

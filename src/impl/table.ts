@@ -219,24 +219,30 @@ export interface FieldDbMeta {
 	/** Value to apply on INSERT */
 	inserted?: {
 		type: "sql" | "symbol" | "function";
-		sql?: string;
-		params?: unknown[];
+		/** Template strings (for type: "sql") */
+		strings?: TemplateStringsArray;
+		/** Template values (for type: "sql") */
+		values?: readonly unknown[];
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
 	/** Value to apply on UPDATE only */
 	updated?: {
 		type: "sql" | "symbol" | "function";
-		sql?: string;
-		params?: unknown[];
+		/** Template strings (for type: "sql") */
+		strings?: TemplateStringsArray;
+		/** Template values (for type: "sql") */
+		values?: readonly unknown[];
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
 	/** Value to apply on both INSERT and UPDATE */
 	upserted?: {
 		type: "sql" | "symbol" | "function";
-		sql?: string;
-		params?: unknown[];
+		/** Template strings (for type: "sql") */
+		strings?: TemplateStringsArray;
+		/** Template values (for type: "sql") */
+		values?: readonly unknown[];
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
@@ -251,6 +257,86 @@ export interface FieldDbMeta {
  */
 function isTemplateStringsArray(value: unknown): value is TemplateStringsArray {
 	return Array.isArray(value) && "raw" in value;
+}
+
+/**
+ * Build a TemplateStringsArray from string parts.
+ * Used to construct templates programmatically while preserving the .raw property.
+ */
+function makeTemplate(parts: string[]): TemplateStringsArray {
+	return Object.assign([...parts], {raw: parts}) as TemplateStringsArray;
+}
+
+/**
+ * Split SQL containing ? placeholders into template parts.
+ * Respects string literals (won't split on ? inside 'quoted strings').
+ */
+function splitSQLOnPlaceholders(sql: string): string[] {
+	const parts: string[] = [];
+	let current = "";
+	let inSingleQuote = false;
+	let inDoubleQuote = false;
+
+	for (let i = 0; i < sql.length; i++) {
+		const char = sql[i];
+
+		// Handle escaped quotes
+		if (char === "'" && !inDoubleQuote) {
+			if (sql[i + 1] === "'") {
+				current += "''";
+				i++;
+				continue;
+			}
+			inSingleQuote = !inSingleQuote;
+		} else if (char === '"' && !inSingleQuote) {
+			if (sql[i + 1] === '"') {
+				current += '""';
+				i++;
+				continue;
+			}
+			inDoubleQuote = !inDoubleQuote;
+		}
+
+		// Split on ? only outside quotes
+		if (char === "?" && !inSingleQuote && !inDoubleQuote) {
+			parts.push(current);
+			current = "";
+		} else {
+			current += char;
+		}
+	}
+	parts.push(current);
+	return parts;
+}
+
+/**
+ * Merge a SQLFragment into strings/values arrays, maintaining the template invariant.
+ * Splits fragment.sql on ? and interleaves with fragment.params.
+ *
+ * @param strings - Mutable string array to append to
+ * @param values - Mutable values array to append to
+ * @param fragment - Fragment with {sql, params} to merge
+ * @param suffix - String to append after the fragment
+ */
+function mergeFragment(
+	strings: string[],
+	values: unknown[],
+	fragment: {sql: string; params: readonly unknown[]},
+	suffix: string,
+): void {
+	const sqlParts = splitSQLOnPlaceholders(fragment.sql);
+
+	// Merge first part into last string
+	strings[strings.length - 1] += sqlParts[0];
+
+	// Interleave remaining parts with params
+	for (let j = 0; j < fragment.params.length; j++) {
+		strings.push(sqlParts[j + 1]);
+		values.push(fragment.params[j]);
+	}
+
+	// Append suffix
+	strings[strings.length - 1] += suffix;
 }
 
 /**
@@ -422,12 +508,15 @@ function createDbMethods(schema: ZodTypeAny) {
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
-				// Parse like derive() does: detect SQL fragments, parameterize other values
-				const parts: string[] = [];
-				const params: unknown[] = [];
+				// Build template by flattening any SQL fragments while preserving structure
+				const strings: string[] = [];
+				const values: unknown[] = [];
 
 				for (let i = 0; i < stringsOrValue.length; i++) {
-					parts.push(stringsOrValue[i]);
+					if (i === 0) {
+						strings.push(stringsOrValue[i]);
+					}
+
 					if (i < templateValues.length) {
 						const value = templateValues[i];
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
@@ -436,18 +525,17 @@ function createDbMethods(schema: ZodTypeAny) {
 								sql: string;
 								params: readonly unknown[];
 							};
-							parts.push(fragment.sql);
-							params.push(...fragment.params);
+							// Merge fragment properly, splitting on ? to maintain template invariant
+							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
-							// Regular value - parameterize it
-							parts.push("?");
-							params.push(value);
+							// Regular value - add to values array
+							values.push(value);
+							strings.push(stringsOrValue[i + 1]);
 						}
 					}
 				}
 
-				const sql = parts.join("").trim();
-				insertedMeta = {type: "sql", sql, params};
+				insertedMeta = {type: "sql", strings: makeTemplate(strings), values};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				insertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -492,12 +580,15 @@ function createDbMethods(schema: ZodTypeAny) {
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
-				// Parse like derive() does: detect SQL fragments, parameterize other values
-				const parts: string[] = [];
-				const params: unknown[] = [];
+				// Build template by flattening any SQL fragments while preserving structure
+				const strings: string[] = [];
+				const values: unknown[] = [];
 
 				for (let i = 0; i < stringsOrValue.length; i++) {
-					parts.push(stringsOrValue[i]);
+					if (i === 0) {
+						strings.push(stringsOrValue[i]);
+					}
+
 					if (i < templateValues.length) {
 						const value = templateValues[i];
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
@@ -506,18 +597,17 @@ function createDbMethods(schema: ZodTypeAny) {
 								sql: string;
 								params: readonly unknown[];
 							};
-							parts.push(fragment.sql);
-							params.push(...fragment.params);
+							// Merge fragment properly, splitting on ? to maintain template invariant
+							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
-							// Regular value - parameterize it
-							parts.push("?");
-							params.push(value);
+							// Regular value - add to values array
+							values.push(value);
+							strings.push(stringsOrValue[i + 1]);
 						}
 					}
 				}
 
-				const sql = parts.join("").trim();
-				updatedMeta = {type: "sql", sql, params};
+				updatedMeta = {type: "sql", strings: makeTemplate(strings), values};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				updatedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -562,12 +652,15 @@ function createDbMethods(schema: ZodTypeAny) {
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
-				// Parse like derive() does: detect SQL fragments, parameterize other values
-				const parts: string[] = [];
-				const params: unknown[] = [];
+				// Build template by flattening any SQL fragments while preserving structure
+				const strings: string[] = [];
+				const values: unknown[] = [];
 
 				for (let i = 0; i < stringsOrValue.length; i++) {
-					parts.push(stringsOrValue[i]);
+					if (i === 0) {
+						strings.push(stringsOrValue[i]);
+					}
+
 					if (i < templateValues.length) {
 						const value = templateValues[i];
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
@@ -576,18 +669,17 @@ function createDbMethods(schema: ZodTypeAny) {
 								sql: string;
 								params: readonly unknown[];
 							};
-							parts.push(fragment.sql);
-							params.push(...fragment.params);
+							// Merge fragment properly, splitting on ? to maintain template invariant
+							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
-							// Regular value - parameterize it
-							parts.push("?");
-							params.push(value);
+							// Regular value - add to values array
+							values.push(value);
+							strings.push(stringsOrValue[i + 1]);
 						}
 					}
 				}
 
-				const sql = parts.join("").trim();
-				upsertedMeta = {type: "sql", sql, params};
+				upsertedMeta = {type: "sql", strings: makeTemplate(strings), values};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				upsertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -812,10 +904,10 @@ export interface ReferenceInfo {
 export interface DerivedExpr {
 	/** The field name for this derived column */
 	fieldName: string;
-	/** The SQL expression (e.g., 'COUNT("likes"."id")') */
-	sql: string;
-	/** Parameters for the expression */
-	params: readonly unknown[];
+	/** Template strings for the expression */
+	strings: TemplateStringsArray;
+	/** Template values for the expression */
+	values: readonly unknown[];
 }
 
 // ============================================================================
@@ -1582,31 +1674,45 @@ function createTableObject(
 			fieldName: N,
 			fieldType: V,
 		) {
-			return (strings: TemplateStringsArray, ...values: unknown[]) => {
-				// Parse template string with interpolated values
-				const parts: string[] = [];
-				const params: unknown[] = [];
+			return (stringsOrValue: TemplateStringsArray, ...templateValues: unknown[]) => {
+				// Build template by flattening any SQL fragments
+				const strings: string[] = [];
+				const values: unknown[] = [];
 
-				for (let i = 0; i < strings.length; i++) {
-					parts.push(strings[i]);
-					if (i < values.length) {
-						const value = values[i];
+				for (let i = 0; i < stringsOrValue.length; i++) {
+					if (i === 0) {
+						strings.push(stringsOrValue[i]);
+					}
+
+					if (i < templateValues.length) {
+						const value = templateValues[i];
 						// Check if it's an SQL fragment (from cols proxy or other fragments)
 						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as ColumnFragment;
-							parts.push(fragment.sql);
-							params.push(...fragment.params);
+							const fragment = value as unknown as {
+								sql: string;
+								params: readonly unknown[];
+							};
+							// Merge fragment properly, splitting on ? to maintain template invariant
+							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
 						} else {
-							// Regular value - parameterize it
-							parts.push("?");
-							params.push(value);
+							// Regular value - add to values array
+							values.push(value);
+							strings.push(stringsOrValue[i + 1]);
 						}
 					}
 				}
 
-				// Clean up the SQL expression (trim whitespace, normalize)
-				const sql = parts.join("").trim();
-				const derivedExpr: DerivedExpr = {fieldName, sql, params};
+				// Trim leading/trailing whitespace from first and last strings
+				if (strings.length > 0) {
+					strings[0] = strings[0].trimStart();
+					strings[strings.length - 1] = strings[strings.length - 1].trimEnd();
+				}
+
+				const derivedExpr: DerivedExpr = {
+					fieldName,
+					strings: makeTemplate(strings),
+					values,
+				};
 
 				// Extend schema with new field
 				const mergedSchema = schema.extend({[fieldName]: fieldType} as any);

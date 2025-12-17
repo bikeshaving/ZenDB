@@ -457,8 +457,9 @@ describe("Table.derive()", () => {
 
 		const expr = (PostsWithCount.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("likeCount");
-		expect(expr.sql).toBe('COUNT("likes"."id")');
-		expect(expr.params).toEqual([]);
+		// Template format: strings: ['COUNT("likes"."id")'], values: []
+		expect(Array.from(expr.strings)).toEqual(['COUNT("likes"."id")']);
+		expect(expr.values).toEqual([]);
 	});
 
 	test("tracks derived fields in meta.derivedFields", () => {
@@ -499,8 +500,12 @@ describe("Table.derive()", () => {
 
 		const expr = (PostsWithThreshold.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("hasMany");
-		expect(expr.sql).toBe("CASE WHEN COUNT(*) > ? THEN 1 ELSE 0 END");
-		expect(expr.params).toEqual([10]);
+		// Template format: strings: ["CASE WHEN COUNT(*) > ", " THEN 1 ELSE 0 END"], values: [10]
+		expect(Array.from(expr.strings)).toEqual([
+			"CASE WHEN COUNT(*) > ",
+			" THEN 1 ELSE 0 END",
+		]);
+		expect(expr.values).toEqual([10]);
 	});
 
 	test("cols proxy works for derived fields", () => {
@@ -811,25 +816,30 @@ describe("Schema marker validation", () => {
 		const defaultValue = 42;
 		const multiplier = 2;
 
-		// Test inserted() with regular values - they become params
+		// Test inserted() with regular values - they become values in template
 		const TestTable1 = table("test1", {
 			id: z.string().db.primary(),
 			computed: z.number().db.inserted`${defaultValue} * ${multiplier}`,
 		});
 		const insertedMeta = TestTable1.meta.fields.computed.inserted;
 		expect(insertedMeta?.type).toBe("sql");
-		expect(insertedMeta?.sql).toBe("? * ?");
-		expect(insertedMeta?.params).toEqual([42, 2]);
+		// Template: `${42} * ${2}` -> strings: ["", " * ", ""], values: [42, 2]
+		expect(Array.from(insertedMeta?.strings ?? [])).toEqual(["", " * ", ""]);
+		expect(insertedMeta?.values).toEqual([42, 2]);
 
-		// Test updated() with regular values - they become params
+		// Test updated() with regular values - they become values in template
 		const TestTable2 = table("test2", {
 			id: z.string().db.primary(),
 			computed: z.number().db.updated`COALESCE(?, ${defaultValue}) + 1`,
 		});
 		const updatedMeta = TestTable2.meta.fields.computed.updated;
 		expect(updatedMeta?.type).toBe("sql");
-		expect(updatedMeta?.sql).toBe("COALESCE(?, ?) + 1");
-		expect(updatedMeta?.params).toEqual([42]);
+		// Template: `COALESCE(?, ${42}) + 1` -> strings: ["COALESCE(?, ", ") + 1"], values: [42]
+		expect(Array.from(updatedMeta?.strings ?? [])).toEqual([
+			"COALESCE(?, ",
+			") + 1",
+		]);
+		expect(updatedMeta?.values).toEqual([42]);
 	});
 
 	test("tagged template with SQL fragments inlines fragment SQL", () => {
@@ -846,9 +856,12 @@ describe("Schema marker validation", () => {
 		});
 		const insertedMeta = TestTable1.meta.fields.computed.inserted;
 		expect(insertedMeta?.type).toBe("sql");
-		// Column reference includes table name: "users"."score"
-		expect(insertedMeta?.sql).toBe('"users"."score" + 1');
-		expect(insertedMeta?.params).toEqual([]);
+		// Column reference is inlined: "users"."score" + 1
+		// strings: ['"users"."score" + 1'], values: []
+		expect(Array.from(insertedMeta?.strings ?? [])).toEqual([
+			'"users"."score" + 1',
+		]);
+		expect(insertedMeta?.values).toEqual([]);
 
 		// Test updated() with SQL fragment
 		const TestTable2 = table("test2", {
@@ -857,8 +870,12 @@ describe("Schema marker validation", () => {
 		});
 		const updatedMeta = TestTable2.meta.fields.computed.updated;
 		expect(updatedMeta?.type).toBe("sql");
-		expect(updatedMeta?.sql).toBe('COALESCE("users"."score", 0) * 2');
-		expect(updatedMeta?.params).toEqual([]);
+		// Fragment is inlined: COALESCE("users"."score", 0) * 2
+		// strings: ['COALESCE("users"."score", 0) * 2'], values: []
+		expect(Array.from(updatedMeta?.strings ?? [])).toEqual([
+			'COALESCE("users"."score", 0) * 2',
+		]);
+		expect(updatedMeta?.values).toEqual([]);
 	});
 
 	test("encode() throws when combined with inserted()", () => {
