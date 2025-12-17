@@ -1,12 +1,12 @@
 {
-  "name": "@b9g/zealot",
+  "name": "@b9g/zen",
   "version": "0.1.0",
-  "description": "Schema-driven database client. Zod schemas define storage, validation, and form fields.",
+  "description": "The simple database client. Define tables. Write SQL. Get objects.",
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/src/zealot.d.ts",
-      "import": "./dist/src/zealot.js"
+      "types": "./dist/src/zen.d.ts",
+      "import": "./dist/src/zen.js"
     },
     "./bun": {
       "types": "./dist/src/bun.d.ts",
@@ -40,13 +40,13 @@
       "types": "./dist/src/sqlite.d.ts",
       "import": "./dist/src/sqlite.js"
     },
-    "./zealot": {
-      "types": "./dist/src/zealot.d.ts",
-      "import": "./dist/src/zealot.js"
+    "./zen": {
+      "types": "./dist/src/zen.d.ts",
+      "import": "./dist/src/zen.js"
     },
-    "./zealot.js": {
-      "types": "./dist/src/zealot.d.ts",
-      "import": "./dist/src/zealot.js"
+    "./zen.js": {
+      "types": "./dist/src/zen.d.ts",
+      "import": "./dist/src/zen.js"
     },
     "./package.json": "./dist/package.json"
   },
@@ -103,6 +103,6 @@
     "mysql"
   ],
   "license": "MIT",
-  "module": "./dist/src/zealot.js",
-  "types": "./dist/src/zealot.d.ts"
+  "module": "./dist/src/zen.js",
+  "types": "./dist/src/zen.d.ts"
 }

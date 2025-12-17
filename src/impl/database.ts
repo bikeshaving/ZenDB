@@ -19,7 +19,7 @@ import {
 // DB Expressions - Runtime values evaluated by the database
 // ============================================================================
 
-const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
 
 /**
  * A DB expression that gets injected as raw SQL, not parameterized.

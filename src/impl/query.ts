@@ -26,7 +26,7 @@ export interface ParsedQuery {
 // SQL Fragments
 // ============================================================================
 
-const SQL_FRAGMENT = Symbol.for("@b9g/zealot:fragment");
+const SQL_FRAGMENT = Symbol.for("@b9g/zen:fragment");
 
 /**
  * A SQL fragment with embedded parameters.
@@ -78,7 +78,7 @@ export function createFragment(
 // DDL Fragments
 // ============================================================================
 
-const DDL_FRAGMENT = Symbol.for("@b9g/zealot:ddl-fragment");
+const DDL_FRAGMENT = Symbol.for("@b9g/zen:ddl-fragment");
 
 /**
  * A DDL fragment that gets transformed based on the driver's dialect.

@@ -1,76 +1,53 @@
-# @b9g/zealot
+# @b9g/zen
 
-Zod-to-SQL database client and standard for TypeScript databases.
+The simple database client.
 
-A schema-driven SQL client for TypeScript. Replaces ORMs (Prisma, Drizzle ORM), query builders (Kysely), and raw client wrappers with a single SQL-first library built on Zod schemas and event-driven migrations.
-
-**Not an ORM** — a thin wrapper over SQL that uses Zod schemas to define storage, validation and metadata in one place.
-
-## Design Principles
-
-1. **ZREAM (Zod Rules Everything Around Me)** — One schema defines SQL types, validation rules, and form field metadata
-2. **SQL is not hidden** — You write SQL with tagged templates; we handle parameterization and normalization
-3. **Schema-driven normalization** — Relationships are resolved from table definitions, not query shape
-4. **No codegen** — All behavior is runtime-driven; no schema files, migrations folders, CLI generators, or compile-time artifacts
-
-## Two Modes
-
-The library operates in two distinct modes that remain separate:
-
-**Structural mode**: Table definitions, DDL generation, metadata extraction. Define your schema once and derive everything from it.
-
-**Operational mode**: Queries, normalization, transactions. Write SQL directly with full control.
-
-This separation is intentional — the system is not an ORM because these modes never blur together.
+Define tables. Write SQL. Get objects.
 
 ## Installation
 
 ```bash
-bun add @b9g/zealot zod
+npm install @b9g/zen zod
+
 # Install a driver (choose one):
-bun add better-sqlite3  # for SQLite
-bun add postgres        # for PostgreSQL
-bun add mysql2          # for MySQL
+npm install better-sqlite3  # for SQLite
+npm install postgres        # for PostgreSQL
+npm install mysql2          # for MySQL
 ```
 
 ## Drivers
 
-Zealot provides drivers as subpath exports with optional peer dependencies:
+zen provides drivers as subpath exports with optional peer dependencies:
 
 ```typescript
 // Bun.SQL (built-in, works with SQLite/PostgreSQL/MySQL)
-import BunDriver from "@b9g/zealot/bun";
+import BunDriver from "@b9g/zen/bun";
 const driver = new BunDriver("sqlite://app.db");
 
 // better-sqlite3 (Node.js SQLite)
-import SQLiteDriver from "@b9g/zealot/sqlite";
+import SQLiteDriver from "@b9g/zen/sqlite";
 const driver = new SQLiteDriver("file:app.db");
 
 // postgres.js
-import PostgresDriver from "@b9g/zealot/postgres";
+import PostgresDriver from "@b9g/zen/postgres";
 const driver = new PostgresDriver("postgresql://localhost/mydb");
 
 // mysql2
-import MySQLDriver from "@b9g/zealot/mysql";
+import MySQLDriver from "@b9g/zen/mysql";
 const driver = new MySQLDriver("mysql://localhost/mydb");
 ```
 
-Each driver is a class with a `dialect` property. Bun auto-detects dialect from the connection URL.
+Each driver implements the `Driver` interface. Bun auto-detects dialect from the connection URL.
 
 ## Quick Start
 
 ```typescript
-import {z} from "zod";
-import {table, extendZod, Database} from "@b9g/zealot";
-import SQLiteDriver from "@b9g/zealot/sqlite"; // or PostgresDriver, MySQLDriver, BunDriver
-// Note: where(), set(), on(), values(), in(), ddl() are methods on Table objects, not imports
-
-// Enable the .db namespace on all Zod types (call once at app startup)
-extendZod(z);
+import {z, table, Database} from "@b9g/zen";
+import SQLiteDriver from "@b9g/zen/sqlite";
 
 const driver = new SQLiteDriver("file:app.db");
 
-// 1. Define tables using .db API
+// 1. Define tables
 const Users = table("users", {
   id: z.string().uuid().db.primary(),
   email: z.string().email().db.unique(),
@@ -94,7 +71,7 @@ db.addEventListener("upgradeneeded", (e) => {
       await db.exec`${Posts.ddl()}`;
     }
     if (e.oldVersion < 2) {
-      await db.exec`ALTER TABLE users ADD COLUMN avatar TEXT`;
+      await db.exec`ALTER TABLE ${Users} ADD COLUMN avatar TEXT`;
     }
   })());
 });
@@ -110,7 +87,7 @@ const user = await db.insert(Users, {
 
 // 4. Query with normalization
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Posts.on("authorId")}
+  JOIN ${Users} ON ${Posts.on("authorId")}
   WHERE ${Posts.where({published: true})}
 `;
 
@@ -127,11 +104,7 @@ await db.update(Users, user.id, {name: "Alice Smith"});
 ## Table Definitions
 
 ```typescript
-import {z} from "zod";
-import {table, extendZod} from "@b9g/zealot";
-
-// Enable the .db namespace (call once at app startup)
-extendZod(z);
+import {z, table} from "@b9g/zen";
 
 const Users = table("users", {
   id: z.string().uuid().db.primary(),
@@ -152,7 +125,7 @@ const Posts = table("posts", {
 
 **The `.db` namespace:**
 
-The `.db` property is available on all Zod types after calling `extendZod(z)`. It provides database-specific modifiers:
+The `.db` property is available on all Zod types imported from `@b9g/zen`. It provides database-specific modifiers:
 
 - `.db.primary()` — Primary key
 - `.db.unique()` — Unique constraint
@@ -163,7 +136,7 @@ The `.db` property is available on all Zod types after calling `extendZod(z)`. I
 - `.db.decode(fn)` — Custom decoding from database storage
 - `.db.type(columnType)` — Explicit column type for DDL generation
 
-**Why `extendZod()`?** Zod v4 removed `.register()` so there's no official way to add custom methods. `extendZod()` patches the Zod prototype once at startup to add the `.db` namespace. Call it once before defining any tables.
+**How does `.db` work?** When you import `z` from `@b9g/zen`, it's already extended with the `.db` namespace. The extension happens once when the module loads. If you need to extend a separate Zod instance, use `extendZod(z)` (advanced use case).
 
 **Automatic JSON encoding/decoding:**
 
@@ -264,7 +237,7 @@ const Posts = table("posts", {
 });
 
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Posts.on("authorId")}
+  JOIN ${Users} ON ${Posts.on("authorId")}
 `;
 
 posts[0].titleUpper;  // ✅ "HELLO WORLD"
@@ -283,7 +256,7 @@ Derived properties:
 ```typescript
 const UserSummary = Users.pick("id", "name");
 const posts = await db.all([Posts, UserSummary])`
-  JOIN users ON ${Posts.on("authorId")}
+  JOIN ${UserSummary} ON ${Posts.on("authorId")}
 `;
 // posts[0].author has only id and name
 ```
@@ -300,7 +273,7 @@ const posts = await db.all(Posts)`WHERE published = ${true}`;
 
 // Multi-table with joins — pass array
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Posts.on("authorId")}
+  JOIN ${Users} ON ${Posts.on("authorId")}
   WHERE ${Posts.where({published: true})}
 `;
 
@@ -312,14 +285,14 @@ const post = await db.get(Posts, postId);
 
 // Raw queries (no normalization)
 const counts = await db.query<{count: number}>`
-  SELECT COUNT(*) as count FROM posts WHERE author_id = ${userId}
+  SELECT COUNT(*) as count FROM ${Posts} WHERE ${Posts.cols.authorId} = ${userId}
 `;
 
 // Execute statements
-await db.exec`CREATE INDEX idx_posts_author ON posts(author_id)`;
+await db.exec`CREATE INDEX idx_posts_author ON ${Posts}(${Posts.cols.authorId})`;
 
 // Single value
-const count = await db.val<number>`SELECT COUNT(*) FROM posts`;
+const count = await db.val<number>`SELECT COUNT(*) FROM ${Posts}`;
 ```
 
 ## Fragment Helpers
@@ -335,28 +308,28 @@ const posts = await db.all(Posts)`
 
 // UPDATE with set()
 await db.exec`
-  UPDATE posts
+  UPDATE ${Posts}
   SET ${Posts.set({title: "New Title", updatedAt: new Date()})}
-  WHERE id = ${postId}
+  WHERE ${Posts.cols.id} = ${postId}
 `;
-// → UPDATE posts SET "title" = ?, "updatedAt" = ? WHERE id = ?
+// → UPDATE "posts" SET "title" = ?, "updatedAt" = ? WHERE "posts"."id" = ?
 
 // JOIN with on()
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Posts.on("authorId")}
-  WHERE published = ${true}
+  JOIN ${Users} ON ${Posts.on("authorId")}
+  WHERE ${Posts.cols.published} = ${true}
 `;
-// → JOIN users ON "users"."id" = "posts"."authorId"
+// → JOIN "users" ON "users"."id" = "posts"."authorId"
 
 // Bulk INSERT with values()
 await db.exec`
-  INSERT INTO posts ${Posts.values(rows)}
+  INSERT INTO ${Posts} ${Posts.values(rows)}
 `;
-// → INSERT INTO posts ("id", "title", "published") VALUES (?, ?, ?), (?, ?, ?)
+// → INSERT INTO "posts" ("id", "title", "published") VALUES (?, ?, ?), (?, ?, ?)
 
 // Qualified column names with cols
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Posts.on("authorId")}
+  JOIN ${Users} ON ${Posts.on("authorId")}
   ORDER BY ${Posts.cols.createdAt} DESC
 `;
 // → ORDER BY "posts"."createdAt" DESC
@@ -446,7 +419,7 @@ await db.open(3); // Opens at version 3, fires upgradeneeded if needed
 
 ### Safe Migration Helpers
 
-Zealot provides idempotent helpers that encourage safe, additive-only migrations:
+zen provides idempotent helpers that encourage safe, additive-only migrations:
 
 ```typescript
 // Add a new column (reads from schema)
@@ -492,7 +465,7 @@ All helpers read from your table schema (single source of truth) and are safe to
 ```typescript
 // Manual destructive operation
 if (e.oldVersion < 5) {
-  await db.exec`ALTER TABLE users DROP COLUMN deprecated_field`;
+  await db.exec`ALTER TABLE ${Users} DROP COLUMN deprecated_field`;
 }
 ```
 
@@ -548,7 +521,7 @@ const Posts = table("posts", {
 });
 
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Users.on("id")} = ${Posts.cols.authorId}
+  JOIN ${Users} ON ${Posts.on("authorId")}
 `;
 // posts[0].author = {id: "u1", name: "Alice"}
 ```
@@ -568,7 +541,7 @@ const Posts = table("posts", {
 });
 
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Users.on("id")} = ${Posts.cols.authorId}
+  JOIN ${Users} ON ${Posts.on("authorId")}
 `;
 // posts[0].author.posts = [{id: "p1", ...}, {id: "p2", ...}]
 ```
@@ -595,8 +568,8 @@ const PostTags = table("post_tags", {
 });
 
 const results = await db.all([PostTags, Posts, Tags])`
-  JOIN posts ON ${Posts.on("id")} = ${PostTags.cols.postId}
-  JOIN tags ON ${Tags.on("id")} = ${PostTags.cols.tagId}
+  JOIN ${Posts} ON ${PostTags.on("postId")}
+  JOIN ${Tags} ON ${PostTags.on("tagId")}
   WHERE ${Posts.where({id: postId})}
 `;
 
@@ -614,7 +587,7 @@ References and derived properties have specific serialization behavior to preven
 
 ```typescript
 const posts = await db.all([Posts, Users])`
-  JOIN users ON ${Users.on("id")} = ${Posts.cols.authorId}
+  JOIN ${Users} ON ${Posts.on("authorId")}
 `;
 
 const post = posts[0];
@@ -684,18 +657,31 @@ const refs = Posts.references();      // [{fieldName: "authorId", table: Users, 
 
 ## Driver Interface
 
-Adapters implement a simple interface:
+Drivers implement a template-based interface where each method receives `(TemplateStringsArray, values[])` and builds SQL with native placeholders:
 
 ```typescript
-interface DatabaseDriver {
-  all<T>(sql: string, params: unknown[]): Promise<T[]>;
-  get<T>(sql: string, params: unknown[]): Promise<T | null>;
-  run(sql: string, params: unknown[]): Promise<number>; // affected rows
-  val<T>(sql: string, params: unknown[]): Promise<T>;   // single value
-  escapeIdentifier(name: string): string;               // quote table/column names
-  withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>; // optional atomic migrations
+interface Driver {
+  // Query methods - build SQL with native placeholders (? or $1, $2, ...)
+  all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]>;
+  get<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T | null>;
+  run(strings: TemplateStringsArray, values: unknown[]): Promise<number>;
+  val<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T | null>;
+
+  // Connection management
+  close(): Promise<void>;
+  transaction<T>(fn: (tx: Driver) => Promise<T>): Promise<T>;
+
+  // Capabilities
+  readonly supportsReturning: boolean;
+
+  // Optional
+  withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
 }
 ```
+
+**Why templates?** Drivers receive raw template parts and build SQL with their native placeholder syntax (`?` for SQLite/MySQL, `$1, $2, ...` for PostgreSQL). No SQL parsing needed.
+
+**`supportsReturning`**: Enables optimal paths for INSERT/UPDATE. SQLite and PostgreSQL use `RETURNING *`; MySQL falls back to a separate SELECT.
 
 **Migration locking**: If the driver provides `withMigrationLock()`, migrations run atomically (PostgreSQL uses advisory locks, MySQL uses `GET_LOCK`, SQLite uses exclusive transactions).
 
@@ -711,7 +697,7 @@ import {
   NotFoundError,
   isZealotError,
   hasErrorCode
-} from "@b9g/zealot";
+} from "@b9g/zen";
 
 // Validation errors (Zod/Standard Schema)
 try {
@@ -796,6 +782,175 @@ console.log(Posts.ddl().toString());
 | **Date Type** | TEXT (ISO) | TIMESTAMPTZ | DATETIME |
 | **Transactions** | ✅ | ✅ | ✅ |
 | **Advisory Locks** | ❌ | ✅ | ✅ (named) |
+
+## Public API Reference
+
+### Core Exports
+
+```typescript
+import {
+  // Zod (extended with .db namespace)
+  z,                  // Re-exported Zod with .db already available
+
+  // Table definition
+  table,              // Create a table definition from Zod schema
+  isTable,            // Type guard for Table objects
+  extendZod,          // Extend a separate Zod instance (advanced)
+
+  // Database
+  Database,           // Main database class
+  Transaction,        // Transaction context (passed to transaction callbacks)
+  DatabaseUpgradeEvent, // Event object for "upgradeneeded" handler
+
+  // DB expressions
+  db,                 // Runtime DB expressions (db.now(), db.json(), etc.)
+  isDBExpression,     // Type guard for DBExpression objects
+
+  // Custom field helpers
+  setDBMeta,          // Set database metadata on a Zod schema
+  getDBMeta,          // Get database metadata from a Zod schema
+
+  // Errors
+  ZealotError,        // Base error class
+  ValidationError,    // Schema validation failed
+  TableDefinitionError, // Invalid table definition
+  MigrationError,     // Migration failed
+  MigrationLockError, // Failed to acquire migration lock
+  QueryError,         // SQL execution failed
+  NotFoundError,      // Entity not found
+  AlreadyExistsError, // Unique constraint violated
+  ConstraintViolationError, // Database constraint violated
+  ConnectionError,    // Connection failed
+  TransactionError,   // Transaction failed
+  isZealotError,      // Type guard for ZealotError
+  hasErrorCode,       // Check error code
+} from "@b9g/zen";
+```
+
+### Types
+
+```typescript
+import type {
+  // Table types
+  Table,              // Table definition object
+  PartialTable,       // Table created via .pick()
+  DerivedTable,       // Table with derived fields via .derive()
+  TableOptions,       // Options for table()
+  ReferenceInfo,      // Foreign key reference metadata
+  CompoundReference,  // Compound foreign key reference
+
+  // Field types
+  FieldMeta,          // Field metadata for form generation
+  FieldType,          // Field type enum
+  FieldDbMeta,        // Database-specific field metadata
+
+  // Type inference
+  Infer,              // Infer entity type from Table (after read)
+  Insert,             // Infer insert type from Table (respects defaults)
+  FullTableOnly,      // Type constraint for non-partial tables
+
+  // Fragment types
+  SetValues,          // Values accepted by Table.set()
+  SQLFragment,        // SQL fragment object
+  DDLFragment,        // DDL fragment object
+  SQLDialect,         // "sqlite" | "postgresql" | "mysql"
+
+  // Driver types
+  Driver,             // Driver interface for adapters
+  TaggedQuery,        // Tagged template query function
+
+  // Expression types
+  DBExpression,       // Runtime database expression
+
+  // Error types
+  ZealotErrorCode,    // Error code string literals
+} from "@b9g/zen";
+```
+
+### Table Methods
+
+```typescript
+const Users = table("users", schema, options?);
+
+// DDL Generation
+Users.ddl(options?)           // DDLFragment for CREATE TABLE
+Users.ensureColumn(field)     // DDLFragment for ALTER TABLE ADD COLUMN
+Users.ensureIndex(fields)     // DDLFragment for CREATE INDEX
+Users.copyColumn(from, to)    // SQLFragment for UPDATE (copy data)
+
+// Query Fragments
+Users.where(conditions)       // SQLFragment for WHERE clause
+Users.set(values)             // SQLFragment for SET clause
+Users.values(rows)            // SQLFragment for INSERT VALUES
+Users.on(field)               // SQLFragment for JOIN ON (foreign key)
+Users.in(field, values)       // SQLFragment for IN clause
+Users.deleted()               // SQLFragment for soft delete check
+
+// Column References
+Users.cols                    // Proxy: Users.cols.email → "users"."email"
+Users.cols.email              // ColumnFragment for qualified column
+Users.primary                 // ColumnFragment for primary key column
+
+// Metadata
+Users.name                    // Table name string
+Users.schema                  // Zod schema
+Users.meta                    // Table metadata (primary, indexes, etc.)
+Users.fields()                // Field metadata for form generation
+Users.references()            // Foreign key references
+
+// Derived Tables
+Users.pick("id", "name")      // PartialTable with subset of fields
+Users.derive("fullName", ...)  // DerivedTable with computed field
+```
+
+### Database Methods
+
+```typescript
+const db = new Database(driver);
+
+// Lifecycle
+await db.open(version)        // Open and run migrations if needed
+db.addEventListener("upgradeneeded", handler)  // Migration handler
+
+// Query Methods (with normalization)
+await db.all(tables)`SQL`     // Query returning normalized entities
+await db.get(table)`SQL`      // Single entity query
+await db.get(table, id)       // Get by primary key
+
+// Raw Query Methods (no normalization)
+await db.query<T>`SQL`        // Raw query returning rows
+await db.exec`SQL`            // Execute statement (DDL, DML)
+await db.val<T>`SQL`          // Single value query
+
+// CRUD Helpers
+await db.insert(table, data)  // Insert with validation, returns entity
+await db.update(table, id, data)  // Update by primary key
+await db.delete(table, id)    // Hard delete by primary key
+await db.softDelete(table, id)  // Soft delete (sets deletedAt)
+
+// Transactions
+await db.transaction(async (tx) => { ... })  // Transaction block
+
+// Debugging
+db.print`SQL`                 // { sql: string, params: unknown[] }
+await db.explain`SQL`         // Query execution plan
+```
+
+### Driver Exports
+
+```typescript
+// Bun (built-in, auto-detects dialect)
+import BunDriver from "@b9g/zen/bun";
+
+// Node.js SQLite (better-sqlite3)
+import SQLiteDriver from "@b9g/zen/sqlite";
+
+// PostgreSQL (postgres.js)
+import PostgresDriver from "@b9g/zen/postgres";
+
+// MySQL (mysql2)
+import MySQLDriver from "@b9g/zen/mysql";
+```
 
 ## What This Library Does Not Do
 

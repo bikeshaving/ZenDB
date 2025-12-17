@@ -1,5 +1,5 @@
 /**
- * better-sqlite3 adapter for @b9g/zealot
+ * better-sqlite3 adapter for @b9g/zen
  *
  * Provides a Driver implementation for better-sqlite3 (Node.js).
  * The connection is persistent - call close() when done.
@@ -7,8 +7,8 @@
  * Requires: better-sqlite3
  */
 
-import type {Driver} from "./zealot.js";
-import {ConstraintViolationError} from "./zealot.js";
+import type {Driver} from "./zen.js";
+import {ConstraintViolationError} from "./zen.js";
 import Database from "better-sqlite3";
 
 /**
@@ -26,8 +26,8 @@ function buildSQL(strings: TemplateStringsArray, _values: unknown[]): string {
  * SQLite driver using better-sqlite3.
  *
  * @example
- * import SQLiteDriver from "@b9g/zealot/sqlite";
- * import {Database} from "@b9g/zealot";
+ * import SQLiteDriver from "@b9g/zen/sqlite";
+ * import {Database} from "@b9g/zen";
  *
  * const driver = new SQLiteDriver("file:app.db");
  * const db = new Database(driver);

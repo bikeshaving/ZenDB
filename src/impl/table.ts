@@ -364,7 +364,7 @@ function createDbMethods(schema: ZodTypeAny) {
 		 */
 		inserted(expr: unknown) {
 			// Validate at definition time that this is a DBExpression
-			const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+			const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
 			if (
 				expr === null ||
 				typeof expr !== "object" ||
@@ -395,7 +395,7 @@ function createDbMethods(schema: ZodTypeAny) {
 		 */
 		updated(expr: unknown) {
 			// Validate at definition time that this is a DBExpression
-			const DB_EXPR = Symbol.for("@b9g/zealot:db-expr");
+			const DB_EXPR = Symbol.for("@b9g/zen:db-expr");
 			if (
 				expr === null ||
 				typeof expr !== "object" ||
@@ -426,7 +426,7 @@ function createDbMethods(schema: ZodTypeAny) {
  *
  * @example
  * import {z} from "zod";
- * import {extendZod, table} from "@b9g/zealot";
+ * import {extendZod, table} from "@b9g/zen";
  *
  * extendZod(z);
  *
@@ -563,10 +563,10 @@ export interface TableOptions {
 }
 
 // Symbol to identify Table objects
-const TABLE_MARKER = Symbol.for("@b9g/zealot:table");
+const TABLE_MARKER = Symbol.for("@b9g/zen:table");
 
 // Symbol for SQL fragments (same as query.ts - Symbol.for ensures identity)
-const SQL_FRAGMENT = Symbol.for("@b9g/zealot:fragment");
+const SQL_FRAGMENT = Symbol.for("@b9g/zen:fragment");
 
 interface ColumnFragment {
 	readonly [SQL_FRAGMENT]: true;

@@ -1,5 +1,5 @@
 /**
- * postgres.js adapter for @b9g/zealot
+ * postgres.js adapter for @b9g/zen
  *
  * Provides a Driver implementation for postgres.js.
  * Uses connection pooling - call close() when done to end all connections.
@@ -7,8 +7,8 @@
  * Requires: postgres
  */
 
-import type {Driver} from "./zealot.js";
-import {ConstraintViolationError} from "./zealot.js";
+import type {Driver} from "./zen.js";
+import {ConstraintViolationError} from "./zen.js";
 import postgres from "postgres";
 
 /**
@@ -38,8 +38,8 @@ export interface PostgresOptions {
  * PostgreSQL driver using postgres.js.
  *
  * @example
- * import PostgresDriver from "@b9g/zealot/postgres";
- * import {Database} from "@b9g/zealot";
+ * import PostgresDriver from "@b9g/zen/postgres";
+ * import {Database} from "@b9g/zen";
  *
  * const driver = new PostgresDriver("postgresql://localhost/mydb");
  * const db = new Database(driver);

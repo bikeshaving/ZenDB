@@ -1,5 +1,5 @@
 /**
- * mysql2 adapter for @b9g/zealot
+ * mysql2 adapter for @b9g/zen
  *
  * Provides a Driver implementation for mysql2.
  * Uses connection pooling - call close() when done to end all connections.
@@ -7,8 +7,8 @@
  * Requires: mysql2
  */
 
-import type {Driver} from "./zealot.js";
-import {ConstraintViolationError} from "./zealot.js";
+import type {Driver} from "./zen.js";
+import {ConstraintViolationError} from "./zen.js";
 import mysql from "mysql2/promise";
 
 /**
@@ -38,8 +38,8 @@ export interface MySQLOptions {
  * MySQL driver using mysql2.
  *
  * @example
- * import MySQLDriver from "@b9g/zealot/mysql";
- * import {Database} from "@b9g/zealot";
+ * import MySQLDriver from "@b9g/zen/mysql";
+ * import {Database} from "@b9g/zen";
  *
  * const driver = new MySQLDriver("mysql://localhost/mydb");
  * const db = new Database(driver);

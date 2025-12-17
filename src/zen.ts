@@ -1,9 +1,17 @@
 /**
- * @b9g/zealot - Schema-driven database client
+ * @b9g/zen - The simple database client
  *
- * Zod schemas define storage, validation, and form fields.
- * Not an ORM - a thin wrapper over SQL.
+ * Define tables. Write SQL. Get objects.
  */
+
+import {z as zod} from "zod";
+import {extendZod} from "./impl/table.js";
+
+// Extend zod on module load
+extendZod(zod);
+
+// Re-export extended zod
+export {zod as z};
 
 export {
 	// Table definition
@@ -16,7 +24,7 @@ export {
 	type ReferenceInfo,
 	type CompoundReference,
 
-	// Zod extension
+	// Zod extension (for advanced use cases)
 	extendZod,
 
 	// Custom field helpers

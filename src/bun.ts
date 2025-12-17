@@ -1,13 +1,13 @@
 /**
- * Bun.SQL adapter for @b9g/zealot
+ * Bun.SQL adapter for @b9g/zen
  *
  * Unified driver supporting PostgreSQL, MySQL, and SQLite via Bun's built-in SQL.
  * Zero dependencies - uses native Bun implementation.
  */
 
 import {SQL} from "bun";
-import type {Driver} from "./zealot.js";
-import {ConstraintViolationError} from "./zealot.js";
+import type {Driver} from "./zen.js";
+import {ConstraintViolationError} from "./zen.js";
 
 type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
@@ -51,8 +51,8 @@ function buildSQL(
  * Supports PostgreSQL, MySQL, and SQLite with automatic dialect detection.
  *
  * @example
- * import BunDriver from "@b9g/zealot/bun";
- * import {Database} from "@b9g/zealot";
+ * import BunDriver from "@b9g/zen/bun";
+ * import {Database} from "@b9g/zen";
  *
  * const driver = new BunDriver("postgres://localhost/mydb");
  * const db = new Database(driver);
