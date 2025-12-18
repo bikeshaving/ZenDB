@@ -120,6 +120,7 @@ export default class BunDriver implements Driver {
 	readonly supportsReturning: boolean;
 	#dialect: SQLDialect;
 	#sql: SQL;
+	#sqliteInitialized: boolean = false;
 
 	constructor(url: string, options?: Record<string, unknown>) {
 		this.#dialect = detectDialect(url);
@@ -129,11 +130,26 @@ export default class BunDriver implements Driver {
 	}
 
 	/**
+	 * Ensure SQLite connection has foreign keys enabled.
+	 * Called lazily on first query to avoid async constructor.
+	 */
+	async #ensureSqliteInit(): Promise<void> {
+		if (this.#dialect !== "sqlite" || this.#sqliteInitialized) {
+			return;
+		}
+		this.#sqliteInitialized = true;
+		// Enable foreign key enforcement for referential integrity
+		await this.#sql.unsafe("PRAGMA foreign_keys = ON", []);
+	}
+
+	/**
 	 * Convert database errors to Zealot errors.
 	 */
 	#handleError(error: unknown): never {
 		if (error && typeof error === "object" && "code" in error) {
 			const code = (error as any).code;
+			// Bun.SQL PostgreSQL: error code is in .errno, not .code
+			const errno = (error as any).errno;
 			const message = (error as any).message || String(error);
 
 			// Handle constraint violations based on dialect
@@ -141,7 +157,8 @@ export default class BunDriver implements Driver {
 				// SQLite errors
 				if (
 					code === "SQLITE_CONSTRAINT" ||
-					code === "SQLITE_CONSTRAINT_UNIQUE"
+					code === "SQLITE_CONSTRAINT_UNIQUE" ||
+					code === "SQLITE_CONSTRAINT_FOREIGNKEY"
 				) {
 					// Extract table.column from message
 					// Example: "UNIQUE constraint failed: users.email"
@@ -158,6 +175,7 @@ export default class BunDriver implements Driver {
 						| "not_null"
 						| "unknown" = "unknown";
 					if (code === "SQLITE_CONSTRAINT_UNIQUE") kind = "unique";
+					else if (code === "SQLITE_CONSTRAINT_FOREIGNKEY") kind = "foreign_key";
 					else if (message.includes("UNIQUE")) kind = "unique";
 					else if (message.includes("FOREIGN KEY")) kind = "foreign_key";
 					else if (message.includes("NOT NULL")) kind = "not_null";
@@ -178,11 +196,14 @@ export default class BunDriver implements Driver {
 				}
 			} else if (this.#dialect === "postgresql") {
 				// PostgreSQL errors (23xxx = integrity constraint violation)
+				// Bun.SQL wraps errors: sometimes code is ERR_POSTGRES_SERVER_ERROR with errno set,
+				// sometimes code is the PG error code directly.
+				const pgCode = (errno || code) as string | number | undefined;
 				if (
-					code === "23505" ||
-					code === "23503" ||
-					code === "23514" ||
-					code === "23502"
+					pgCode === "23505" ||
+					pgCode === "23503" ||
+					pgCode === "23514" ||
+					pgCode === "23502"
 				) {
 					const constraint =
 						(error as any).constraint_name || (error as any).constraint;
@@ -196,10 +217,10 @@ export default class BunDriver implements Driver {
 						| "check"
 						| "not_null"
 						| "unknown" = "unknown";
-					if (code === "23505") kind = "unique";
-					else if (code === "23503") kind = "foreign_key";
-					else if (code === "23514") kind = "check";
-					else if (code === "23502") kind = "not_null";
+					if (pgCode === "23505") kind = "unique";
+					else if (pgCode === "23503") kind = "foreign_key";
+					else if (pgCode === "23514") kind = "check";
+					else if (pgCode === "23502") kind = "not_null";
 
 					throw new ConstraintViolationError(
 						message,
@@ -216,10 +237,15 @@ export default class BunDriver implements Driver {
 				}
 			} else if (this.#dialect === "mysql") {
 				// MySQL errors
+				// Bun.SQL wraps errors: code is ERR_MYSQL_SERVER_ERROR, errno has numeric code
+				// 1062 = ER_DUP_ENTRY, 1452 = ER_NO_REFERENCED_ROW_2, 1451 = ER_ROW_IS_REFERENCED_2
 				if (
 					code === "ER_DUP_ENTRY" ||
 					code === "ER_NO_REFERENCED_ROW_2" ||
-					code === "ER_ROW_IS_REFERENCED_2"
+					code === "ER_ROW_IS_REFERENCED_2" ||
+					errno === 1062 ||
+					errno === 1452 ||
+					errno === 1451
 				) {
 					let kind:
 						| "unique"
@@ -231,7 +257,7 @@ export default class BunDriver implements Driver {
 					let table: string | undefined;
 					let column: string | undefined;
 
-					if (code === "ER_DUP_ENTRY") {
+					if (code === "ER_DUP_ENTRY" || errno === 1062) {
 						kind = "unique";
 						// Example: "Duplicate entry 'value' for key 'table.index_name'"
 						const keyMatch = message.match(/for key '([^']+)'/i);
@@ -245,7 +271,9 @@ export default class BunDriver implements Driver {
 						}
 					} else if (
 						code === "ER_NO_REFERENCED_ROW_2" ||
-						code === "ER_ROW_IS_REFERENCED_2"
+						code === "ER_ROW_IS_REFERENCED_2" ||
+						errno === 1452 ||
+						errno === 1451
 					) {
 						kind = "foreign_key";
 						// Example: "Cannot add or update a child row: a foreign key constraint fails (`db`.`table`, CONSTRAINT `fk_name` ...)"
@@ -276,6 +304,7 @@ export default class BunDriver implements Driver {
 	}
 
 	async all<T>(strings: TemplateStringsArray, values: unknown[]): Promise<T[]> {
+		await this.#ensureSqliteInit();
 		try {
 			const {sql, params} = buildSQL(strings, values, this.#dialect);
 			const result = await this.#sql.unsafe(sql, params as any[]);
@@ -289,6 +318,7 @@ export default class BunDriver implements Driver {
 		strings: TemplateStringsArray,
 		values: unknown[],
 	): Promise<T | null> {
+		await this.#ensureSqliteInit();
 		try {
 			const {sql, params} = buildSQL(strings, values, this.#dialect);
 			const result = await this.#sql.unsafe(sql, params as any[]);
@@ -299,6 +329,7 @@ export default class BunDriver implements Driver {
 	}
 
 	async run(strings: TemplateStringsArray, values: unknown[]): Promise<number> {
+		await this.#ensureSqliteInit();
 		try {
 			const {sql, params} = buildSQL(strings, values, this.#dialect);
 			const result = await this.#sql.unsafe(sql, params as any[]);
@@ -317,6 +348,7 @@ export default class BunDriver implements Driver {
 		strings: TemplateStringsArray,
 		values: unknown[],
 	): Promise<T | null> {
+		await this.#ensureSqliteInit();
 		try {
 			const {sql, params} = buildSQL(strings, values, this.#dialect);
 			const result = await this.#sql.unsafe(sql, params as any[]);
@@ -411,6 +443,7 @@ export default class BunDriver implements Driver {
 	}
 
 	async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+		await this.#ensureSqliteInit();
 		if (this.#dialect === "postgresql") {
 			// PostgreSQL: advisory lock
 			const MIGRATION_LOCK_ID = 1952393421;
@@ -464,6 +497,7 @@ export default class BunDriver implements Driver {
 	// ==========================================================================
 
 	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		await this.#ensureSqliteInit();
 		const tableName = table.name;
 		let step = 0;
 		let applied = false;
@@ -515,6 +549,7 @@ export default class BunDriver implements Driver {
 	async ensureConstraints<T extends Table<any>>(
 		table: T,
 	): Promise<EnsureResult> {
+		await this.#ensureSqliteInit();
 		const tableName = table.name;
 		let step = 0;
 		let applied = false;
@@ -579,6 +614,7 @@ export default class BunDriver implements Driver {
 	// ==========================================================================
 
 	async #tableExists(tableName: string): Promise<boolean> {
+		await this.#ensureSqliteInit();
 		if (this.#dialect === "sqlite") {
 			const result = await this.#sql.unsafe(
 				`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`,
@@ -604,6 +640,7 @@ export default class BunDriver implements Driver {
 	async #getColumns(
 		tableName: string,
 	): Promise<{name: string; type: string; notnull: boolean}[]> {
+		await this.#ensureSqliteInit();
 		if (this.#dialect === "sqlite") {
 			const result = await this.#sql.unsafe(
 				`PRAGMA table_info(${quoteIdent(tableName, "sqlite")})`,
@@ -635,6 +672,7 @@ export default class BunDriver implements Driver {
 	async #getIndexes(
 		tableName: string,
 	): Promise<{name: string; columns: string[]; unique: boolean}[]> {
+		await this.#ensureSqliteInit();
 		if (this.#dialect === "sqlite") {
 			const indexList = (await this.#sql.unsafe(
 				`PRAGMA index_list(${quoteIdent(tableName, "sqlite")})`,
@@ -696,6 +734,7 @@ export default class BunDriver implements Driver {
 			referencedColumns?: string[];
 		}[]
 	> {
+		await this.#ensureSqliteInit();
 		if (this.#dialect === "sqlite") {
 			const constraints: any[] = [];
 

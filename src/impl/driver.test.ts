@@ -605,10 +605,43 @@ for (const dialect of dialects) {
 					title: "Hello",
 				});
 				expect(post.authorId).toBe("1");
+			});
 
-				// Note: FK enforcement depends on DB config
-				// SQLite requires PRAGMA foreign_keys=ON (not enabled by default)
-				// PostgreSQL and MySQL enforce by default
+			it("enforces foreign key constraints on all dialects", async () => {
+				if (maybeSkip()) return;
+
+				const Authors = table(`fk_authors_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				const Articles = table(`fk_articles_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					authorId: stringField().db.references(Authors, {as: "author"}),
+					title: stringField(),
+				});
+
+				await db.ensureTable(Authors);
+				await db.ensureTable(Articles);
+
+				// Create an author
+				await db.insert(Authors, {id: "1", name: "Alice"});
+
+				// Try to insert article with non-existent author - should fail on ALL dialects
+				// (SQLite now has PRAGMA foreign_keys=ON enabled by default)
+				await expect(
+					db.insert(Articles, {id: "1", authorId: "999", title: "Orphan"})
+				).rejects.toMatchObject({
+					name: "ConstraintViolationError",
+				});
+
+				// Valid insert should still work
+				const article = await db.insert(Articles, {
+					id: "2",
+					authorId: "1",
+					title: "Valid Article",
+				});
+				expect(article.title).toBe("Valid Article");
 			});
 		});
 
