@@ -7,9 +7,8 @@ import {
 	buildQuery,
 	createQuery,
 	rawQuery,
-	createFragment,
 } from "./query.js";
-import {makeTemplate} from "./template.js";
+import {makeTemplate, createTemplate} from "./template.js";
 
 // Extend Zod once before tests
 extendZod(z);
@@ -355,7 +354,7 @@ describe("buildSelectColumns with derived tables", () => {
 describe("SQL fragment placeholder handling", () => {
 	test("preserves literal ? inside single-quoted strings", () => {
 		// SQL with a literal '?' in a string literal - template format
-		const fragment = createFragment(
+		const fragment = createTemplate(
 			makeTemplate([`"users"."name" = '?' AND "users"."email" = `, ""]),
 			["test@example.com"],
 		);
@@ -372,7 +371,7 @@ describe("SQL fragment placeholder handling", () => {
 
 	test("fragment with multiple params replaces placeholders in order", () => {
 		// Template format: strings around placeholders
-		const fragment = createFragment(
+		const fragment = createTemplate(
 			makeTemplate(['"posts"."title" = ', ' AND "posts"."body" LIKE ', ""]),
 			["Hello", "%test%"],
 		);
@@ -389,7 +388,7 @@ describe("SQL fragment placeholder handling", () => {
 
 	test("preserves literal ? inside double-quoted identifiers", () => {
 		// Unusual but valid: column name containing ? - new template format
-		const fragment = createFragment(makeTemplate(['"weird?col" = ', ""]), [
+		const fragment = createTemplate(makeTemplate(['"weird?col" = ', ""]), [
 			"value",
 		]);
 
@@ -403,7 +402,7 @@ describe("SQL fragment placeholder handling", () => {
 	test("handles escaped single quotes", () => {
 		// SQL with escaped single quote: WHERE name = 'O''Brien' AND id = ?
 		// New template format: strings with value placeholder
-		const fragment = createFragment(
+		const fragment = createTemplate(
 			makeTemplate([`"users"."name" = 'O''Brien' AND "users"."id" = `, ""]),
 			["123"],
 		);
@@ -419,7 +418,7 @@ describe("SQL fragment placeholder handling", () => {
 
 	test("handles escaped double quotes", () => {
 		// Column with escaped double quote in name - new template format
-		const fragment = createFragment(makeTemplate([`"weird""col" = `, ""]), [
+		const fragment = createTemplate(makeTemplate([`"weird""col" = `, ""]), [
 			"value",
 		]);
 
@@ -432,7 +431,7 @@ describe("SQL fragment placeholder handling", () => {
 
 	test("handles multiple ? in string literals", () => {
 		// Multiple literal ? characters in a string - new template format
-		const fragment = createFragment(
+		const fragment = createTemplate(
 			makeTemplate([`"col" = '???' AND "other" = `, ""]),
 			["value"],
 		);

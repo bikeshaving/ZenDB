@@ -13,7 +13,7 @@ function ddl(
 	dialect: SQLDialect = "sqlite",
 ): string {
 	const template = generateDDL(tbl, {dialect});
-	return renderDDL(template.strings, template.values, dialect);
+	return renderDDL(template[0], template[1], dialect);
 }
 
 describe("DDL generation", () => {
@@ -201,7 +201,9 @@ describe("DDL generation", () => {
 
 		const result = ddl(posts, "sqlite");
 
-		expect(result).toContain('FOREIGN KEY ("authorId") REFERENCES "users"("id")');
+		expect(result).toContain(
+			'FOREIGN KEY ("authorId") REFERENCES "users"("id")',
+		);
 	});
 
 	test("foreign key with onDelete cascade", () => {

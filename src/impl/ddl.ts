@@ -7,7 +7,12 @@
 
 import {z} from "zod";
 import type {Table} from "./table.js";
-import {ident, makeTemplate} from "./template.js";
+import {
+	ident,
+	makeTemplate,
+	createTemplate,
+	type SQLTemplate,
+} from "./template.js";
 
 export type SQLDialect = "sqlite" | "postgresql" | "mysql";
 
@@ -203,7 +208,7 @@ export function generateColumnDDL(
 	zodType: z.ZodType,
 	fieldMeta: Record<string, any>,
 	dialect: SQLDialect = "sqlite",
-): {strings: TemplateStringsArray; values: unknown[]} {
+): SQLTemplate {
 	const {isOptional, isNullable, hasDefault} = unwrapType(zodType);
 	const {sqlType, defaultValue: sqlDefault} = mapZodToSQL(
 		zodType,
@@ -228,7 +233,7 @@ export function generateColumnDDL(
 	}
 	strings.push(suffix);
 
-	return {strings: makeTemplate(strings), values};
+	return createTemplate(makeTemplate(strings), values);
 }
 
 /**
@@ -238,7 +243,7 @@ export function generateColumnDDL(
 export function generateDDL<T extends Table<any>>(
 	table: T,
 	options: DDLOptions = {},
-): {strings: TemplateStringsArray; values: unknown[]} {
+): SQLTemplate {
 	const {dialect = "sqlite", ifNotExists = true} = options;
 	const shape = table.schema.shape;
 	const meta = table.meta;
@@ -442,5 +447,5 @@ export function generateDDL<T extends Table<any>>(
 		strings[strings.length - 1] += ");";
 	}
 
-	return {strings: makeTemplate(strings), values};
+	return createTemplate(makeTemplate(strings), values);
 }

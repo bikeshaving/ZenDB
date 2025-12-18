@@ -2,23 +2,55 @@
  * Template utilities for building SQL templates.
  *
  * This module provides the core primitives for the monadic template approach:
- * - Templates are tuples of {strings: TemplateStringsArray, values: unknown[]}
+ * - Templates are branded tuples: [strings, values]
  * - Templates compose by merging (no string parsing)
  * - Identifiers use ident() markers for deferred quoting
  * - Rendering happens in drivers only
  */
 
 // ============================================================================
-// Types
+// SQL Template
 // ============================================================================
 
+const SQL_TEMPLATE = Symbol.for("@b9g/zen:template");
+
 /**
- * A template tuple that can be composed and rendered.
+ * A SQL template as a branded tuple: [strings, values]
+ *
  * Maintains invariant: strings.length === values.length + 1
+ *
+ * Access: template[0] for strings, template[1] for values
+ * The strings array preserves .raw for TemplateStringsArray compatibility.
+ *
+ * Branded with symbol for injection protection - prevents user-crafted
+ * objects from being interpolated as raw SQL.
  */
-export interface TemplateTuple {
-	readonly strings: TemplateStringsArray;
-	readonly values: readonly unknown[];
+export type SQLTemplate = readonly [
+	TemplateStringsArray,
+	readonly unknown[],
+] & {
+	readonly [SQL_TEMPLATE]: true;
+};
+
+/**
+ * Create a SQL template from strings and values.
+ *
+ * @param strings - TemplateStringsArray (preserves .raw)
+ * @param values - Template values (identifiers, parameters, nested templates)
+ */
+export function createTemplate(
+	strings: TemplateStringsArray,
+	values: readonly unknown[] = [],
+): SQLTemplate {
+	const tuple = [strings, values] as const;
+	return Object.assign(tuple, {[SQL_TEMPLATE]: true}) as SQLTemplate;
+}
+
+/**
+ * Check if a value is a SQL template.
+ */
+export function isSQLTemplate(value: unknown): value is SQLTemplate {
+	return Array.isArray(value) && SQL_TEMPLATE in value;
 }
 
 // ============================================================================
@@ -78,18 +110,18 @@ export function makeTemplate(parts: string[]): TemplateStringsArray {
  *
  * @param strings - Accumulator strings array (mutated)
  * @param values - Accumulator values array (mutated)
- * @param template - Template to merge
+ * @param template - Template to merge (tuple format)
  */
 export function mergeTemplate(
 	strings: string[],
 	values: unknown[],
-	template: TemplateTuple,
+	template: SQLTemplate,
 ): void {
 	// Append first template string to last accumulator string
-	strings[strings.length - 1] += template.strings[0];
+	strings[strings.length - 1] += template[0][0];
 	// Push remaining template parts
-	for (let i = 0; i < template.values.length; i++) {
-		values.push(template.values[i]);
-		strings.push(template.strings[i + 1]);
+	for (let i = 0; i < template[1].length; i++) {
+		values.push(template[1][i]);
+		strings.push(template[0][i + 1]);
 	}
 }

@@ -8,14 +8,15 @@
 import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
 
 import {TableDefinitionError} from "./errors.js";
-import {
-	createFragment,
-	type SQLFragment,
-	createDDLFragment,
-	type DDLFragment,
-} from "./query.js";
+import {createDDLFragment, type DDLFragment} from "./query.js";
 import {isSQLSymbol, type SQLSymbol} from "./database.js";
-import {ident, makeTemplate} from "./template.js";
+import {
+	ident,
+	makeTemplate,
+	createTemplate,
+	isSQLTemplate,
+	type SQLTemplate,
+} from "./template.js";
 import {ValidationError} from "./errors.js";
 
 // ============================================================================
@@ -220,30 +221,24 @@ export interface FieldDbMeta {
 	/** Value to apply on INSERT */
 	inserted?: {
 		type: "sql" | "symbol" | "function";
-		/** Template strings (for type: "sql") */
-		strings?: TemplateStringsArray;
-		/** Template values (for type: "sql") */
-		values?: readonly unknown[];
+		/** SQL template (for type: "sql") */
+		template?: SQLTemplate;
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
 	/** Value to apply on UPDATE only */
 	updated?: {
 		type: "sql" | "symbol" | "function";
-		/** Template strings (for type: "sql") */
-		strings?: TemplateStringsArray;
-		/** Template values (for type: "sql") */
-		values?: readonly unknown[];
+		/** SQL template (for type: "sql") */
+		template?: SQLTemplate;
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
 	/** Value to apply on both INSERT and UPDATE */
 	upserted?: {
 		type: "sql" | "symbol" | "function";
-		/** Template strings (for type: "sql") */
-		strings?: TemplateStringsArray;
-		/** Template values (for type: "sql") */
-		values?: readonly unknown[];
+		/** SQL template (for type: "sql") */
+		template?: SQLTemplate;
 		symbol?: SQLSymbol;
 		fn?: () => unknown;
 	};
@@ -261,28 +256,28 @@ function isTemplateStringsArray(value: unknown): value is TemplateStringsArray {
 }
 
 /**
- * Merge a SQLFragment into strings/values arrays, maintaining the template invariant.
+ * Merge a SQLTemplate into strings/values arrays, maintaining the template invariant.
  * Fragment templates merge naturally without string parsing.
  *
  * @param strings - Mutable string array to append to
  * @param values - Mutable values array to append to
- * @param fragment - Fragment with {strings, values} template format
- * @param suffix - String to append after the fragment
+ * @param template - SQLTemplate tuple [strings, values]
+ * @param suffix - String to append after the template
  */
 function mergeFragment(
 	strings: string[],
 	values: unknown[],
-	fragment: {strings: TemplateStringsArray; values: readonly unknown[]},
+	template: SQLTemplate,
 	suffix: string,
 ): void {
-	// Append fragment.strings[0] to last string
-	strings[strings.length - 1] += fragment.strings[0];
+	// Append template[0][0] to last string
+	strings[strings.length - 1] += template[0][0];
 
-	// Push remaining fragment strings and all fragment values
-	for (let j = 1; j < fragment.strings.length; j++) {
-		strings.push(fragment.strings[j]);
+	// Push remaining template strings and all template values
+	for (let j = 1; j < template[0].length; j++) {
+		strings.push(template[0][j]);
 	}
-	values.push(...fragment.values);
+	values.push(...template[1]);
 
 	// Append suffix
 	strings[strings.length - 1] += suffix;
@@ -468,14 +463,10 @@ function createDbMethods(schema: ZodTypeAny) {
 
 					if (i < templateValues.length) {
 						const value = templateValues[i];
-						// Check if it's an SQL fragment (from cols proxy or other fragments)
-						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as unknown as {
-								strings: TemplateStringsArray;
-								values: readonly unknown[];
-							};
-							// Merge fragment template to maintain invariant
-							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
+						// Check if it's an SQL template (from cols proxy or other templates)
+						if (isSQLTemplate(value)) {
+							// Merge template to maintain invariant
+							mergeFragment(strings, values, value, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
 							values.push(value);
@@ -484,7 +475,10 @@ function createDbMethods(schema: ZodTypeAny) {
 					}
 				}
 
-				insertedMeta = {type: "sql", strings: makeTemplate(strings), values};
+				insertedMeta = {
+					type: "sql",
+					template: createTemplate(makeTemplate(strings), values),
+				};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				insertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -540,14 +534,10 @@ function createDbMethods(schema: ZodTypeAny) {
 
 					if (i < templateValues.length) {
 						const value = templateValues[i];
-						// Check if it's an SQL fragment (from cols proxy or other fragments)
-						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as unknown as {
-								strings: TemplateStringsArray;
-								values: readonly unknown[];
-							};
-							// Merge fragment template to maintain invariant
-							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
+						// Check if it's an SQL template (from cols proxy or other templates)
+						if (isSQLTemplate(value)) {
+							// Merge template to maintain invariant
+							mergeFragment(strings, values, value, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
 							values.push(value);
@@ -556,7 +546,10 @@ function createDbMethods(schema: ZodTypeAny) {
 					}
 				}
 
-				updatedMeta = {type: "sql", strings: makeTemplate(strings), values};
+				updatedMeta = {
+					type: "sql",
+					template: createTemplate(makeTemplate(strings), values),
+				};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				updatedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -612,14 +605,10 @@ function createDbMethods(schema: ZodTypeAny) {
 
 					if (i < templateValues.length) {
 						const value = templateValues[i];
-						// Check if it's an SQL fragment (from cols proxy or other fragments)
-						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as unknown as {
-								strings: TemplateStringsArray;
-								values: readonly unknown[];
-							};
-							// Merge fragment template to maintain invariant
-							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
+						// Check if it's an SQL template (from cols proxy or other templates)
+						if (isSQLTemplate(value)) {
+							// Merge template to maintain invariant
+							mergeFragment(strings, values, value, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
 							values.push(value);
@@ -628,7 +617,10 @@ function createDbMethods(schema: ZodTypeAny) {
 					}
 				}
 
-				upsertedMeta = {type: "sql", strings: makeTemplate(strings), values};
+				upsertedMeta = {
+					type: "sql",
+					template: createTemplate(makeTemplate(strings), values),
+				};
 			} else if (isSQLSymbol(stringsOrValue)) {
 				upsertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
@@ -817,16 +809,6 @@ export interface TableOptions {
 // Symbol to identify Table objects
 const TABLE_MARKER = Symbol.for("@b9g/zen:table");
 
-// Symbol for SQL fragments (same as query.ts - Symbol.for ensures identity)
-const SQL_FRAGMENT = Symbol.for("@b9g/zen:fragment");
-
-interface ColumnFragment {
-	readonly [SQL_FRAGMENT]: true;
-	readonly strings: TemplateStringsArray;
-	readonly values: readonly unknown[];
-	toString(): string;
-}
-
 /**
  * Check if a value is a Table object.
  */
@@ -854,10 +836,8 @@ export interface ReferenceInfo {
 export interface DerivedExpr {
 	/** The field name for this derived column */
 	fieldName: string;
-	/** Template strings for the expression */
-	strings: TemplateStringsArray;
-	/** Template values for the expression */
-	values: readonly unknown[];
+	/** SQL template for the expression */
+	template: SQLTemplate;
 }
 
 // ============================================================================
@@ -929,7 +909,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * db.all(Posts)`GROUP BY ${Posts.primary}`
 	 * // → GROUP BY "posts"."id"
 	 */
-	readonly primary: ColumnFragment | null;
+	readonly primary: SQLTemplate | null;
 
 	/** Get all foreign key references */
 	references(): ReferenceInfo[];
@@ -949,7 +929,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * // Show only soft-deleted records
 	 * db.all(Posts)`WHERE ${Posts.deleted()}`
 	 */
-	deleted(): SQLFragment;
+	deleted(): SQLTemplate;
 
 	/**
 	 * Generate safe IN clause with proper parameterization.
@@ -969,7 +949,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	in<K extends keyof z.infer<ZodObject<T>>>(
 		field: K,
 		values: unknown[],
-	): SQLFragment;
+	): SQLTemplate;
 
 	/**
 	 * Create a partial view of this table with only the specified fields.
@@ -1031,7 +1011,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * // → JOIN users ON "users"."id" = "posts"."authorId" WHERE "posts"."published" = ? ORDER BY "posts"."createdAt" DESC
 	 */
 	readonly cols: {
-		[K in keyof z.infer<ZodObject<T>>]: ColumnFragment;
+		[K in keyof z.infer<ZodObject<T>>]: SQLTemplate;
 	};
 
 	/**
@@ -1045,7 +1025,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * `
 	 * // → "title" = ?
 	 */
-	set(values: SetValues<Table<T>>): SQLFragment;
+	set(values: SetValues<Table<T>>): SQLTemplate;
 
 	/**
 	 * Generate foreign-key equality fragment for JOIN ON clauses.
@@ -1058,7 +1038,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * `
 	 * // → JOIN users ON "users"."id" = "posts"."authorId"
 	 */
-	on(field: keyof z.infer<ZodObject<T>> & string): SQLFragment;
+	on(field: keyof z.infer<ZodObject<T>> & string): SQLTemplate;
 
 	/**
 	 * Generate CREATE TABLE DDL for this table.
@@ -1221,7 +1201,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 * `
 	 * // → INSERT INTO posts (id, title) VALUES (?, ?), (?, ?)
 	 */
-	values(rows: Partial<z.infer<ZodObject<T>>>[]): SQLFragment;
+	values(rows: Partial<z.infer<ZodObject<T>>>[]): SQLTemplate;
 }
 
 /**
@@ -1394,20 +1374,14 @@ export function table<T extends Record<string, ZodTypeAny>>(
 function createColsProxy(
 	tableName: string,
 	zodShape: Record<string, ZodTypeAny>,
-): Record<string, ColumnFragment> {
-	return new Proxy({} as Record<string, ColumnFragment>, {
-		get(_target, prop: string): ColumnFragment | undefined {
+): Record<string, SQLTemplate> {
+	return new Proxy({} as Record<string, SQLTemplate>, {
+		get(_target, prop: string): SQLTemplate | undefined {
 			if (prop in zodShape) {
-				const strings = makeTemplate(["", ".", ""]);
-				const values = [ident(tableName), ident(prop)];
-				return {
-					[SQL_FRAGMENT]: true,
-					strings,
-					values,
-					toString() {
-						return `ColumnFragment { ${tableName}.${prop} }`;
-					},
-				};
+				return createTemplate(makeTemplate(["", ".", ""]), [
+					ident(tableName),
+					ident(prop),
+				]);
 			}
 			return undefined;
 		},
@@ -1443,15 +1417,11 @@ function createTableObject(
 	const cols = createColsProxy(name, zodShape);
 
 	// Create primary key fragment
-	const primary: ColumnFragment | null = meta.primary
-		? {
-				[SQL_FRAGMENT]: true,
-				strings: makeTemplate(["", ".", ""]),
-				values: [ident(name), ident(meta.primary)],
-				toString() {
-					return `ColumnFragment { ${name}.${meta.primary} }`;
-				},
-			}
+	const primary: SQLTemplate | null = meta.primary
+		? createTemplate(makeTemplate(["", ".", ""]), [
+				ident(name),
+				ident(meta.primary),
+			])
 		: null;
 
 	// Validate derived properties don't collide with schema fields
@@ -1492,20 +1462,20 @@ function createTableObject(
 			return meta.references;
 		},
 
-		deleted(): SQLFragment {
+		deleted(): SQLTemplate {
 			const softDeleteField = meta.softDeleteField;
 			if (!softDeleteField) {
 				throw new Error(
 					`Table "${name}" does not have a soft delete field. Use softDelete() wrapper to mark a field.`,
 				);
 			}
-			return createFragment(makeTemplate(["", ".", " IS NOT NULL"]), [
+			return createTemplate(makeTemplate(["", ".", " IS NOT NULL"]), [
 				ident(name),
 				ident(softDeleteField),
 			]);
 		},
 
-		in(field: string, values: unknown[]): SQLFragment {
+		in(field: string, values: unknown[]): SQLTemplate {
 			// Validate field exists
 			if (!(field in zodShape)) {
 				throw new Error(
@@ -1515,7 +1485,7 @@ function createTableObject(
 
 			// Handle empty array - return always-false condition
 			if (values.length === 0) {
-				return createFragment(makeTemplate(["1 = 0"]), []);
+				return createTemplate(makeTemplate(["1 = 0"]), []);
 			}
 
 			// PostgreSQL has a limit of 32767 parameters per query
@@ -1539,7 +1509,7 @@ function createTableObject(
 				strings.push(i < values.length - 1 ? ", " : ")");
 			}
 
-			return createFragment(makeTemplate(strings), templateValues);
+			return createTemplate(makeTemplate(strings), templateValues);
 		},
 
 		pick(...fields: any[]): PartialTable<any> {
@@ -1640,14 +1610,10 @@ function createTableObject(
 
 					if (i < templateValues.length) {
 						const value = templateValues[i];
-						// Check if it's an SQL fragment (from cols proxy or other fragments)
-						if (value && typeof value === "object" && SQL_FRAGMENT in value) {
-							const fragment = value as unknown as {
-								strings: TemplateStringsArray;
-								values: readonly unknown[];
-							};
-							// Merge fragment template to maintain invariant
-							mergeFragment(strings, values, fragment, stringsOrValue[i + 1]);
+						// Check if it's an SQL template (from cols proxy or other templates)
+						if (isSQLTemplate(value)) {
+							// Merge template to maintain invariant
+							mergeFragment(strings, values, value, stringsOrValue[i + 1]);
 						} else {
 							// Regular value - add to values array
 							values.push(value);
@@ -1664,8 +1630,7 @@ function createTableObject(
 
 				const derivedExpr: DerivedExpr = {
 					fieldName,
-					strings: makeTemplate(strings),
-					values,
+					template: createTemplate(makeTemplate(strings), values),
 				};
 
 				// Extend schema with new field
@@ -1698,7 +1663,7 @@ function createTableObject(
 			};
 		},
 
-		set(values: Record<string, unknown>): SQLFragment {
+		set(values: Record<string, unknown>): SQLTemplate {
 			const entries = Object.entries(values).filter(([, v]) => v !== undefined);
 			if (entries.length === 0) {
 				throw new Error("set() requires at least one non-undefined field");
@@ -1718,10 +1683,10 @@ function createTableObject(
 				strings.push(i < entries.length - 1 ? ", " : "");
 			}
 
-			return createFragment(makeTemplate(strings), templateValues);
+			return createTemplate(makeTemplate(strings), templateValues);
 		},
 
-		on(field: string): SQLFragment {
+		on(field: string): SQLTemplate {
 			const ref = meta.references.find((r) => r.fieldName === field);
 
 			if (!ref) {
@@ -1733,7 +1698,7 @@ function createTableObject(
 			// Build template: ref_table.ref_field = this_table.fk_field
 			// strings: ["", ".", " = ", ".", ""]
 			// values: [ident(ref.table.name), ident(ref.referencedField), ident(name), ident(field)]
-			return createFragment(makeTemplate(["", ".", " = ", ".", ""]), [
+			return createTemplate(makeTemplate(["", ".", " = ", ".", ""]), [
 				ident(ref.table.name),
 				ident(ref.referencedField),
 				ident(name),
@@ -1789,7 +1754,7 @@ function createTableObject(
 			});
 		},
 
-		values(rows: Record<string, unknown>[]): SQLFragment {
+		values(rows: Record<string, unknown>[]): SQLTemplate {
 			if (rows.length === 0) {
 				throw new Error("values() requires at least one row");
 			}
@@ -1834,7 +1799,7 @@ function createTableObject(
 				}
 			}
 
-			return createFragment(makeTemplate(strings), templateValues);
+			return createTemplate(makeTemplate(strings), templateValues);
 		},
 	};
 

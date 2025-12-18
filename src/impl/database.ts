@@ -8,18 +8,8 @@
 import type {Table, Infer, Insert, FullTableOnly} from "./table.js";
 import {validateWithStandardSchema} from "./table.js";
 import {z} from "zod";
-import {
-	normalize,
-	normalizeOne,
-	isSQLFragment,
-	type SQLFragment,
-} from "./query.js";
-import {
-	ident,
-	isSQLIdentifier,
-	makeTemplate,
-	type SQLIdentifier,
-} from "./template.js";
+import {normalize, normalizeOne} from "./query.js";
+import {ident, isSQLTemplate, makeTemplate} from "./template.js";
 
 // ============================================================================
 // DB Expressions - Runtime values evaluated by the database
@@ -92,7 +82,6 @@ function resolveSQLSymbol(sym: symbol): string {
 	}
 	throw new Error(`Unknown SQL symbol: ${String(sym)}`);
 }
-
 
 /**
  * Separate DB expressions and SQL symbols from regular data values.
@@ -182,7 +171,9 @@ function injectSchemaExpressions<T extends Table<any>>(
 
 		// Resolve the value based on type
 		if (meta.type === "sql") {
-			result[fieldName] = createDBExpr(meta.strings!, meta.values ?? []);
+			result[fieldName] = createDBExpr(meta.template![0], [
+				...meta.template![1],
+			]);
 		} else if (meta.type === "symbol") {
 			// Pass symbol through - resolved at query build time
 			result[fieldName] = meta.symbol;
@@ -664,14 +655,13 @@ function buildSelectCols(tables: Table<any>[]): {
 			}
 			const alias = `${tableName}.${expr.fieldName}`;
 			// For derived expressions, merge their template and wrap in parentheses
-			// expr.strings/values format: ["COUNT(", ")"] with values [ident(...)]
 			strings[strings.length - 1] += "(";
 			// Merge the expression template
-			strings[strings.length - 1] += expr.strings[0];
-			for (let i = 1; i < expr.strings.length; i++) {
-				strings.push(expr.strings[i]);
+			strings[strings.length - 1] += expr.template[0][0];
+			for (let i = 1; i < expr.template[0].length; i++) {
+				strings.push(expr.template[0][i]);
 			}
-			values.push(...expr.values);
+			values.push(...expr.template[1]);
 			// Add closing paren and AS alias
 			strings[strings.length - 1] += ") AS ";
 			values.push(ident(alias));
@@ -783,18 +773,16 @@ function expandFragments(
 
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
-		if (isSQLFragment(value)) {
-			// Expand fragment: merge its template parts directly
-			const fragment = value as SQLFragment;
+		if (isSQLTemplate(value)) {
+			// Expand template: merge its parts directly (tuple format: [strings, values])
+			// Append template[0][0] to last newString
+			newStrings[newStrings.length - 1] += value[0][0];
 
-			// Append fragment.strings[0] to last newString
-			newStrings[newStrings.length - 1] += fragment.strings[0];
-
-			// Push remaining fragment strings and all fragment values
-			for (let j = 1; j < fragment.strings.length; j++) {
-				newStrings.push(fragment.strings[j]);
+			// Push remaining template strings and all template values
+			for (let j = 1; j < value[0].length; j++) {
+				newStrings.push(value[0][j]);
 			}
-			newValues.push(...fragment.values);
+			newValues.push(...value[1]);
 
 			// Append the next template string part
 			newStrings[newStrings.length - 1] += strings[i + 1];

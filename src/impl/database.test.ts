@@ -897,10 +897,12 @@ describe("Soft Delete", () => {
 	});
 
 	describe("Table.deleted()", () => {
-		test("generates SQL fragment for soft delete check", () => {
+		test("generates SQL template for soft delete check", () => {
 			const fragment = SoftDeleteUsers.deleted();
-			expect(fragment).toHaveProperty("strings");
-			expect(fragment).toHaveProperty("values");
+			// SQLTemplate is a branded tuple: [strings, values]
+			expect(Array.isArray(fragment)).toBe(true);
+			expect(fragment[0]).toBeDefined(); // strings
+			expect(fragment[1]).toBeDefined(); // values
 			const {sql, params} = renderFragment(fragment);
 			expect(sql).toBe('"soft_delete_users"."deletedAt" IS NOT NULL');
 			expect(params).toEqual([]);

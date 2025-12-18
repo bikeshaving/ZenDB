@@ -6,7 +6,13 @@
 
 import {type Table, isTable, validateWithStandardSchema} from "./table.js";
 import {decodeData} from "./database.js";
-import {ident, isSQLIdentifier, makeTemplate} from "./template.js";
+import {
+	ident,
+	makeTemplate,
+	isSQLTemplate,
+	createTemplate,
+	type SQLTemplate,
+} from "./template.js";
 import {renderSQL, type SQLDialect} from "./test-driver.js";
 
 export type {SQLDialect} from "./test-driver.js";
@@ -20,83 +26,19 @@ export interface ParsedQuery {
 	params: unknown[];
 }
 
-// ============================================================================
-// SQL Fragments
-// ============================================================================
-
-const SQL_FRAGMENT = Symbol.for("@b9g/zen:fragment");
-
 /**
- * A SQL fragment as a template tuple.
+ * Render a SQL template to {sql, params} format.
+ * Useful for testing and debugging template output.
  *
- * Fragments compose monadically: when interpolated, the template parts
- * merge naturally without string parsing. The driver handles all quoting
- * and dialect-specific SQL generation.
- *
- * **Structure**: strings.length === values.length + 1 (template invariant)
- *
- * **Debugging**: Call `.toString()` to see the template structure.
- */
-export interface SQLFragment {
-	readonly [SQL_FRAGMENT]: true;
-	readonly strings: TemplateStringsArray;
-	readonly values: readonly unknown[];
-	toString(): string;
-}
-
-/**
- * Check if a value is a SQL fragment.
- */
-export function isSQLFragment(value: unknown): value is SQLFragment {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		SQL_FRAGMENT in value &&
-		(value as any)[SQL_FRAGMENT] === true
-	);
-}
-
-/**
- * Create a SQL fragment from template parts.
- *
- * @internal Used by fragment helpers (deleted, in, set, on, etc.)
- */
-export function createFragment(
-	strings: TemplateStringsArray,
-	values: unknown[] = [],
-): SQLFragment {
-	return {
-		[SQL_FRAGMENT]: true,
-		strings,
-		values,
-		toString() {
-			// Show template structure for debugging
-			let display = "";
-			for (let i = 0; i < strings.length; i++) {
-				display += strings[i];
-				if (i < values.length) {
-					const v = values[i];
-					display += `\${${typeof v === "object" && v !== null && "name" in v ? `ident("${(v as any).name}")` : JSON.stringify(v)}}`;
-				}
-			}
-			return `SQLFragment { template: \`${display}\` }`;
-		},
-	};
-}
-
-/**
- * Render a SQL fragment to {sql, params} format.
- * Useful for testing and debugging fragment output.
- *
- * @param fragment - Fragment with template format {strings, values}
+ * @param template - SQLTemplate tuple [strings, values]
  * @param dialect - SQL dialect for identifier quoting (default: sqlite)
- * @returns {sql, params} for the rendered fragment
+ * @returns {sql, params} for the rendered template
  */
 export function renderFragment(
-	fragment: {strings: TemplateStringsArray; values: readonly unknown[]},
+	template: SQLTemplate,
 	dialect: SQLDialect = "sqlite",
 ): {sql: string; params: unknown[]} {
-	return renderSQL(fragment.strings, fragment.values, dialect);
+	return renderSQL(template[0], template[1], dialect);
 }
 
 // ============================================================================
@@ -110,9 +52,6 @@ const DDL_FRAGMENT = Symbol.for("@b9g/zen:ddl-fragment");
  *
  * Unlike SQLFragment which is already SQL text, DDLFragment is an abstract
  * representation that gets converted to SQL when passed through a template.
- *
- * **Debugging**: Call `.toString()` to see the fragment type and table name.
- * The actual SQL is only generated when passed through `db.exec()`.
  */
 export interface DDLFragment {
 	readonly [DDL_FRAGMENT]: true;
@@ -123,7 +62,6 @@ export interface DDLFragment {
 		| "update";
 	readonly table: Table<any>;
 	readonly options?: Record<string, any>;
-	toString(): string;
 }
 
 /**
@@ -157,10 +95,6 @@ export function createDDLFragment(
 		type,
 		table,
 		options,
-		toString() {
-			const optStr = options ? `, options: ${JSON.stringify(options)}` : "";
-			return `DDLFragment { type: "${type}", table: "${table.name}"${optStr} }`;
-		},
 	};
 }
 
@@ -230,11 +164,12 @@ export function buildSelectColumnsTemplate(tables: Table<any>[]): {
 			}
 			needsComma = true;
 
-			// Add opening paren and expression
-			strings[strings.length - 1] += "(" + expr.strings[0];
-			for (let i = 0; i < expr.values.length; i++) {
-				values.push(expr.values[i]);
-				strings.push(expr.strings[i + 1]);
+			// Add opening paren and expression (expr.template is SQLTemplate: [strings, values])
+			const template = expr.template;
+			strings[strings.length - 1] += "(" + template[0][0];
+			for (let i = 0; i < template[1].length; i++) {
+				values.push(template[1][i]);
+				strings.push(template[0][i + 1]);
 			}
 
 			// Add ) AS ${ident(alias)}
@@ -300,20 +235,20 @@ export function expandTemplate(
 		const value = values[i];
 
 		if (isDDLFragment(value)) {
-			// DDL fragments transform to templates with ident markers - merge like SQL fragments
+			// DDL fragments transform to templates with ident markers - merge like SQL templates
 			const ddlTemplate = transformDDLFragmentToTemplate(value, dialect);
-			newStrings[newStrings.length - 1] += ddlTemplate.strings[0];
-			for (let j = 0; j < ddlTemplate.values.length; j++) {
-				newValues.push(ddlTemplate.values[j]);
-				newStrings.push(ddlTemplate.strings[j + 1]);
+			newStrings[newStrings.length - 1] += ddlTemplate[0][0];
+			for (let j = 0; j < ddlTemplate[1].length; j++) {
+				newValues.push(ddlTemplate[1][j]);
+				newStrings.push(ddlTemplate[0][j + 1]);
 			}
 			newStrings[newStrings.length - 1] += strings[i + 1];
-		} else if (isSQLFragment(value)) {
-			// Merge fragment template directly
-			newStrings[newStrings.length - 1] += value.strings[0];
-			for (let j = 0; j < value.values.length; j++) {
-				newValues.push(value.values[j]);
-				newStrings.push(value.strings[j + 1]);
+		} else if (isSQLTemplate(value)) {
+			// Merge SQL template directly (tuple format: [strings, values])
+			newStrings[newStrings.length - 1] += value[0][0];
+			for (let j = 0; j < value[1].length; j++) {
+				newValues.push(value[1][j]);
+				newStrings.push(value[0][j + 1]);
 			}
 			newStrings[newStrings.length - 1] += strings[i + 1];
 		} else if (isTable(value)) {
@@ -373,14 +308,14 @@ export function parseTemplate(
 }
 
 /**
- * Transform a DDL fragment to a template tuple with ident markers.
+ * Transform a DDL fragment to a SQLTemplate with ident markers.
  * No quoting happens here - that's deferred to renderSQL/drivers.
  * @internal
  */
 function transformDDLFragmentToTemplate(
 	fragment: DDLFragment,
 	dialect: SQLDialect,
-): {strings: TemplateStringsArray; values: unknown[]} {
+): SQLTemplate {
 	// Lazy import to avoid circular dependencies
 	const {generateDDL, generateColumnDDL} = require("./ddl.js");
 	const table = fragment.table;
@@ -396,7 +331,7 @@ function transformDDLFragmentToTemplate(
 				const zodShape = table.schema.shape;
 				const meta = table.meta;
 
-				const colTemplate = generateColumnDDL(
+				const colTemplate: SQLTemplate = generateColumnDDL(
 					fieldName,
 					zodShape[fieldName],
 					meta.fields[fieldName] || {},
@@ -414,14 +349,14 @@ function transformDDLFragmentToTemplate(
 				const values: unknown[] = [ident(table.name)];
 				strings.push(` ADD COLUMN ${ifNotExists}`);
 
-				// Merge column definition template
-				strings[strings.length - 1] += colTemplate.strings[0];
-				for (let i = 0; i < colTemplate.values.length; i++) {
-					values.push(colTemplate.values[i]);
-					strings.push(colTemplate.strings[i + 1]);
+				// Merge column definition template (tuple format: [strings, values])
+				strings[strings.length - 1] += colTemplate[0][0];
+				for (let i = 0; i < colTemplate[1].length; i++) {
+					values.push(colTemplate[1][i]);
+					strings.push(colTemplate[0][i + 1]);
 				}
 
-				return {strings: makeTemplate(strings), values};
+				return createTemplate(makeTemplate(strings), values);
 			}
 
 			case "create-index": {
@@ -443,28 +378,17 @@ function transformDDLFragmentToTemplate(
 				}
 				strings[strings.length - 1] += ")";
 
-				return {strings: makeTemplate(strings), values};
+				return createTemplate(makeTemplate(strings), values);
 			}
 
 			case "update": {
 				const {fromField, toField} = options;
 
 				// Build: UPDATE ${table} SET ${toField} = ${fromField} WHERE ${toField} IS NULL
-				return {
-					strings: makeTemplate([
-						"UPDATE ",
-						" SET ",
-						" = ",
-						" WHERE ",
-						" IS NULL",
-					]),
-					values: [
-						ident(table.name),
-						ident(toField),
-						ident(fromField),
-						ident(toField),
-					],
-				};
+				return createTemplate(
+					makeTemplate(["UPDATE ", " SET ", " = ", " WHERE ", " IS NULL"]),
+					[ident(table.name), ident(toField), ident(fromField), ident(toField)],
+				);
 			}
 
 			default:

@@ -55,9 +55,12 @@ export {
 } from "./impl/template.js";
 
 export {
-	// SQL fragments (return types of table methods like deleted(), set(), etc.)
-	// TODO: These should probably be TemplateTuple instead
-	type SQLFragment,
+	// SQL template (return type of table methods like deleted(), set(), etc.)
+	type SQLTemplate,
+} from "./impl/template.js";
+
+export {
+	// DDL fragment (return type of table.ddl())
 	type DDLFragment,
 } from "./impl/query.js";
 
