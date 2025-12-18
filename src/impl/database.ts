@@ -951,11 +951,7 @@ export class Transaction {
 				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
-					const decoded = decodeData(table, row);
-					return validateWithStandardSchema<Infer<T>>(
-						table.schema,
-						decoded,
-					) as Infer<T>;
+					return decodeData(table, row) as Infer<T>;
 				});
 		}
 
@@ -1086,11 +1082,7 @@ export class Transaction {
 				strings,
 				values,
 			);
-			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
+			return decodeData(table, row) as Infer<T>;
 		}
 
 		// Fallback: INSERT then SELECT
@@ -1107,11 +1099,7 @@ export class Transaction {
 				values,
 			);
 			if (row) {
-				const decoded = decodeData(table, row);
-				return validateWithStandardSchema<Infer<T>>(
-					table.schema,
-					decoded,
-				) as Infer<T>;
+				return decodeData(table, row) as Infer<T>;
 			}
 		}
 
@@ -1212,11 +1200,7 @@ export class Transaction {
 				values,
 			);
 			if (!row) return null;
-			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
+			return decodeData(table, row) as Infer<T>;
 		}
 
 		// Fallback: UPDATE then SELECT
@@ -1232,11 +1216,7 @@ export class Transaction {
 			selectValues,
 		);
 		if (!row) return null;
-		const decoded = decodeData(table, row);
-		return validateWithStandardSchema<Infer<T>>(
-			table.schema,
-			decoded,
-		) as Infer<T>;
+		return decodeData(table, row) as Infer<T>;
 	}
 
 	async #updateByIds<T extends Table<any>>(
@@ -1304,11 +1284,7 @@ export class Transaction {
 
 			const resultMap = new Map<string | number, Infer<T>>();
 			for (const row of rows) {
-				const decoded = decodeData(table, row);
-				const entity = validateWithStandardSchema<Infer<T>>(
-					table.schema,
-					decoded,
-				) as Infer<T>;
+				const entity = decodeData(table, row) as Infer<T>;
 				resultMap.set(row[pk] as string | number, entity);
 			}
 
@@ -1327,11 +1303,7 @@ export class Transaction {
 
 		const resultMap = new Map<string | number, Infer<T>>();
 		for (const row of rows) {
-			const decoded = decodeData(table, row);
-			const entity = validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
+			const entity = decodeData(table, row) as Infer<T>;
 			resultMap.set(row[pk] as string | number, entity);
 		}
 
@@ -1427,13 +1399,7 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return rows.map((row) => {
-				const decoded = decodeData(table, row);
-				return validateWithStandardSchema<Infer<T>>(
-					table.schema,
-					decoded,
-				) as Infer<T>;
-			});
+			return rows.map((row) => decodeData(table, row) as Infer<T>);
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
@@ -1473,13 +1439,7 @@ export class Transaction {
 			selectVals,
 		);
 
-		return rows.map((row) => {
-			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
-		});
+		return rows.map((row) => decodeData(table, row) as Infer<T>);
 	}
 
 	delete<T extends Table<any>>(table: T, id: string | number): Promise<number>;
@@ -2027,11 +1987,7 @@ export class Database extends EventTarget {
 				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
-					const decoded = decodeData(table, row);
-					return validateWithStandardSchema<Infer<T>>(
-						table.schema,
-						decoded,
-					) as Infer<T>;
+					return decodeData(table, row) as Infer<T>;
 				});
 		}
 
@@ -2183,11 +2139,7 @@ export class Database extends EventTarget {
 				strings,
 				values,
 			);
-			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
+			return decodeData(table, row) as Infer<T>;
 		}
 
 		// Fallback: INSERT then SELECT
@@ -2204,11 +2156,7 @@ export class Database extends EventTarget {
 				values,
 			);
 			if (row) {
-				const decoded = decodeData(table, row);
-				return validateWithStandardSchema<Infer<T>>(
-					table.schema,
-					decoded,
-				) as Infer<T>;
+				return decodeData(table, row) as Infer<T>;
 			}
 		}
 
@@ -2325,11 +2273,7 @@ export class Database extends EventTarget {
 				values,
 			);
 			if (!row) return null;
-			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
+			return decodeData(table, row) as Infer<T>;
 		}
 
 		// Fallback: UPDATE then SELECT
@@ -2345,11 +2289,7 @@ export class Database extends EventTarget {
 			selectValues,
 		);
 		if (!row) return null;
-		const decoded = decodeData(table, row);
-		return validateWithStandardSchema<Infer<T>>(
-			table.schema,
-			decoded,
-		) as Infer<T>;
+		return decodeData(table, row) as Infer<T>;
 	}
 
 	async #updateByIds<T extends Table<any>>(
@@ -2417,11 +2357,7 @@ export class Database extends EventTarget {
 
 			const resultMap = new Map<string | number, Infer<T>>();
 			for (const row of rows) {
-				const decoded = decodeData(table, row);
-				const entity = validateWithStandardSchema<Infer<T>>(
-					table.schema,
-					decoded,
-				) as Infer<T>;
+				const entity = decodeData(table, row) as Infer<T>;
 				resultMap.set(row[pk] as string | number, entity);
 			}
 
@@ -2440,11 +2376,7 @@ export class Database extends EventTarget {
 
 		const resultMap = new Map<string | number, Infer<T>>();
 		for (const row of rows) {
-			const decoded = decodeData(table, row);
-			const entity = validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
+			const entity = decodeData(table, row) as Infer<T>;
 			resultMap.set(row[pk] as string | number, entity);
 		}
 
@@ -2540,13 +2472,7 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return rows.map((row) => {
-				const decoded = decodeData(table, row);
-				return validateWithStandardSchema<Infer<T>>(
-					table.schema,
-					decoded,
-				) as Infer<T>;
-			});
+			return rows.map((row) => decodeData(table, row) as Infer<T>);
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
@@ -2586,13 +2512,7 @@ export class Database extends EventTarget {
 			selectVals,
 		);
 
-		return rows.map((row) => {
-			const decoded = decodeData(table, row);
-			return validateWithStandardSchema<Infer<T>>(
-				table.schema,
-				decoded,
-			) as Infer<T>;
-		});
+		return rows.map((row) => decodeData(table, row) as Infer<T>);
 	}
 
 	/**
