@@ -302,10 +302,12 @@ export default class BunDriver implements Driver {
 		try {
 			const {sql, params} = buildSQL(strings, values, this.#dialect);
 			const result = await this.#sql.unsafe(sql, params as any[]);
-			// Bun.SQL: .count for postgres/sqlite, .affectedRows for mysql
-			return (
-				(result as any).count ?? (result as any).affectedRows ?? result.length
-			);
+			// Bun.SQL: MySQL uses affectedRows, PostgreSQL/SQLite use count
+			// MySQL has count property but it's always 0 for UPDATE
+			if (this.#dialect === "mysql") {
+				return (result as any).affectedRows ?? result.length;
+			}
+			return (result as any).count ?? result.length;
 		} catch (error) {
 			this.#handleError(error);
 		}
@@ -740,7 +742,9 @@ export default class BunDriver implements Driver {
 				   array_agg(ccu.column_name ORDER BY kcu.ordinal_position) as referenced_columns
 				 FROM information_schema.table_constraints tc
 				 JOIN information_schema.key_column_usage kcu
-				   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+				   ON tc.constraint_name = kcu.constraint_name
+				   AND tc.table_schema = kcu.table_schema
+				   AND tc.table_name = kcu.table_name
 				 LEFT JOIN information_schema.constraint_column_usage ccu
 				   ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
 				 WHERE tc.table_name = $1 AND tc.table_schema = 'public'
@@ -748,12 +752,21 @@ export default class BunDriver implements Driver {
 				 GROUP BY tc.constraint_name, tc.constraint_type, ccu.table_name`,
 				[tableName],
 			);
+			// PostgreSQL array_agg returns "{col1,col2}" format - parse to JS array
+			const parseArray = (s: string | null): string[] => {
+				if (!s) return [];
+				// Remove curly braces and split by comma
+				return s
+					.replace(/^\{|\}$/g, "")
+					.split(",")
+					.filter(Boolean);
+			};
 			return (result as any[]).map((row) => ({
 				name: row.name,
 				type: row.type === "UNIQUE" ? "unique" : "foreign_key",
-				columns: row.columns,
+				columns: parseArray(row.columns),
 				referencedTable: row.referenced_table,
-				referencedColumns: row.referenced_columns,
+				referencedColumns: parseArray(row.referenced_columns),
 			}));
 		} else {
 			// MySQL
@@ -761,12 +774,14 @@ export default class BunDriver implements Driver {
 				`SELECT
 				   tc.constraint_name as name,
 				   tc.constraint_type as type,
-				   GROUP_CONCAT(kcu.column_name ORDER BY kcu.ordinal_position) as columns,
+				   GROUP_CONCAT(DISTINCT kcu.column_name ORDER BY kcu.ordinal_position) as columns,
 				   kcu.referenced_table_name as referenced_table,
-				   GROUP_CONCAT(kcu.referenced_column_name ORDER BY kcu.ordinal_position) as referenced_columns
+				   GROUP_CONCAT(DISTINCT kcu.referenced_column_name ORDER BY kcu.ordinal_position) as referenced_columns
 				 FROM information_schema.table_constraints tc
 				 JOIN information_schema.key_column_usage kcu
-				   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+				   ON tc.constraint_name = kcu.constraint_name
+				   AND tc.table_schema = kcu.table_schema
+				   AND tc.table_name = kcu.table_name
 				 WHERE tc.table_name = ? AND tc.table_schema = DATABASE()
 				   AND tc.constraint_type IN ('UNIQUE', 'FOREIGN KEY')
 				 GROUP BY tc.constraint_name, tc.constraint_type, kcu.referenced_table_name`,
