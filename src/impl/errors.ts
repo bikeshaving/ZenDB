@@ -19,7 +19,10 @@ export type ZealotErrorCode =
 	| "ALREADY_EXISTS"
 	| "CONSTRAINT_VIOLATION"
 	| "CONNECTION_ERROR"
-	| "TRANSACTION_ERROR";
+	| "TRANSACTION_ERROR"
+	| "ENSURE_ERROR"
+	| "SCHEMA_DRIFT_ERROR"
+	| "CONSTRAINT_PREFLIGHT_ERROR";
 
 // ============================================================================
 // Base Error
@@ -245,6 +248,117 @@ export class TransactionError extends ZealotError {
 	constructor(message: string, options?: ErrorOptions) {
 		super("TRANSACTION_ERROR", message, options);
 		this.name = "TransactionError";
+	}
+}
+
+// ============================================================================
+// Schema Ensure Errors
+// ============================================================================
+
+/**
+ * Operation type for ensure operations.
+ */
+export type EnsureOperation =
+	| "ensureTable"
+	| "ensureConstraints"
+	| "copyColumn";
+
+/**
+ * Thrown when an ensure operation fails.
+ *
+ * Includes step information for diagnosing partial failures,
+ * since DDL is not reliably transactional on all databases (especially MySQL).
+ */
+export class EnsureError extends ZealotError {
+	/** The operation that failed */
+	readonly operation: EnsureOperation;
+	/** The table being operated on */
+	readonly table: string;
+	/** The step index where failure occurred (0-based) */
+	readonly step: number;
+
+	constructor(
+		message: string,
+		details: {
+			operation: EnsureOperation;
+			table: string;
+			step: number;
+		},
+		options?: ErrorOptions,
+	) {
+		super("ENSURE_ERROR", message, options);
+		this.name = "EnsureError";
+		this.operation = details.operation;
+		this.table = details.table;
+		this.step = details.step;
+	}
+}
+
+/**
+ * Thrown when schema drift is detected.
+ *
+ * Schema drift occurs when an existing database object doesn't match
+ * the expected schema definition. For example, a column exists but
+ * has a different type, or an index covers different columns.
+ */
+export class SchemaDriftError extends ZealotError {
+	/** The table where drift was detected */
+	readonly table: string;
+	/** Description of what drifted */
+	readonly drift: string;
+	/** Suggested action to resolve */
+	readonly suggestion?: string;
+
+	constructor(
+		message: string,
+		details: {
+			table: string;
+			drift: string;
+			suggestion?: string;
+		},
+		options?: ErrorOptions,
+	) {
+		super("SCHEMA_DRIFT_ERROR", message, options);
+		this.name = "SchemaDriftError";
+		this.table = details.table;
+		this.drift = details.drift;
+		this.suggestion = details.suggestion;
+	}
+}
+
+/**
+ * Thrown when a constraint preflight check finds violations.
+ *
+ * Before adding a UNIQUE constraint or foreign key to existing data,
+ * a preflight check verifies data integrity. This error is thrown
+ * when violations are found, including the query used to detect them.
+ */
+export class ConstraintPreflightError extends ZealotError {
+	/** The table being constrained */
+	readonly table: string;
+	/** The constraint being added (e.g., "unique:email" or "fk:authorId") */
+	readonly constraint: string;
+	/** Number of violating rows */
+	readonly violationCount: number;
+	/** The SQL query that found the violations - run it to see details */
+	readonly query: string;
+
+	constructor(
+		message: string,
+		details: {
+			table: string;
+			constraint: string;
+			violationCount: number;
+			query: string;
+		},
+		options?: ErrorOptions,
+	) {
+		super("CONSTRAINT_PREFLIGHT_ERROR", message, options);
+		this.name = "ConstraintPreflightError";
+		this.table = details.table;
+		this.constraint = details.constraint;
+		this.violationCount = details.violationCount;
+		this.query = details.query;
 	}
 }
 

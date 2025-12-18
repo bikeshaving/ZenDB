@@ -10,6 +10,7 @@ import {validateWithStandardSchema} from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
 import {ident, isSQLTemplate, makeTemplate} from "./template.js";
+import {EnsureError} from "./errors.js";
 
 // ============================================================================
 // DB Expressions - Runtime values evaluated by the database
@@ -399,6 +400,61 @@ export interface Driver {
 	 * Execute a function while holding an exclusive migration lock.
 	 */
 	withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
+
+	// ==========================================================================
+	// Schema ensure operations (optional - dialect-specific implementations)
+	// ==========================================================================
+
+	/**
+	 * Ensure a table exists with its columns and indexes.
+	 *
+	 * **For new tables**: Creates the table with full structure including
+	 * primary key, unique constraints, foreign keys, and indexes.
+	 *
+	 * **For existing tables**: Only performs safe, additive operations:
+	 * - Adds missing columns
+	 * - Adds missing non-unique indexes
+	 *
+	 * Throws SchemaDriftError if existing table has missing constraints
+	 * (directs user to run ensureConstraints).
+	 */
+	ensureTable?<T extends Table<any>>(table: T): Promise<EnsureResult>;
+
+	/**
+	 * Ensure constraints (unique, foreign key) are applied to an existing table.
+	 *
+	 * Performs preflight checks to detect data violations before applying
+	 * constraints. Throws ConstraintPreflightError if violations found.
+	 */
+	ensureConstraints?<T extends Table<any>>(table: T): Promise<EnsureResult>;
+
+	/**
+	 * Copy column data for safe rename migrations.
+	 *
+	 * Executes: UPDATE <table> SET <toField> = <fromField> WHERE <toField> IS NULL
+	 *
+	 * @param table The table to update
+	 * @param fromField Source column (may be legacy/not in schema)
+	 * @param toField Destination column (must exist in schema)
+	 * @returns Number of rows updated
+	 */
+	copyColumn?<T extends Table<any>>(
+		table: T,
+		fromField: string,
+		toField: string,
+	): Promise<number>;
+}
+
+// ============================================================================
+// Schema Ensure Types
+// ============================================================================
+
+/**
+ * Result from ensure operations.
+ */
+export interface EnsureResult {
+	/** Whether any DDL was executed (false = no-op) */
+	applied: boolean;
 }
 
 // ============================================================================
@@ -2878,6 +2934,171 @@ export class Database extends EventTarget {
 			sql += "?" + expandedStrings[i];
 		}
 		return {sql, params: expandedValues};
+	}
+
+	// ==========================================================================
+	// Schema Ensure Methods
+	// ==========================================================================
+
+	/**
+	 * Ensure a table exists with its columns and indexes.
+	 *
+	 * **For new tables**: Creates the table with full structure including
+	 * primary key, unique constraints, foreign keys, and indexes.
+	 *
+	 * **For existing tables**: Only performs safe, additive operations:
+	 * - Adds missing columns
+	 * - Adds missing non-unique indexes
+	 *
+	 * Unique constraints and foreign keys on existing tables require
+	 * explicit `ensureConstraints()` call (they can fail or lock).
+	 *
+	 * @throws {EnsureError} If DDL execution fails
+	 * @throws {SchemaDriftError} If existing table has missing constraints
+	 *   (directs user to run ensureConstraints)
+	 *
+	 * @example
+	 * // In migration handler
+	 * await db.ensureTable(Users);
+	 * await db.ensureTable(Posts); // FK to Users - ensure Users first
+	 */
+	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		if (!this.#driver.ensureTable) {
+			throw new Error(
+				"Driver does not implement ensureTable(). " +
+					"Schema ensure methods require a driver with schema management support.",
+			);
+		}
+
+		const doEnsure = () => this.#driver.ensureTable!(table);
+
+		// Wrap in migration lock if available
+		if (this.#driver.withMigrationLock) {
+			return await this.#driver.withMigrationLock(doEnsure);
+		}
+		return await doEnsure();
+	}
+
+	/**
+	 * Ensure constraints (unique, foreign key) are applied to an existing table.
+	 *
+	 * **WARNING**: This operation can be expensive and cause locks on large tables.
+	 * It performs preflight checks to detect data violations before applying constraints.
+	 *
+	 * For each declared constraint:
+	 * 1. Preflight: Check for violations (duplicates for UNIQUE, orphans for FK)
+	 * 2. If violations found: Throw ConstraintPreflightError with diagnostic query
+	 * 3. If clean: Apply the constraint
+	 *
+	 * @throws {Error} If table doesn't exist
+	 * @throws {ConstraintPreflightError} If data violates a constraint
+	 * @throws {EnsureError} If DDL execution fails
+	 *
+	 * @example
+	 * // After ensuring table structure
+	 * await db.ensureTable(Users);
+	 * // Explicitly apply constraints (may lock, may fail)
+	 * await db.ensureConstraints(Users);
+	 */
+	async ensureConstraints<T extends Table<any>>(
+		table: T,
+	): Promise<EnsureResult> {
+		if (!this.#driver.ensureConstraints) {
+			throw new Error(
+				"Driver does not implement ensureConstraints(). " +
+					"Schema ensure methods require a driver with schema management support.",
+			);
+		}
+
+		const doEnsure = () => this.#driver.ensureConstraints!(table);
+
+		// Wrap in migration lock if available
+		if (this.#driver.withMigrationLock) {
+			return await this.#driver.withMigrationLock(doEnsure);
+		}
+		return await doEnsure();
+	}
+
+	/**
+	 * Copy column data for safe rename migrations.
+	 *
+	 * Executes: UPDATE <table> SET <toField> = <fromField> WHERE <toField> IS NULL
+	 *
+	 * This is idempotent - rows where toField already has a value are skipped.
+	 * The fromField may be a legacy column not in the current schema.
+	 *
+	 * @param table The table to update
+	 * @param fromField Source column (may be legacy/not in schema)
+	 * @param toField Destination column (must exist in schema)
+	 * @returns Number of rows updated
+	 *
+	 * @example
+	 * // Rename "email" to "emailAddress":
+	 * // 1. Add new column
+	 * await db.ensureTable(UsersWithEmailAddress);
+	 * // 2. Copy data
+	 * const updated = await db.copyColumn(Users, "email", "emailAddress");
+	 * // 3. Later: remove old column (manual migration)
+	 */
+	async copyColumn<T extends Table<any>>(
+		table: T,
+		fromField: string,
+		toField: string,
+	): Promise<number> {
+		// Validate toField exists in schema
+		const fields = Object.keys(table.meta.fields);
+		if (!fields.includes(toField)) {
+			throw new Error(
+				`Destination field "${toField}" does not exist in table "${table.name}". Available fields: ${fields.join(", ")}`,
+			);
+		}
+
+		// Delegate to driver if it implements copyColumn
+		if (this.#driver.copyColumn) {
+			const doCopy = () => this.#driver.copyColumn!(table, fromField, toField);
+
+			// Wrap in migration lock if available
+			if (this.#driver.withMigrationLock) {
+				return await this.#driver.withMigrationLock(doCopy);
+			}
+			return await doCopy();
+		}
+
+		// Default implementation: simple UPDATE statement
+		const doCopy = async (): Promise<number> => {
+			const tableName = table.name;
+
+			try {
+				// UPDATE <table> SET <toField> = <fromField> WHERE <toField> IS NULL
+				const updateStrings = makeTemplate([
+					"UPDATE ",
+					" SET ",
+					" = ",
+					" WHERE ",
+					" IS NULL",
+				]);
+				const updateValues = [
+					ident(tableName),
+					ident(toField),
+					ident(fromField),
+					ident(toField),
+				];
+
+				return await this.#driver.run(updateStrings, updateValues);
+			} catch (error) {
+				throw new EnsureError(
+					`copyColumn failed: ${error instanceof Error ? error.message : String(error)}`,
+					{operation: "copyColumn", table: tableName, step: 0},
+					{cause: error},
+				);
+			}
+		};
+
+		// Run under migration lock if available
+		if (this.#driver.withMigrationLock) {
+			return await this.#driver.withMigrationLock(doCopy);
+		}
+		return await doCopy();
 	}
 
 	// ==========================================================================

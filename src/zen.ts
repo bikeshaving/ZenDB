@@ -60,9 +60,9 @@ export {
 } from "./impl/template.js";
 
 export {
-	// DDL fragment (return type of table.ddl())
-	type DDLFragment,
-} from "./impl/query.js";
+	// Schema ensure result
+	type EnsureResult,
+} from "./impl/database.js";
 
 // ============================================================================
 // Errors
@@ -80,7 +80,11 @@ export {
 	ConstraintViolationError,
 	ConnectionError,
 	TransactionError,
+	EnsureError,
+	SchemaDriftError,
+	ConstraintPreflightError,
 	isZealotError,
 	hasErrorCode,
 	type ZealotErrorCode,
+	type EnsureOperation,
 } from "./impl/errors.js";
