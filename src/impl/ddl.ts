@@ -201,7 +201,7 @@ function mapZodToSQL(
 
 /**
  * Generate a single column definition as a template with ident markers.
- * @internal Used by Table.ensureColumn()
+ * @internal Used by driver ensureTable implementations.
  */
 export function generateColumnDDL(
 	fieldName: string,

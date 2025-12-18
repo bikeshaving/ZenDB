@@ -875,7 +875,7 @@ function expandFragments(
  * - Use conditional checks: `if (e.oldVersion < 2) { ... }`
  * - Prefer additive changes (new columns, indexes) over destructive ones
  * - Never modify past migrations - add new versions instead
- * - Keep migrations idempotent when possible (use ensureColumn, ensureIndex)
+ * - Keep migrations idempotent when possible (use db.ensureTable())
  */
 export class DatabaseUpgradeEvent extends Event {
 	readonly oldVersion: number;

@@ -10,7 +10,6 @@ import {
 	ident,
 	makeTemplate,
 	isSQLTemplate,
-	createTemplate,
 	type SQLTemplate,
 } from "./template.js";
 import {renderSQL, type SQLDialect} from "./test-driver.js";
@@ -39,63 +38,6 @@ export function renderFragment(
 	dialect: SQLDialect = "sqlite",
 ): {sql: string; params: unknown[]} {
 	return renderSQL(template[0], template[1], dialect);
-}
-
-// ============================================================================
-// DDL Fragments
-// ============================================================================
-
-const DDL_FRAGMENT = Symbol.for("@b9g/zen:ddl-fragment");
-
-/**
- * A DDL fragment that gets transformed based on the driver's dialect.
- *
- * Unlike SQLFragment which is already SQL text, DDLFragment is an abstract
- * representation that gets converted to SQL when passed through a template.
- */
-export interface DDLFragment {
-	readonly [DDL_FRAGMENT]: true;
-	readonly type:
-		| "create-table"
-		| "alter-table-add-column"
-		| "create-index"
-		| "update";
-	readonly table: Table<any>;
-	readonly options?: Record<string, any>;
-}
-
-/**
- * Check if a value is a DDL fragment.
- */
-export function isDDLFragment(value: unknown): value is DDLFragment {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		DDL_FRAGMENT in value &&
-		(value as any)[DDL_FRAGMENT] === true
-	);
-}
-
-/**
- * Create a DDL fragment.
- *
- * **Dialect resolution timing**: Fragments are created WITHOUT dialect information.
- * The dialect is resolved later when the fragment is passed through `db.exec()`,
- * allowing the same fragment to work with different drivers (e.g., tests vs production).
- *
- * @internal Used by Table.ddl(), ensureColumn(), etc.
- */
-export function createDDLFragment(
-	type: DDLFragment["type"],
-	table: Table<any>,
-	options?: Record<string, any>,
-): DDLFragment {
-	return {
-		[DDL_FRAGMENT]: true,
-		type,
-		table,
-		options,
-	};
 }
 
 // ============================================================================
@@ -211,8 +153,7 @@ export function buildSelectColumns(
  * Expand a template by flattening nested fragments and converting tables to ident markers.
  *
  * This produces a flat template tuple with:
- * - SQLFragment templates merged in
- * - DDL fragments transformed to templates and merged in
+ * - SQLTemplate tuples merged in
  * - Table objects converted to ident() markers
  * - Regular values passed through
  *
@@ -220,13 +161,11 @@ export function buildSelectColumns(
  *
  * @param strings - Template strings
  * @param values - Template values
- * @param dialect - SQL dialect (needed for DDL dialect-specific syntax like IF NOT EXISTS)
  * @returns Flat template tuple {strings, values}
  */
 export function expandTemplate(
 	strings: TemplateStringsArray,
 	values: unknown[],
-	dialect: SQLDialect = "sqlite",
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const newStrings: string[] = [strings[0]];
 	const newValues: unknown[] = [];
@@ -234,16 +173,7 @@ export function expandTemplate(
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
 
-		if (isDDLFragment(value)) {
-			// DDL fragments transform to templates with ident markers - merge like SQL templates
-			const ddlTemplate = transformDDLFragmentToTemplate(value, dialect);
-			newStrings[newStrings.length - 1] += ddlTemplate[0][0];
-			for (let j = 0; j < ddlTemplate[1].length; j++) {
-				newValues.push(ddlTemplate[1][j]);
-				newStrings.push(ddlTemplate[0][j + 1]);
-			}
-			newStrings[newStrings.length - 1] += strings[i + 1];
-		} else if (isSQLTemplate(value)) {
+		if (isSQLTemplate(value)) {
 			// Merge SQL template directly (tuple format: [strings, values])
 			newStrings[newStrings.length - 1] += value[0][0];
 			for (let j = 0; j < value[1].length; j++) {
@@ -301,107 +231,10 @@ export function parseTemplate(
 	dialect: SQLDialect = "sqlite",
 ): ParsedQuery {
 	// Expand nested fragments/tables to flat template
-	const expanded = expandTemplate(strings, values, dialect);
+	const expanded = expandTemplate(strings, values);
 	// Render to SQL with dialect-specific quoting
 	const result = renderSQL(expanded.strings, expanded.values, dialect);
 	return {sql: result.sql.trim(), params: result.params};
-}
-
-/**
- * Transform a DDL fragment to a SQLTemplate with ident markers.
- * No quoting happens here - that's deferred to renderSQL/drivers.
- * @internal
- */
-function transformDDLFragmentToTemplate(
-	fragment: DDLFragment,
-	dialect: SQLDialect,
-): SQLTemplate {
-	// Lazy import to avoid circular dependencies
-	const {generateDDL, generateColumnDDL} = require("./ddl.js");
-	const table = fragment.table;
-	const options = fragment.options || {};
-
-	try {
-		switch (fragment.type) {
-			case "create-table":
-				return generateDDL(table, {...options, dialect});
-
-			case "alter-table-add-column": {
-				const {fieldName} = options;
-				const zodShape = table.schema.shape;
-				const meta = table.meta;
-
-				const colTemplate: SQLTemplate = generateColumnDDL(
-					fieldName,
-					zodShape[fieldName],
-					meta.fields[fieldName] || {},
-					dialect,
-				);
-
-				// MySQL doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN
-				const ifNotExists =
-					dialect === "sqlite" || dialect === "postgresql"
-						? "IF NOT EXISTS "
-						: "";
-
-				// Build: ALTER TABLE ${table} ADD COLUMN [IF NOT EXISTS] ${colDef}
-				const strings: string[] = ["ALTER TABLE "];
-				const values: unknown[] = [ident(table.name)];
-				strings.push(` ADD COLUMN ${ifNotExists}`);
-
-				// Merge column definition template (tuple format: [strings, values])
-				strings[strings.length - 1] += colTemplate[0][0];
-				for (let i = 0; i < colTemplate[1].length; i++) {
-					values.push(colTemplate[1][i]);
-					strings.push(colTemplate[0][i + 1]);
-				}
-
-				return createTemplate(makeTemplate(strings), values);
-			}
-
-			case "create-index": {
-				const {fields, name: indexName} = options;
-				const finalIndexName =
-					indexName || `idx_${table.name}_${fields.join("_")}`;
-
-				// Build: CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${col1}, ${col2}, ...)
-				const strings: string[] = ["CREATE INDEX IF NOT EXISTS "];
-				const values: unknown[] = [ident(finalIndexName)];
-				strings.push(" ON ");
-				values.push(ident(table.name));
-				strings.push("(");
-
-				for (let i = 0; i < fields.length; i++) {
-					if (i > 0) strings[strings.length - 1] += ", ";
-					values.push(ident(fields[i]));
-					strings.push("");
-				}
-				strings[strings.length - 1] += ")";
-
-				return createTemplate(makeTemplate(strings), values);
-			}
-
-			case "update": {
-				const {fromField, toField} = options;
-
-				// Build: UPDATE ${table} SET ${toField} = ${fromField} WHERE ${toField} IS NULL
-				return createTemplate(
-					makeTemplate(["UPDATE ", " SET ", " = ", " WHERE ", " IS NULL"]),
-					[ident(table.name), ident(toField), ident(fromField), ident(toField)],
-				);
-			}
-
-			default:
-				throw new Error(`Unknown DDL fragment type: ${(fragment as any).type}`);
-		}
-	} catch (error) {
-		// Enrich error with context about dialect, helper, and table
-		const helperName = fragment.type.replace(/-/g, " ");
-		throw new Error(
-			`Failed to transform DDL fragment for table "${table.name}" using helper "${helperName}" with dialect "${dialect}": ${error instanceof Error ? error.message : String(error)}`,
-			{cause: error},
-		);
-	}
 }
 
 /**
