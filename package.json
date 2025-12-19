@@ -52,7 +52,8 @@
   },
   "scripts": {
     "build": "libuild build --save",
-    "test": "bun test",
+    "test": "bun test && npm run test:node",
+    "test:bun": "bun test",
     "test:node": "node --import tsx --test 'src/impl/*.node-test.ts'",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --ext .js,.jsx,.ts,.tsx .",
