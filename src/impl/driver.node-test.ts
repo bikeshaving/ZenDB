@@ -61,7 +61,8 @@ try {
 			createDriver: async () => new PostgresDriver(POSTGRES_URL),
 		});
 	} catch {
-		// PostgreSQL not running
+		// PostgreSQL not running - close driver to avoid leaking connection pool
+		await testDriver.close();
 	}
 } catch {
 	// postgres package not installed
@@ -81,7 +82,8 @@ try {
 			createDriver: async () => new MySQLDriver(MYSQL_URL),
 		});
 	} catch {
-		// MySQL not running
+		// MySQL not running - close driver to avoid leaking connection pool
+		await testDriver.close();
 	}
 } catch {
 	// mysql2 package not installed
