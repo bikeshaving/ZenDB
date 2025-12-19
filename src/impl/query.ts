@@ -241,6 +241,13 @@ export function parseTemplate(
  * const {strings, values} = buildQueryTemplate([posts, users], "WHERE published = ?");
  * // values contains ident markers plus any params from derived expressions
  */
+/**
+ * @internal
+ * Build a query template from tables and raw SQL clauses.
+ *
+ * WARNING: userClauses is appended verbatim as raw SQL. Do not pass untrusted input.
+ * For parameterized queries, use Database methods or tagged templates instead.
+ */
 export function buildQueryTemplate(
 	tables: Table<any>[],
 	userClauses: string = "",
@@ -278,7 +285,11 @@ export function buildQueryTemplate(
 }
 
 /**
+ * @internal
  * Build a full SELECT query for tables with user-provided clauses.
+ *
+ * WARNING: userClauses is appended verbatim as raw SQL. Do not pass untrusted input.
+ * For parameterized queries, use Database methods or tagged templates instead.
  *
  * @example
  * buildQuery([posts, users], "JOIN users ON users.id = posts.author_id WHERE published = ?", "sqlite")
