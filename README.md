@@ -1,10 +1,10 @@
-# @b9g/zen
+# Zen
 
-The simple database client.
+@b9g/zen The simple database client.
 
 Define tables. Write SQL. Get objects.
 
-Cultivate your data. Make peace with migrations.
+Cultivate your data.
 
 ## Installation
 
@@ -23,18 +23,19 @@ import {Database} from "@b9g/zen";
 import BunDriver from "@b9g/zen/bun";
 import SQLiteDriver from "@b9g/zen/sqlite";
 import PostgresDriver from "@b9g/zen/postgres";
-import MysqlDriver from "@b9g/zen/mysql";
+import MySQLDriver from "@b9g/zen/mysql";
 
-// Bun driver (autodetects dialect from URL)
-const dbBun = new Database(new BunDriver("sqlite://app.db"));
+// Each driver implements the `Driver` interface
+// and is a separate module in the package
 
-// Node drivers
-const dbSqlite = new Database(new SQLiteDriver("file:app.db"));
-const dbPg = new Database(new PostgresDriver("postgresql://localhost/mydb"));
-const dbMy = new Database(new MysqlDriver("mysql://localhost/mydb"));
+const sqliteDriver = new SQLiteDriver("file:app.db");
+const postgresDriver = new PostgresDriver("postgresql://localhost/mydb");
+const mySQLDriver = new MySQLDriver("mysql://localhost/mydb");
+
+// Bun auto-detects dialect from the connection URL.
+const bunDriver = new BunDriver("sqlite://app.db");
+const db = new Database(bunDriver);
 ```
-
-Each driver implements the `Driver` interface. Bun auto-detects dialect from the connection URL.
 
 ## Quick Start
 
@@ -43,6 +44,7 @@ import {z, table, Database} from "@b9g/zen";
 import SQLiteDriver from "@b9g/zen/sqlite";
 
 const driver = new SQLiteDriver("file:app.db");
+const db = new Database(driver);
 
 // 1. Define tables
 const Users = table("users", {
@@ -64,11 +66,21 @@ const db = new Database(driver);
 db.addEventListener("upgradeneeded", (e) => {
   e.waitUntil((async () => {
     if (e.oldVersion < 1) {
-      await db.exec`${Users.ddl()}`;
-      await db.exec`${Posts.ddl()}`;
+      // Create tables (includes PK/unique/FK on new tables)
+      await db.ensureTable(Users);
+      await db.ensureTable(Posts);
+      // For existing tables when adding FKs/uniques later, call ensureConstraints()
     }
     if (e.oldVersion < 2) {
-      await db.exec`ALTER TABLE ${Users} ADD COLUMN avatar TEXT`;
+      // Evolve schema: add avatar column (safe, additive)
+      const UsersV2 = table("users", {
+        id: z.string().uuid().db.primary(),
+        email: z.string().email().db.unique(),
+        name: z.string(),
+        avatar: z.string().optional(),
+      });
+      await db.ensureTable(UsersV2);          // adds missing columns/indexes
+      await db.ensureConstraints(UsersV2);    // applies new constraints on existing data
     }
   })());
 });
@@ -133,7 +145,14 @@ The `.db` property is available on all Zod types imported from `@b9g/zen`. It pr
 - `.db.decode(fn)` — Custom decoding from database storage
 - `.db.type(columnType)` — Explicit column type for DDL generation
 
-**How does `.db` work?** When you import `z` from `@b9g/zen`, it's already extended with the `.db` namespace. The extension happens once when the module loads. If you need to extend a separate Zod instance, use `extendZod(z)` (advanced use case).
+**How does `.db` work?** When you import `z` from `@b9g/zen`, it's already extended with the `.db` namespace. The extension happens once when the module loads. If you need to extend a separate Zod instance, use `extendZod(z)`.
+
+```typescript
+import {z} from "zod";
+import {extendZod} from "@b9g/zen";
+extendZod(z);
+// .db is available on all Zod types
+```
 
 **Automatic JSON encoding/decoding:**
 
@@ -258,7 +277,7 @@ const posts = await db.all([Posts, UserSummary])`
 // posts[0].author has only id and name
 ```
 
-**Table identity**: A table definition is a singleton value. Importing it from multiple modules does not create duplicates — normalization and references rely on identity, not name.
+**Table identity**: A table definition is a singleton value which is passed to database methods for validation, normalization, schema management, and convenient CRUD operations. It is not a class.
 
 ## Queries
 
@@ -297,12 +316,6 @@ const count = await db.val<number>`SELECT COUNT(*) FROM ${Posts}`;
 Type-safe SQL fragments as methods on Table objects:
 
 ```typescript
-// WHERE conditions with operator DSL
-const posts = await db.all(Posts)`
-  WHERE ${Posts.where({published: true, viewCount: {$gte: 100}})}
-`;
-// → WHERE "posts"."published" = ? AND "posts"."viewCount" >= ?
-
 // UPDATE with set()
 await db.exec`
   UPDATE ${Posts}
