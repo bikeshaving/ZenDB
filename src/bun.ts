@@ -175,7 +175,8 @@ export default class BunDriver implements Driver {
 						| "not_null"
 						| "unknown" = "unknown";
 					if (code === "SQLITE_CONSTRAINT_UNIQUE") kind = "unique";
-					else if (code === "SQLITE_CONSTRAINT_FOREIGNKEY") kind = "foreign_key";
+					else if (code === "SQLITE_CONSTRAINT_FOREIGNKEY")
+						kind = "foreign_key";
 					else if (message.includes("UNIQUE")) kind = "unique";
 					else if (message.includes("FOREIGN KEY")) kind = "foreign_key";
 					else if (message.includes("NOT NULL")) kind = "not_null";
@@ -995,9 +996,12 @@ export default class BunDriver implements Driver {
 				if (c.columns.length !== ref.fields.length) return false;
 				if (c.referencedTable !== ref.table.name) return false;
 				// Check all local columns match (order matters)
-				if (!ref.fields.every((field, i) => c.columns[i] === field)) return false;
+				if (!ref.fields.every((field, i) => c.columns[i] === field))
+					return false;
 				// Check all referenced columns match (order matters)
-				return refFields.every((field, i) => c.referencedColumns?.[i] === field);
+				return refFields.every(
+					(field, i) => c.referencedColumns?.[i] === field,
+				);
 			});
 			if (!hasFk) {
 				throw new SchemaDriftError(
@@ -1051,6 +1055,7 @@ export default class BunDriver implements Driver {
 			type: string;
 			columns: string[];
 			referencedTable?: string;
+			referencedColumns?: string[];
 		}[],
 	): Promise<boolean> {
 		const meta = table.meta;
@@ -1075,30 +1080,29 @@ export default class BunDriver implements Driver {
 					ref.referencedField,
 				);
 
+				// Add FK constraint (SQLite requires table rebuild, not supported here)
+				if (this.#dialect === "sqlite") {
+					throw new Error(
+						`Adding foreign key constraints to existing SQLite tables requires table rebuild. ` +
+							`Table "${table.name}" column "${ref.fieldName}" -> "${ref.table.name}"."${ref.referencedField}". ` +
+							`Please use a manual migration.`,
+					);
+				}
 
-			// Add FK constraint (SQLite requires table rebuild, not supported here)
-			if (this.#dialect === "sqlite") {
-				throw new Error(
-					`Adding foreign key constraints to existing SQLite tables requires table rebuild. ` +
-						`Table "${table.name}" column "${ref.fieldName}" -> "${ref.table.name}"."${ref.referencedField}". ` +
-						`Please use a manual migration.`,
-				);
-			}
+				// PostgreSQL and MySQL support ALTER TABLE ADD CONSTRAINT
+				const constraintName = `${table.name}_${ref.fieldName}_fkey`;
+				const onDelete = ref.onDelete
+					? ` ON DELETE ${ref.onDelete.toUpperCase().replace(" ", " ")}`
+					: "";
 
-			// PostgreSQL and MySQL support ALTER TABLE ADD CONSTRAINT
-			const constraintName = `${table.name}_${ref.fieldName}_fkey`;
-			const onDelete = ref.onDelete
-				? ` ON DELETE ${ref.onDelete.toUpperCase().replace(" ", " ")}`
-				: "";
+				const sql =
+					`ALTER TABLE ${quoteIdent(table.name, this.#dialect)} ` +
+					`ADD CONSTRAINT ${quoteIdent(constraintName, this.#dialect)} ` +
+					`FOREIGN KEY (${quoteIdent(ref.fieldName, this.#dialect)}) ` +
+					`REFERENCES ${quoteIdent(ref.table.name, this.#dialect)}(${quoteIdent(ref.referencedField, this.#dialect)})${onDelete}`;
 
-			const sql =
-				`ALTER TABLE ${quoteIdent(table.name, this.#dialect)} ` +
-				`ADD CONSTRAINT ${quoteIdent(constraintName, this.#dialect)} ` +
-				`FOREIGN KEY (${quoteIdent(ref.fieldName, this.#dialect)}) ` +
-				`REFERENCES ${quoteIdent(ref.table.name, this.#dialect)}(${quoteIdent(ref.referencedField, this.#dialect)})${onDelete}`;
-
-			await this.#sql.unsafe(sql, []);
-			applied = true;
+				await this.#sql.unsafe(sql, []);
+				applied = true;
 			}
 		}
 
@@ -1110,9 +1114,12 @@ export default class BunDriver implements Driver {
 				if (c.columns.length !== ref.fields.length) return false;
 				if (c.referencedTable !== ref.table.name) return false;
 				// Check all local columns match (order matters)
-				if (!ref.fields.every((field, i) => c.columns[i] === field)) return false;
+				if (!ref.fields.every((field, i) => c.columns[i] === field))
+					return false;
 				// Check all referenced columns match (order matters)
-				return refFields.every((field, i) => c.referencedColumns?.[i] === field);
+				return refFields.every(
+					(field, i) => c.referencedColumns?.[i] === field,
+				);
 			});
 
 			if (!hasFk) {
@@ -1256,7 +1263,9 @@ export default class BunDriver implements Driver {
 		const result = await this.#sql.unsafe(sql, []);
 
 		if (result.length > 0) {
-			const quotedCols = columns.map((c) => quoteIdent(c, this.#dialect)).join(", ");
+			const quotedCols = columns
+				.map((c) => quoteIdent(c, this.#dialect))
+				.join(", ");
 			const diagQuery = `SELECT t.* FROM ${quoteIdent(tableName, this.#dialect)} t WHERE ${nullChecks} AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(refTable, this.#dialect)} r WHERE ${joinConditions})`;
 
 			// Count orphans

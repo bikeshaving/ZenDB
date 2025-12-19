@@ -4,6 +4,8 @@ The simple database client.
 
 Define tables. Write SQL. Get objects.
 
+Cultivate your data. Make peace with migrations.
+
 ## Installation
 
 ```bash
@@ -13,28 +15,23 @@ npm install @b9g/zen zod
 npm install better-sqlite3  # for SQLite
 npm install postgres        # for PostgreSQL
 npm install mysql2          # for MySQL
+
 ```
 
-## Drivers
-
-zen provides drivers as subpath exports with optional peer dependencies:
-
 ```typescript
-// Bun.SQL (built-in, works with SQLite/PostgreSQL/MySQL)
+import {Database} from "@b9g/zen";
 import BunDriver from "@b9g/zen/bun";
-const driver = new BunDriver("sqlite://app.db");
-
-// better-sqlite3 (Node.js SQLite)
 import SQLiteDriver from "@b9g/zen/sqlite";
-const driver = new SQLiteDriver("file:app.db");
-
-// postgres.js
 import PostgresDriver from "@b9g/zen/postgres";
-const driver = new PostgresDriver("postgresql://localhost/mydb");
+import MysqlDriver from "@b9g/zen/mysql";
 
-// mysql2
-import MySQLDriver from "@b9g/zen/mysql";
-const driver = new MySQLDriver("mysql://localhost/mydb");
+// Bun driver (autodetects dialect from URL)
+const dbBun = new Database(new BunDriver("sqlite://app.db"));
+
+// Node drivers
+const dbSqlite = new Database(new SQLiteDriver("file:app.db"));
+const dbPg = new Database(new PostgresDriver("postgresql://localhost/mydb"));
+const dbMy = new Database(new MysqlDriver("mysql://localhost/mydb"));
 ```
 
 Each driver implements the `Driver` interface. Bun auto-detects dialect from the connection URL.
@@ -842,7 +839,7 @@ import type {
   // Field types
   FieldMeta,          // Field metadata for form generation
   FieldType,          // Field type enum
-  FieldDbMeta,        // Database-specific field metadata
+  FieldDBMeta,        // Database-specific field metadata
 
   // Type inference
   Infer,              // Infer entity type from Table (after read)

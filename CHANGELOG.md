@@ -12,14 +12,14 @@ Initial release of @b9g/zen - the simple database client.
 ### Features
 
 - Table definitions with Zod schemas
-- SQL queries with tagged templates
+- Explicit SQL queries with tagged templates
 - Normalized object results from JOINs
 - Multi-database support: SQLite, PostgreSQL, MySQL
 - Bun.SQL driver with automatic dialect detection
 - IndexedDB-style event-driven migrations
-- Type-safe query helpers (`where()`, `set()`, `values()`, `on()`, `in()`)
+- Type-safe SQL fragment helpers (`set()`, `values()`, `on()`, `in()`)
 - Forward and reverse relationship resolution
-- Partial tables with `pick()` and derived fields
+- Partial tables with `pick()` and SQL-computed fields with `derive()`
 - DDL generation from schemas
 - Form field metadata extraction
 - Debugging tools (`db.print()`, `db.explain()`)

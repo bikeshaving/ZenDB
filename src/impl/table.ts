@@ -5,7 +5,7 @@
  * Metadata is extracted once at table() call time.
  */
 
-import {z, ZodTypeAny, ZodObject, ZodRawShape} from "zod";
+import {z, ZodType, ZodObject, ZodRawShape} from "zod";
 
 import {TableDefinitionError} from "./errors.js";
 import {isSQLSymbol, type SQLSymbol} from "./database.js";
@@ -137,7 +137,7 @@ const DB_META_NAMESPACE = "db" as const;
  *   console.log("This field has a unique constraint");
  * }
  */
-export function getDBMeta(schema: ZodTypeAny): Record<string, any> {
+export function getDBMeta(schema: ZodType): Record<string, any> {
 	try {
 		const meta =
 			typeof (schema as any).meta === "function" ? (schema as any).meta() : {};
@@ -179,7 +179,7 @@ export function getDBMeta(schema: ZodTypeAny): Record<string, any> {
  * // Both are accessible:
  * uniqueEmail.meta(); // { label: "Email Address", db: { unique: true } }
  */
-export function setDBMeta<T extends ZodTypeAny>(
+export function setDBMeta<T extends ZodType>(
 	schema: T,
 	dbMeta: Record<string, any>,
 ): T {
@@ -200,7 +200,7 @@ export function setDBMeta<T extends ZodTypeAny>(
 // Field Metadata
 // ============================================================================
 
-export interface FieldDbMeta {
+export interface FieldDBMeta {
 	primaryKey?: boolean;
 	unique?: boolean;
 	indexed?: boolean;
@@ -285,7 +285,7 @@ function mergeFragment(
 /**
  * Check if a schema uses Zod's .default() wrapper.
  */
-function hasZodDefault(schema: ZodTypeAny): boolean {
+function hasZodDefault(schema: ZodType): boolean {
 	return typeof (schema as any).removeDefault === "function";
 }
 
@@ -293,7 +293,7 @@ function hasZodDefault(schema: ZodTypeAny): boolean {
  * Create the .db methods object that will be added to all Zod schemas.
  * This is shared across all types and bound to the schema instance.
  */
-function createDbMethods(schema: ZodTypeAny) {
+function createDBMethods(schema: ZodType) {
 	return {
 		/**
 		 * Mark field as primary key.
@@ -447,7 +447,7 @@ function createDbMethods(schema: ZodTypeAny) {
 			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
 			...templateValues: unknown[]
 		) {
-			let insertedMeta: FieldDbMeta["inserted"];
+			let insertedMeta: FieldDBMeta["inserted"];
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
@@ -518,7 +518,7 @@ function createDbMethods(schema: ZodTypeAny) {
 			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
 			...templateValues: unknown[]
 		) {
-			let updatedMeta: FieldDbMeta["updated"];
+			let updatedMeta: FieldDBMeta["updated"];
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
@@ -589,7 +589,7 @@ function createDbMethods(schema: ZodTypeAny) {
 			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
 			...templateValues: unknown[]
 		) {
-			let upsertedMeta: FieldDbMeta["upserted"];
+			let upsertedMeta: FieldDBMeta["upserted"];
 
 			if (isTemplateStringsArray(stringsOrValue)) {
 				// Tagged template → SQL expression
@@ -696,7 +696,7 @@ export function extendZod(zodModule: typeof z): void {
 			if (!("db" in value.prototype)) {
 				Object.defineProperty(value.prototype, "db", {
 					get() {
-						return createDbMethods(this as ZodTypeAny);
+						return createDBMethods(this as ZodType);
 					},
 					enumerable: false,
 					configurable: true,
@@ -891,7 +891,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 		indexed: string[];
 		softDeleteField: string | null;
 		references: ReferenceInfo[];
-		fields: Record<string, FieldDbMeta>;
+		fields: Record<string, FieldDBMeta>;
 		/** Derived property functions (non-enumerable getters on entities) */
 		derive?: Record<string, (entity: any) => any>;
 		/** True if this is a partial table created via pick() */
@@ -987,7 +987,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
 	 *   GROUP BY ${Posts.primary}
 	 * `
 	 */
-	derive<N extends string, V extends z.ZodTypeAny>(
+	derive<N extends string, V extends z.ZodType>(
 		fieldName: N,
 		fieldType: V,
 	): (
@@ -1068,7 +1068,7 @@ export interface Table<T extends ZodRawShape = ZodRawShape> {
  *   role: z.enum(["user", "admin"]).default("user"),
  * });
  */
-export function table<T extends Record<string, ZodTypeAny>>(
+export function table<T extends Record<string, ZodType>>(
 	name: string,
 	shape: T,
 	options: TableOptions = {},
@@ -1085,14 +1085,14 @@ export function table<T extends Record<string, ZodTypeAny>>(
 	}
 
 	// Extract Zod schemas and metadata from .meta()
-	const zodShape: Record<string, ZodTypeAny> = {};
+	const zodShape: Record<string, ZodType> = {};
 	const meta = {
 		primary: null as string | null,
 		unique: [] as string[],
 		indexed: [] as string[],
 		softDeleteField: null as string | null,
 		references: [] as ReferenceInfo[],
-		fields: {} as Record<string, FieldDbMeta>,
+		fields: {} as Record<string, FieldDBMeta>,
 	};
 
 	for (const [key, value] of Object.entries(shape)) {
@@ -1108,7 +1108,7 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			);
 		}
 
-		const fieldSchema = value as ZodTypeAny;
+		const fieldSchema = value as ZodType;
 		zodShape[key] = fieldSchema;
 
 		// Check for Zod .default() - this is a footgun, should use .db.inserted()/.db.updated()
@@ -1122,10 +1122,10 @@ export function table<T extends Record<string, ZodTypeAny>>(
 		}
 
 		// Read database metadata from namespaced .meta()
-		const fieldDbMeta = getDBMeta(fieldSchema);
-		const dbMeta: FieldDbMeta = {};
+		const fieldDBMeta = getDBMeta(fieldSchema);
+		const dbMeta: FieldDBMeta = {};
 
-		if (fieldDbMeta.primary) {
+		if (fieldDBMeta.primary) {
 			if (meta.primary !== null) {
 				throw new TableDefinitionError(
 					`Table "${name}" has multiple primary keys: "${meta.primary}" and "${key}". Only one primary key is allowed.`,
@@ -1135,15 +1135,15 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			meta.primary = key;
 			dbMeta.primaryKey = true;
 		}
-		if (fieldDbMeta.unique) {
+		if (fieldDBMeta.unique) {
 			meta.unique.push(key);
 			dbMeta.unique = true;
 		}
-		if (fieldDbMeta.indexed) {
+		if (fieldDBMeta.indexed) {
 			meta.indexed.push(key);
 			dbMeta.indexed = true;
 		}
-		if (fieldDbMeta.softDelete) {
+		if (fieldDBMeta.softDelete) {
 			if (meta.softDeleteField !== null) {
 				throw new TableDefinitionError(
 					`Table "${name}" has multiple soft delete fields: "${meta.softDeleteField}" and "${key}". Only one soft delete field is allowed.`,
@@ -1153,8 +1153,8 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			meta.softDeleteField = key;
 			dbMeta.softDelete = true;
 		}
-		if (fieldDbMeta.reference) {
-			const ref = fieldDbMeta.reference;
+		if (fieldDBMeta.reference) {
+			const ref = fieldDBMeta.reference;
 
 			// Validate 'as' doesn't collide with existing fields in THIS table
 			if (ref.as in shape) {
@@ -1187,26 +1187,26 @@ export function table<T extends Record<string, ZodTypeAny>>(
 			});
 			dbMeta.reference = ref;
 		}
-		if (fieldDbMeta.encode) {
-			dbMeta.encode = fieldDbMeta.encode;
+		if (fieldDBMeta.encode) {
+			dbMeta.encode = fieldDBMeta.encode;
 		}
-		if (fieldDbMeta.decode) {
-			dbMeta.decode = fieldDbMeta.decode;
+		if (fieldDBMeta.decode) {
+			dbMeta.decode = fieldDBMeta.decode;
 		}
-		if (fieldDbMeta.columnType) {
-			dbMeta.columnType = fieldDbMeta.columnType;
+		if (fieldDBMeta.columnType) {
+			dbMeta.columnType = fieldDBMeta.columnType;
 		}
-		if (fieldDbMeta.inserted) {
-			dbMeta.inserted = fieldDbMeta.inserted;
+		if (fieldDBMeta.inserted) {
+			dbMeta.inserted = fieldDBMeta.inserted;
 		}
-		if (fieldDbMeta.updated) {
-			dbMeta.updated = fieldDbMeta.updated;
+		if (fieldDBMeta.updated) {
+			dbMeta.updated = fieldDBMeta.updated;
 		}
-		if (fieldDbMeta.upserted) {
-			dbMeta.upserted = fieldDbMeta.upserted;
+		if (fieldDBMeta.upserted) {
+			dbMeta.upserted = fieldDBMeta.upserted;
 		}
-		if (fieldDbMeta.autoIncrement) {
-			dbMeta.autoIncrement = fieldDbMeta.autoIncrement;
+		if (fieldDBMeta.autoIncrement) {
+			dbMeta.autoIncrement = fieldDBMeta.autoIncrement;
 		}
 
 		meta.fields[key] = dbMeta;
@@ -1226,7 +1226,7 @@ export function table<T extends Record<string, ZodTypeAny>>(
  */
 function createColsProxy(
 	tableName: string,
-	zodShape: Record<string, ZodTypeAny>,
+	zodShape: Record<string, ZodType>,
 ): Record<string, SQLTemplate> {
 	return new Proxy({} as Record<string, SQLTemplate>, {
 		get(_target, prop: string): SQLTemplate | undefined {
@@ -1256,14 +1256,14 @@ function createColsProxy(
 function createTableObject(
 	name: string,
 	schema: ZodObject<any>,
-	zodShape: Record<string, ZodTypeAny>,
+	zodShape: Record<string, ZodType>,
 	meta: {
 		primary: string | null;
 		unique: string[];
 		indexed: string[];
 		softDeleteField: string | null;
 		references: ReferenceInfo[];
-		fields: Record<string, FieldDbMeta>;
+		fields: Record<string, FieldDBMeta>;
 	},
 	options: TableOptions,
 ): Table<any> {
@@ -1376,7 +1376,7 @@ function createTableObject(
 			const pickedSchema = schema.pick(pickObj);
 
 			// Filter zodShape to only picked fields
-			const pickedZodShape: Record<string, ZodTypeAny> = {};
+			const pickedZodShape: Record<string, ZodType> = {};
 			for (const f of fields as string[]) {
 				if (f in zodShape) {
 					pickedZodShape[f] = zodShape[f];
@@ -1408,7 +1408,7 @@ function createTableObject(
 				references: meta.references.filter((r) => fieldSet.has(r.fieldName)),
 				fields: Object.fromEntries(
 					Object.entries(meta.fields).filter(([k]) => fieldSet.has(k)),
-				) as Record<string, FieldDbMeta>,
+				) as Record<string, FieldDBMeta>,
 				isPartial: true as const,
 				isDerived: undefined as true | undefined,
 				derivedExprs: undefined as DerivedExpr[] | undefined,
@@ -1444,10 +1444,7 @@ function createTableObject(
 			}) as PartialTable<any>;
 		},
 
-		derive<N extends string, V extends z.ZodTypeAny>(
-			fieldName: N,
-			fieldType: V,
-		) {
+		derive<N extends string, V extends z.ZodType>(fieldName: N, fieldType: V) {
 			return (
 				stringsOrValue: TemplateStringsArray,
 				...templateValues: unknown[]
@@ -1709,8 +1706,8 @@ function unwrapType(schema: z.ZodType): UnwrapResult {
  */
 function extractFieldMeta(
 	name: string,
-	zodType: ZodTypeAny,
-	dbMeta: FieldDbMeta,
+	zodType: ZodType,
+	dbMeta: FieldDBMeta,
 ): FieldMeta {
 	const {
 		core,
@@ -1828,7 +1825,7 @@ export type Insert<T extends Table<any>> = T extends {meta: {isPartial: true}}
  * Database metadata methods available on Zod schemas.
  * These methods are added via extendZod() and return the same schema type.
  */
-export interface ZodDBMethods<Schema extends ZodTypeAny> {
+export interface ZodDBMethods<Schema extends ZodType> {
 	/**
 	 * Mark field as primary key.
 	 * @example z.string().uuid().db.primary()

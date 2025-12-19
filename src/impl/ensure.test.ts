@@ -120,7 +120,6 @@ for (const dialect of dialects) {
 			it("creates a new table with all columns", async () => {
 				if (maybeSkip()) return;
 
-
 				const Users = table(`u_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					name: stringField(),
@@ -141,7 +140,6 @@ for (const dialect of dialects) {
 			it("creates a table with primary key", async () => {
 				if (maybeSkip()) return;
 
-
 				const Users = table(`upk_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					name: z.string(),
@@ -158,7 +156,6 @@ for (const dialect of dialects) {
 			it("creates a table with indexes", async () => {
 				if (maybeSkip()) return;
 
-
 				const Users = table(`uidx_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					email: stringField().db.index(),
@@ -172,7 +169,6 @@ for (const dialect of dialects) {
 
 			it("creates a table with unique constraint", async () => {
 				if (maybeSkip()) return;
-
 
 				const Users = table(`uuniq_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -189,7 +185,6 @@ for (const dialect of dialects) {
 
 			it("creates a table with foreign key", async () => {
 				if (maybeSkip()) return;
-
 
 				const Users = table(`ufk_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -212,7 +207,6 @@ for (const dialect of dialects) {
 			it("is idempotent - calling twice does nothing", async () => {
 				if (maybeSkip()) return;
 
-
 				const Users = table(`uidem_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					name: z.string(),
@@ -227,7 +221,6 @@ for (const dialect of dialects) {
 
 			it("adds missing columns to existing table", async () => {
 				if (maybeSkip()) return;
-
 
 				const tableName = `uevol_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -255,7 +248,6 @@ for (const dialect of dialects) {
 			it("adds missing non-unique indexes to existing table", async () => {
 				if (maybeSkip()) return;
 
-
 				const tableName = `uaddidx_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
 					id: stringId().db.primary(),
@@ -275,7 +267,6 @@ for (const dialect of dialects) {
 
 			it("throws SchemaDriftError when existing table missing unique constraint", async () => {
 				if (maybeSkip()) return;
-
 
 				const tableName = `udrift_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -300,7 +291,6 @@ for (const dialect of dialects) {
 		describe("ensureConstraints", () => {
 			it("adds unique constraint to existing table", async () => {
 				if (maybeSkip()) return;
-
 
 				const tableName = `uadduniq_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -327,7 +317,6 @@ for (const dialect of dialects) {
 			it("throws ConstraintPreflightError when duplicates exist", async () => {
 				if (maybeSkip()) return;
 
-
 				const tableName = `udups_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
 					id: stringId().db.primary(),
@@ -352,7 +341,6 @@ for (const dialect of dialects) {
 			it("is idempotent when constraints already exist", async () => {
 				if (maybeSkip()) return;
 
-
 				const Users = table(`uconst_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					email: stringField().db.unique(),
@@ -367,7 +355,6 @@ for (const dialect of dialects) {
 			it("throws when table does not exist", async () => {
 				if (maybeSkip()) return;
 
-
 				const Users = table(`nonex_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					email: stringField().db.unique(),
@@ -378,253 +365,275 @@ for (const dialect of dialects) {
 				);
 			});
 
+			it("throws ConstraintPreflightError for FK with orphan rows", async () => {
+				// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+				if (maybeSkip() || dialect.name === "sqlite") return;
+				testId++;
 
-		it("throws ConstraintPreflightError for FK with orphan rows", async () => {
-			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
-			if (maybeSkip() || dialect.name === "sqlite") return;
-			testId++;
+				const Authors = table(`authors_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
 
+				const Posts = table(`posts_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					authorId: stringId(),
+				});
 
-			const Authors = table(`authors_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				name: stringField(),
+				await db.ensureTable(Authors);
+				await db.ensureTable(Posts);
+
+				// Insert author
+				await db.insert(Authors, {id: "1", name: "Alice"});
+
+				// Insert post with valid author
+				await db.insert(Posts, {id: "1", title: "Hello", authorId: "1"});
+
+				// Insert orphan post (author doesn't exist)
+				await db.insert(Posts, {id: "2", title: "Orphan", authorId: "999"});
+
+				// Add FK constraint to Posts referencing Authors
+				const PostsWithFK = table(`posts_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					authorId: stringId().db.references(Authors, {as: "author"}),
+				});
+
+				await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({
+					name: "ConstraintPreflightError",
+				});
 			});
 
-			const Posts = table(`posts_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				title: stringField(),
-				authorId: stringId(),
+			it("adds FK constraint when no orphan rows exist", async () => {
+				// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+				if (maybeSkip() || dialect.name === "sqlite") return;
+				testId++;
+
+				const Authors = table(`authors_clean_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				const Posts = table(`posts_clean_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					authorId: stringId(),
+				});
+
+				await db.ensureTable(Authors);
+				await db.ensureTable(Posts);
+
+				// Insert author
+				await db.insert(Authors, {id: "1", name: "Alice"});
+
+				// Insert post with valid author only (no orphans)
+				await db.insert(Posts, {id: "1", title: "Hello", authorId: "1"});
+
+				// Add FK constraint - should succeed
+				const PostsWithFK = table(`posts_clean_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					authorId: stringId().db.references(Authors, {as: "author"}),
+				});
+
+				const result = await db.ensureConstraints(PostsWithFK);
+				expect(result.applied).toBe(true);
 			});
 
-			await db.ensureTable(Authors);
-			await db.ensureTable(Posts);
+			it("throws ConstraintPreflightError for compound FK with orphan rows", async () => {
+				// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+				if (maybeSkip() || dialect.name === "sqlite") return;
+				testId++;
 
-			// Insert author
-			await db.insert(Authors, {id: "1", name: "Alice"});
-
-			// Insert post with valid author
-			await db.insert(Posts, {id: "1", title: "Hello", authorId: "1"});
-
-			// Insert orphan post (author doesn't exist)
-			await db.insert(Posts, {id: "2", title: "Orphan", authorId: "999"});
-
-			// Add FK constraint to Posts referencing Authors
-			const PostsWithFK = table(`posts_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				title: stringField(),
-				authorId: stringId().db.references(Authors, {as: "author"}),
-			});
-
-			await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({
-				name: "ConstraintPreflightError",
-			});
-		});
-
-		it("adds FK constraint when no orphan rows exist", async () => {
-			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
-			if (maybeSkip() || dialect.name === "sqlite") return;
-			testId++;
-
-
-			const Authors = table(`authors_clean_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				name: stringField(),
-			});
-
-			const Posts = table(`posts_clean_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				title: stringField(),
-				authorId: stringId(),
-			});
-
-			await db.ensureTable(Authors);
-			await db.ensureTable(Posts);
-
-			// Insert author
-			await db.insert(Authors, {id: "1", name: "Alice"});
-
-			// Insert post with valid author only (no orphans)
-			await db.insert(Posts, {id: "1", title: "Hello", authorId: "1"});
-
-			// Add FK constraint - should succeed
-			const PostsWithFK = table(`posts_clean_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				title: stringField(),
-				authorId: stringId().db.references(Authors, {as: "author"}),
-			});
-
-			const result = await db.ensureConstraints(PostsWithFK);
-			expect(result.applied).toBe(true);
-		});
-
-		it("throws ConstraintPreflightError for compound FK with orphan rows", async () => {
-			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
-			if (maybeSkip() || dialect.name === "sqlite") return;
-			testId++;
-
-			// OrderProducts with compound unique constraint
-			const OrderProducts = table(`order_products_${runId}_${testId}`, {
-				orderId: stringId(),
-				productId: stringId(),
-				quantity: z.number(),
-			}, {
-				unique: [["orderId", "productId"]],
-			});
-
-			// OrderItems without FK
-			const OrderItems = table(`order_items_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				orderId: stringId(),
-				productId: stringId(),
-				price: z.number(),
-			});
-
-			await db.ensureTable(OrderProducts);
-			await db.ensureTable(OrderItems);
-
-			// Insert valid order product
-			await db.insert(OrderProducts, {orderId: "1", productId: "A", quantity: 5});
-
-			// Insert order item with valid reference
-			await db.insert(OrderItems, {
-				id: "1",
-				orderId: "1",
-				productId: "A",
-				price: 100,
-			});
-
-			// Insert order item with orphan reference (order 2, product B doesn't exist)
-			await db.insert(OrderItems, {
-				id: "2",
-				orderId: "2",
-				productId: "B",
-				price: 200,
-			});
-
-			// Add compound FK - should fail due to orphan
-			const OrderItemsWithFK = table(`order_items_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				orderId: stringId(),
-				productId: stringId(),
-				price: z.number(),
-			}, {
-				references: [
+				// OrderProducts with compound unique constraint
+				const OrderProducts = table(
+					`order_products_${runId}_${testId}`,
 					{
-						fields: ["orderId", "productId"],
-						table: OrderProducts,
-						as: "orderProduct",
+						orderId: stringId(),
+						productId: stringId(),
+						quantity: z.number(),
 					},
-				],
-			});
-
-			await expect(db.ensureConstraints(OrderItemsWithFK)).rejects.toMatchObject({
-				name: "ConstraintPreflightError",
-			});
-		});
-
-		it("adds compound FK constraint when no orphan rows exist", async () => {
-			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
-			if (maybeSkip() || dialect.name === "sqlite") return;
-			testId++;
-
-			// OrderProducts with compound unique constraint
-			const OrderProducts = table(`order_prods_clean_${runId}_${testId}`, {
-				orderId: stringId(),
-				productId: stringId(),
-				quantity: z.number(),
-			}, {
-				unique: [["orderId", "productId"]],
-			});
-
-			// OrderItems without FK
-			const OrderItems = table(`order_items_clean_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				orderId: stringId(),
-				productId: stringId(),
-				price: z.number(),
-			});
-
-			await db.ensureTable(OrderProducts);
-			await db.ensureTable(OrderItems);
-
-			// Insert order product
-			await db.insert(OrderProducts, {orderId: "1", productId: "A", quantity: 5});
-
-			// Insert order item with valid reference only (no orphans)
-			await db.insert(OrderItems, {
-				id: "1",
-				orderId: "1",
-				productId: "A",
-				price: 100,
-			});
-
-			// Add compound FK - should succeed
-			const OrderItemsWithFK = table(`order_items_clean_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				orderId: stringId(),
-				productId: stringId(),
-				price: z.number(),
-			}, {
-				references: [
 					{
-						fields: ["orderId", "productId"],
-						table: OrderProducts,
-						as: "orderProduct",
+						unique: [["orderId", "productId"]],
 					},
-				],
+				);
+
+				// OrderItems without FK
+				const OrderItems = table(`order_items_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					orderId: stringId(),
+					productId: stringId(),
+					price: z.number(),
+				});
+
+				await db.ensureTable(OrderProducts);
+				await db.ensureTable(OrderItems);
+
+				// Insert valid order product
+				await db.insert(OrderProducts, {
+					orderId: "1",
+					productId: "A",
+					quantity: 5,
+				});
+
+				// Insert order item with valid reference
+				await db.insert(OrderItems, {
+					id: "1",
+					orderId: "1",
+					productId: "A",
+					price: 100,
+				});
+
+				// Insert order item with orphan reference (order 2, product B doesn't exist)
+				await db.insert(OrderItems, {
+					id: "2",
+					orderId: "2",
+					productId: "B",
+					price: 200,
+				});
+
+				// Add compound FK - should fail due to orphan
+				const OrderItemsWithFK = table(
+					`order_items_${runId}_${testId}`,
+					{
+						id: stringId().db.primary(),
+						orderId: stringId(),
+						productId: stringId(),
+						price: z.number(),
+					},
+					{
+						references: [
+							{
+								fields: ["orderId", "productId"],
+								table: OrderProducts,
+								as: "orderProduct",
+							},
+						],
+					},
+				);
+
+				await expect(
+					db.ensureConstraints(OrderItemsWithFK),
+				).rejects.toMatchObject({
+					name: "ConstraintPreflightError",
+				});
 			});
 
-			const result = await db.ensureConstraints(OrderItemsWithFK);
-			expect(result.applied).toBe(true);
-		});
+			it("adds compound FK constraint when no orphan rows exist", async () => {
+				// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+				if (maybeSkip() || dialect.name === "sqlite") return;
+				testId++;
 
-		it("handles quoted identifiers in preflight diagnostic query", async () => {
-			// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
-			if (maybeSkip() || dialect.name === "sqlite") return;
-			testId++;
+				// OrderProducts with compound unique constraint
+				const OrderProducts = table(
+					`order_prods_clean_${runId}_${testId}`,
+					{
+						orderId: stringId(),
+						productId: stringId(),
+						quantity: z.number(),
+					},
+					{
+						unique: [["orderId", "productId"]],
+					},
+				);
 
-			// Create Authors table with standard column name
-			const Authors = table(`authors_quoted_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				name: stringField(),
+				// OrderItems without FK
+				const OrderItems = table(`order_items_clean_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					orderId: stringId(),
+					productId: stringId(),
+					price: z.number(),
+				});
+
+				await db.ensureTable(OrderProducts);
+				await db.ensureTable(OrderItems);
+
+				// Insert order product
+				await db.insert(OrderProducts, {
+					orderId: "1",
+					productId: "A",
+					quantity: 5,
+				});
+
+				// Insert order item with valid reference only (no orphans)
+				await db.insert(OrderItems, {
+					id: "1",
+					orderId: "1",
+					productId: "A",
+					price: 100,
+				});
+
+				// Add compound FK - should succeed
+				const OrderItemsWithFK = table(
+					`order_items_clean_${runId}_${testId}`,
+					{
+						id: stringId().db.primary(),
+						orderId: stringId(),
+						productId: stringId(),
+						price: z.number(),
+					},
+					{
+						references: [
+							{
+								fields: ["orderId", "productId"],
+								table: OrderProducts,
+								as: "orderProduct",
+							},
+						],
+					},
+				);
+
+				const result = await db.ensureConstraints(OrderItemsWithFK);
+				expect(result.applied).toBe(true);
 			});
 
-			// Create Posts table with column name that needs quoting (hyphen)
-			const Posts = table(`posts_quoted_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				title: stringField(),
-				"author-id": stringId(), // Column name with hyphen requires quoting
+			it("handles quoted identifiers in preflight diagnostic query", async () => {
+				// Skip for SQLite as BunDriver doesn't enable PRAGMA foreign_keys=ON
+				if (maybeSkip() || dialect.name === "sqlite") return;
+				testId++;
+
+				// Create Authors table with standard column name
+				const Authors = table(`authors_quoted_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				// Create Posts table with column name that needs quoting (hyphen)
+				const Posts = table(`posts_quoted_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					"author-id": stringId(), // Column name with hyphen requires quoting
+				});
+
+				await db.ensureTable(Authors);
+				await db.ensureTable(Posts);
+
+				// Insert author
+				await db.insert(Authors, {id: "1", name: "Alice"});
+
+				// Insert post with valid author
+				await db.insert(Posts, {id: "1", title: "Hello", "author-id": "1"});
+
+				// Insert orphan post (author doesn't exist)
+				await db.insert(Posts, {id: "2", title: "Orphan", "author-id": "999"});
+
+				// Add FK constraint - should detect orphan via properly quoted diagnostic query
+				const PostsWithFK = table(`posts_quoted_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+					"author-id": stringId().db.references(Authors, {as: "author"}),
+				});
+
+				await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({
+					name: "ConstraintPreflightError",
+				});
 			});
-
-			await db.ensureTable(Authors);
-			await db.ensureTable(Posts);
-
-			// Insert author
-			await db.insert(Authors, {id: "1", name: "Alice"});
-
-			// Insert post with valid author
-			await db.insert(Posts, {id: "1", title: "Hello", "author-id": "1"});
-
-			// Insert orphan post (author doesn't exist)
-			await db.insert(Posts, {id: "2", title: "Orphan", "author-id": "999"});
-
-			// Add FK constraint - should detect orphan via properly quoted diagnostic query
-			const PostsWithFK = table(`posts_quoted_${runId}_${testId}`, {
-				id: stringId().db.primary(),
-				title: stringField(),
-				"author-id": stringId().db.references(Authors, {as: "author"}),
-			});
-
-			await expect(db.ensureConstraints(PostsWithFK)).rejects.toMatchObject({
-				name: "ConstraintPreflightError",
-			});
-		});
 		});
 
 		describe("copyColumn", () => {
 			it("copies data from old column to new column", async () => {
 				if (maybeSkip()) return;
-
 
 				const tableName = `ucopy_${runId}_${testId}`;
 				const UsersV1 = table(tableName, {
@@ -653,7 +662,6 @@ for (const dialect of dialects) {
 
 			it("is idempotent - only copies where target is NULL", async () => {
 				if (maybeSkip()) return;
-
 
 				const tableName = `ucopyid_${runId}_${testId}`;
 				const Users = table(tableName, {
@@ -686,7 +694,9 @@ for (const dialect of dialects) {
 				await db.insert(Users, {id: "1", newName: null});
 
 				// Try to copy from non-existent column "oldName"
-				await expect(db.copyColumn(Users, "oldName", "newName")).rejects.toMatchObject({
+				await expect(
+					db.copyColumn(Users, "oldName", "newName"),
+				).rejects.toMatchObject({
 					name: "EnsureError",
 					operation: "copyColumn",
 				});
@@ -706,16 +716,14 @@ for (const dialect of dialects) {
 
 				// Try to copy to non-existent column "newName" (not in schema)
 				await expect(
-					db.copyColumn(Users, "oldName", "newName")
+					db.copyColumn(Users, "oldName", "newName"),
 				).rejects.toThrow(/does not exist in table/);
 			});
-
-	});
+		});
 
 		describe("identifier edge cases", () => {
 			it("handles reserved words as table and column names", async () => {
 				if (maybeSkip()) return;
-
 
 				// Use reserved SQL words as table/column names
 				const Select = table(`select_${runId}_${testId}`, {
@@ -742,7 +750,6 @@ for (const dialect of dialects) {
 			it("handles quote characters in identifiers", async () => {
 				if (maybeSkip()) return;
 
-
 				// Names containing quotes/backticks
 				const tableName = `quote_${runId}_${testId}`;
 				const Quotes = table(tableName, {
@@ -761,18 +768,16 @@ for (const dialect of dialects) {
 
 				expect(row["user's_name"]).toBe("Alice");
 
-
 				// Verify we can retrieve the row with special characters in field names
 				const found = await db.get(Quotes, "1");
 				expect(found?.["user's_name"]).toBe("Alice");
-				expect(found?.["column\"with\"quotes"]).toBe("value");
+				expect(found?.['column"with"quotes']).toBe("value");
 			});
 		});
 
 		describe("placeholder translation", () => {
 			it("translates placeholders correctly for multi-param queries", async () => {
 				if (maybeSkip()) return;
-
 
 				const Users = table(`placeholders_${runId}_${testId}`, {
 					id: stringId().db.primary(),
@@ -803,7 +808,6 @@ for (const dialect of dialects) {
 			it("handles mixed identifiers and values without misalignment", async () => {
 				if (maybeSkip()) return;
 
-
 				const Products = table(`products_${runId}_${testId}`, {
 					id: stringId().db.primary(),
 					category: stringField(),
@@ -811,9 +815,17 @@ for (const dialect of dialects) {
 				});
 
 				await db.ensureTable(Products);
-				await db.insert(Products, {id: "1", category: "electronics", price: 100});
+				await db.insert(Products, {
+					id: "1",
+					category: "electronics",
+					price: 100,
+				});
 				await db.insert(Products, {id: "2", category: "books", price: 20});
-				await db.insert(Products, {id: "3", category: "electronics", price: 50});
+				await db.insert(Products, {
+					id: "3",
+					category: "electronics",
+					price: 50,
+				});
 
 				// Alternate between identifiers and values to test placeholder ordering
 				const result = await db.query<{id: string; price: number}>`

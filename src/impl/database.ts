@@ -3120,7 +3120,10 @@ export class Database extends EventTarget {
 	 * Check if a column exists in the actual database table.
 	 * Queries the actual table structure to verify column existence.
 	 */
-	async #checkColumnExists(tableName: string, columnName: string): Promise<boolean> {
+	async #checkColumnExists(
+		tableName: string,
+		columnName: string,
+	): Promise<boolean> {
 		// Use driver's getColumns if available
 		if (this.#driver.getColumns) {
 			const columns = await this.#driver.getColumns(tableName);
@@ -3131,7 +3134,10 @@ export class Database extends EventTarget {
 		try {
 			const pragmaStrings = makeTemplate(["PRAGMA table_info(", ")"]);
 			const pragmaValues = [ident(tableName)];
-			const columns = await this.#driver.all<{name: string}>(pragmaStrings, pragmaValues);
+			const columns = await this.#driver.all<{name: string}>(
+				pragmaStrings,
+				pragmaValues,
+			);
 			if (columns.length > 0) {
 				return columns.some((col) => col.name === columnName);
 			}

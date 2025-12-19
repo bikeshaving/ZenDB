@@ -199,15 +199,9 @@ export function expandTemplate(
  * Parse a tagged template into SQL string and params array.
  *
  * Supports:
- * - SQL fragments: their SQL is injected directly, params added to list
- * - DDL fragments: transformed to SQL based on dialect
+ * - SQL templates/fragments: merged and parameterized
  * - Table objects: interpolated as quoted table names
  * - Other values: become parameterized placeholders
- *
- * **Fragment mixing**: DDL and SQL fragments can be mixed in the same template,
- * but it's the user's responsibility to ensure the result is valid SQL. For example,
- * `db.exec\`${Posts.ddl()} -- ${sql\`comment\`}\`` is allowed, but
- * `db.query\`SELECT * FROM ${Posts.ddl()}\`` will produce invalid SQL.
  *
  * @example
  * parseTemplate`WHERE id = ${userId} AND active = ${true}`
@@ -220,10 +214,6 @@ export function expandTemplate(
  * @example
  * parseTemplate`FROM ${Posts} JOIN ${Users} ON ...`
  * // { sql: 'FROM "posts" JOIN "users" ON ...', params: [] }
- *
- * @example
- * parseTemplate`${Posts.ddl()}`
- * // { sql: 'CREATE TABLE IF NOT EXISTS "posts" (...)', params: [] }
  */
 export function parseTemplate(
 	strings: TemplateStringsArray,

@@ -630,7 +630,7 @@ for (const dialect of dialects) {
 				// Try to insert article with non-existent author - should fail on ALL dialects
 				// (SQLite now has PRAGMA foreign_keys=ON enabled by default)
 				await expect(
-					db.insert(Articles, {id: "1", authorId: "999", title: "Orphan"})
+					db.insert(Articles, {id: "1", authorId: "999", title: "Orphan"}),
 				).rejects.toMatchObject({
 					name: "ConstraintViolationError",
 				});
