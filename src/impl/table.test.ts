@@ -459,11 +459,12 @@ describe("Table.derive()", () => {
 
 		const expr = (PostsWithCount.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("likeCount");
-		// Template format: {fieldName, template} where template is SQLTemplate [strings, values]
+		// Template format: {fieldName, template} where template is SQLTemplate [strings, ...values]
 		expect(Array.from(expr.template[0])).toEqual(["COUNT(", ".", ")"]);
-		expect(expr.template[1]).toHaveLength(2);
-		expect(expr.template[1][0]).toHaveProperty("name", "likes");
-		expect(expr.template[1][1]).toHaveProperty("name", "id");
+		const exprValues = expr.template.slice(1);
+		expect(exprValues).toHaveLength(2);
+		expect(exprValues[0]).toHaveProperty("name", "likes");
+		expect(exprValues[1]).toHaveProperty("name", "id");
 	});
 
 	test("tracks derived fields in meta.derivedFields", () => {
@@ -504,12 +505,12 @@ describe("Table.derive()", () => {
 
 		const expr = (PostsWithThreshold.meta as any).derivedExprs[0];
 		expect(expr.fieldName).toBe("hasMany");
-		// Template format: {fieldName, template} where template is SQLTemplate [strings, values]
+		// Template format: {fieldName, template} where template is SQLTemplate [strings, ...values]
 		expect(Array.from(expr.template[0])).toEqual([
 			"CASE WHEN COUNT(*) > ",
 			" THEN 1 ELSE 0 END",
 		]);
-		expect(expr.template[1]).toEqual([10]);
+		expect(expr.template.slice(1)).toEqual([10]);
 	});
 
 	test("cols proxy works for derived fields", () => {
@@ -831,13 +832,13 @@ describe("Schema marker validation", () => {
 		});
 		const insertedMeta = TestTable1.meta.fields.computed.inserted;
 		expect(insertedMeta?.type).toBe("sql");
-		// Template: `${42} * ${2}` -> tuple: [["", " * ", ""], [42, 2]]
+		// Template: `${42} * ${2}` -> tuple: [["", " * ", ""], 42, 2]
 		expect(Array.from(insertedMeta?.template?.[0] ?? [])).toEqual([
 			"",
 			" * ",
 			"",
 		]);
-		expect(insertedMeta?.template?.[1]).toEqual([42, 2]);
+		expect(insertedMeta?.template?.slice(1)).toEqual([42, 2]);
 
 		// Test updated() with regular values - they become values in template
 		const TestTable2 = table("test2", {
@@ -846,12 +847,12 @@ describe("Schema marker validation", () => {
 		});
 		const updatedMeta = TestTable2.meta.fields.computed.updated;
 		expect(updatedMeta?.type).toBe("sql");
-		// Template: `COALESCE(?, ${42}) + 1` -> tuple: [["COALESCE(?, ", ") + 1"], [42]]
+		// Template: `COALESCE(?, ${42}) + 1` -> tuple: [["COALESCE(?, ", ") + 1"], 42]
 		expect(Array.from(updatedMeta?.template?.[0] ?? [])).toEqual([
 			"COALESCE(?, ",
 			") + 1",
 		]);
-		expect(updatedMeta?.template?.[1]).toEqual([42]);
+		expect(updatedMeta?.template?.slice(1)).toEqual([42]);
 	});
 
 	test("tagged template with SQL fragments inlines fragment SQL", () => {
@@ -869,15 +870,16 @@ describe("Schema marker validation", () => {
 		const insertedMeta = TestTable1.meta.fields.computed.inserted;
 		expect(insertedMeta?.type).toBe("sql");
 		// Column reference is merged: template parts with ident markers
-		// tuple: [['', '.', ' + 1'], [ident('users'), ident('score')]]
+		// tuple: [['', '.', ' + 1'], ident('users'), ident('score')]
 		expect(Array.from(insertedMeta?.template?.[0] ?? [])).toEqual([
 			"",
 			".",
 			" + 1",
 		]);
-		expect(insertedMeta?.template?.[1]).toHaveLength(2);
-		expect(insertedMeta?.template?.[1]?.[0]).toHaveProperty("name", "users");
-		expect(insertedMeta?.template?.[1]?.[1]).toHaveProperty("name", "score");
+		const insertedValues = insertedMeta?.template?.slice(1);
+		expect(insertedValues).toHaveLength(2);
+		expect(insertedValues?.[0]).toHaveProperty("name", "users");
+		expect(insertedValues?.[1]).toHaveProperty("name", "score");
 
 		// Test updated() with SQL fragment
 		const TestTable2 = table("test2", {
@@ -887,15 +889,16 @@ describe("Schema marker validation", () => {
 		const updatedMeta = TestTable2.meta.fields.computed.updated;
 		expect(updatedMeta?.type).toBe("sql");
 		// Fragment is merged: template parts with ident markers
-		// tuple: [['COALESCE(', '.', ', 0) * 2'], [ident('users'), ident('score')]]
+		// tuple: [['COALESCE(', '.', ', 0) * 2'], ident('users'), ident('score')]
 		expect(Array.from(updatedMeta?.template?.[0] ?? [])).toEqual([
 			"COALESCE(",
 			".",
 			", 0) * 2",
 		]);
-		expect(updatedMeta?.template?.[1]).toHaveLength(2);
-		expect(updatedMeta?.template?.[1]?.[0]).toHaveProperty("name", "users");
-		expect(updatedMeta?.template?.[1]?.[1]).toHaveProperty("name", "score");
+		const updatedValues = updatedMeta?.template?.slice(1);
+		expect(updatedValues).toHaveLength(2);
+		expect(updatedValues?.[0]).toHaveProperty("name", "users");
+		expect(updatedValues?.[1]).toHaveProperty("name", "score");
 	});
 
 	test("encode() throws when combined with inserted()", () => {

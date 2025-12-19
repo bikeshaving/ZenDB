@@ -43,9 +43,13 @@ export {
 // ============================================================================
 
 export {
-	// SQL symbols
+	// SQL builtins - SQL-native values with no JS equivalent
+	CURRENT_TIMESTAMP,
+	CURRENT_DATE,
+	CURRENT_TIME,
 	NOW,
-	isSQLSymbol,
+	TODAY,
+	isSQLBuiltin,
 } from "./impl/database.js";
 
 export {
@@ -57,6 +61,7 @@ export {
 export {
 	// SQL template (return type of table methods like deleted(), set(), etc.)
 	type SQLTemplate,
+	isSQLTemplate,
 } from "./impl/template.js";
 
 export {

@@ -29,7 +29,7 @@ export interface ParsedQuery {
  * Render a SQL template to {sql, params} format.
  * Useful for testing and debugging template output.
  *
- * @param template - SQLTemplate tuple [strings, values]
+ * @param template - SQLTemplate tuple [strings, ...values]
  * @param dialect - SQL dialect for identifier quoting (default: sqlite)
  * @returns {sql, params} for the rendered template
  */
@@ -37,7 +37,7 @@ export function renderFragment(
 	template: SQLTemplate,
 	dialect: SQLDialect = "sqlite",
 ): {sql: string; params: unknown[]} {
-	return renderSQL(template[0], template[1], dialect);
+	return renderSQL(template[0], template.slice(1), dialect);
 }
 
 // ============================================================================
@@ -106,12 +106,14 @@ export function buildSelectColumnsTemplate(tables: Table<any>[]): {
 			}
 			needsComma = true;
 
-			// Add opening paren and expression (expr.template is SQLTemplate: [strings, values])
+			// Add opening paren and expression (expr.template is SQLTemplate: [strings, ...values])
 			const template = expr.template;
-			strings[strings.length - 1] += "(" + template[0][0];
-			for (let i = 0; i < template[1].length; i++) {
-				values.push(template[1][i]);
-				strings.push(template[0][i + 1]);
+			const templateStrings = template[0];
+			const templateValues = template.slice(1);
+			strings[strings.length - 1] += "(" + templateStrings[0];
+			for (let i = 0; i < templateValues.length; i++) {
+				values.push(templateValues[i]);
+				strings.push(templateStrings[i + 1]);
 			}
 
 			// Add ) AS ${ident(alias)}
@@ -174,11 +176,13 @@ export function expandTemplate(
 		const value = values[i];
 
 		if (isSQLTemplate(value)) {
-			// Merge SQL template directly (tuple format: [strings, values])
-			newStrings[newStrings.length - 1] += value[0][0];
-			for (let j = 0; j < value[1].length; j++) {
-				newValues.push(value[1][j]);
-				newStrings.push(value[0][j + 1]);
+			// Merge SQL template directly (tuple format: [strings, ...values])
+			const valueStrings = value[0];
+			const valueValues = value.slice(1);
+			newStrings[newStrings.length - 1] += valueStrings[0];
+			for (let j = 0; j < valueValues.length; j++) {
+				newValues.push(valueValues[j]);
+				newStrings.push(valueStrings[j + 1]);
 			}
 			newStrings[newStrings.length - 1] += strings[i + 1];
 		} else if (isTable(value)) {

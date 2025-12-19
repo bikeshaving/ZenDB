@@ -1,7 +1,7 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "./table.js";
-import {Database, NOW, isSQLSymbol, type Driver} from "./database.js";
+import {Database, NOW, isSQLBuiltin, type Driver} from "./database.js";
 import {isSQLIdentifier} from "./template.js";
 import {renderFragment} from "./query.js";
 
@@ -33,7 +33,7 @@ function buildSQL(strings: TemplateStringsArray, values: unknown[]): string {
 	let sql = strings[0];
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
-		if (isSQLSymbol(value)) {
+		if (isSQLBuiltin(value)) {
 			// Inline the symbol's SQL directly (matches driver behavior)
 			sql += (value === NOW ? "CURRENT_TIMESTAMP" : "?") + strings[i + 1];
 		} else if (isSQLIdentifier(value)) {
@@ -49,7 +49,7 @@ function buildSQL(strings: TemplateStringsArray, values: unknown[]): string {
 
 // Helper to extract actual parameter values (not identifiers or symbols)
 function getParams(values: unknown[]): unknown[] {
-	return values.filter((v) => !isSQLIdentifier(v) && !isSQLSymbol(v));
+	return values.filter((v) => !isSQLIdentifier(v) && !isSQLBuiltin(v));
 }
 
 // Mock driver factory

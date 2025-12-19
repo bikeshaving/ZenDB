@@ -13,7 +13,7 @@ function ddl(
 	dialect: SQLDialect = "sqlite",
 ): string {
 	const template = generateDDL(tbl, {dialect});
-	return renderDDL(template[0], template[1], dialect);
+	return renderDDL(template[0], template.slice(1), dialect);
 }
 
 describe("DDL generation", () => {

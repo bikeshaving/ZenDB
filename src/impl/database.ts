@@ -51,37 +51,79 @@ function createDBExpr(
 }
 
 // ============================================================================
-// SQL Symbols - Named expressions resolved at query time
+// SQL Builtins - SQL-native values with no JS equivalent
 // ============================================================================
 
 /**
- * Current timestamp. Resolves to CURRENT_TIMESTAMP (standard SQL).
+ * Current timestamp - resolves to CURRENT_TIMESTAMP (standard SQL).
+ *
+ * @example
+ * createdAt: z.date().db.inserted(CURRENT_TIMESTAMP)
+ * updatedAt: z.date().db.updated(NOW)
+ */
+export const CURRENT_TIMESTAMP = Symbol.for("@b9g/zen:CURRENT_TIMESTAMP");
+
+/**
+ * Current date - resolves to CURRENT_DATE (standard SQL).
+ *
+ * @example
+ * dateOnly: z.date().db.inserted(CURRENT_DATE)
+ */
+export const CURRENT_DATE = Symbol.for("@b9g/zen:CURRENT_DATE");
+
+/**
+ * Current time - resolves to CURRENT_TIME (standard SQL).
+ *
+ * @example
+ * timeOnly: z.string().db.inserted(CURRENT_TIME)
+ */
+export const CURRENT_TIME = Symbol.for("@b9g/zen:CURRENT_TIME");
+
+/**
+ * Ergonomic alias for CURRENT_TIMESTAMP.
  *
  * @example
  * createdAt: z.date().db.inserted(NOW)
- * updatedAt: z.date().db.updated(NOW)
  */
-export const NOW = Symbol.for("@b9g/zen:now");
-
-/** Known SQL symbols that can be used in inserted()/updated() */
-export type SQLSymbol = typeof NOW;
+export const NOW: typeof CURRENT_TIMESTAMP = CURRENT_TIMESTAMP;
 
 /**
- * Check if a value is a known SQL symbol.
+ * Ergonomic alias for CURRENT_DATE.
+ *
+ * @example
+ * dateOnly: z.date().db.inserted(TODAY)
  */
-export function isSQLSymbol(value: unknown): value is SQLSymbol {
-	return value === NOW;
+export const TODAY: typeof CURRENT_DATE = CURRENT_DATE;
+
+/** SQL builtins - SQL-native values with no JavaScript representation */
+export type SQLBuiltin =
+	| typeof CURRENT_TIMESTAMP
+	| typeof CURRENT_DATE
+	| typeof CURRENT_TIME;
+
+/**
+ * Check if a value is a known SQL builtin.
+ */
+export function isSQLBuiltin(value: unknown): value is SQLBuiltin {
+	if (typeof value !== "symbol") return false;
+	const key = Symbol.keyFor(value);
+	return (
+		key === "@b9g/zen:CURRENT_TIMESTAMP" ||
+		key === "@b9g/zen:CURRENT_DATE" ||
+		key === "@b9g/zen:CURRENT_TIME"
+	);
 }
 
 /**
- * Resolve a SQL symbol to SQL.
+ * Resolve a SQL builtin to its SQL representation.
  */
-function resolveSQLSymbol(sym: symbol): string {
-	if (sym === NOW) {
-		// CURRENT_TIMESTAMP is standard SQL, works across all databases
-		return "CURRENT_TIMESTAMP";
+function resolveSQLBuiltin(sym: symbol): string {
+	const key = Symbol.keyFor(sym);
+	if (!key?.startsWith("@b9g/zen:")) {
+		throw new Error(`Unknown SQL builtin: ${String(sym)}`);
 	}
-	throw new Error(`Unknown SQL symbol: ${String(sym)}`);
+	// Strip the prefix and return the SQL keyword
+	return key.slice("@b9g/zen:".length);
 }
 
 /**
@@ -97,11 +139,11 @@ function extractDBExpressions(
 ): {
 	regularData: Record<string, unknown>;
 	expressions: Record<string, DBExpression>;
-	symbols: Record<string, SQLSymbol>;
+	symbols: Record<string, SQLBuiltin>;
 } {
 	const regularData: Record<string, unknown> = {};
 	const expressions: Record<string, DBExpression> = {};
-	const symbols: Record<string, SQLSymbol> = {};
+	const symbols: Record<string, SQLBuiltin> = {};
 
 	for (const [key, value] of Object.entries(data)) {
 		if (isDBExpression(value)) {
@@ -116,7 +158,7 @@ function extractDBExpressions(
 				}
 			}
 			expressions[key] = value;
-		} else if (isSQLSymbol(value)) {
+		} else if (isSQLBuiltin(value)) {
 			// Validate: SQL symbols cannot be used with encoded/decoded fields
 			if (table) {
 				const fieldMeta = table.meta.fields[key];
@@ -172,9 +214,10 @@ function injectSchemaExpressions<T extends Table<any>>(
 
 		// Resolve the value based on type
 		if (meta.type === "sql") {
-			result[fieldName] = createDBExpr(meta.template![0], [
-				...meta.template![1],
-			]);
+			result[fieldName] = createDBExpr(
+				meta.template![0],
+				meta.template!.slice(1),
+			);
 		} else if (meta.type === "symbol") {
 			// Pass symbol through - resolved at query build time
 			result[fieldName] = meta.symbol;
@@ -502,7 +545,7 @@ function buildInsertParts(
 	tableName: string,
 	data: Record<string, unknown>,
 	expressions: Record<string, DBExpression>,
-	symbols: Record<string, SQLSymbol> = {},
+	symbols: Record<string, SQLBuiltin> = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const regularCols = Object.keys(data);
 	const exprCols = Object.keys(expressions);
@@ -562,7 +605,7 @@ function buildUpdateByIdParts(
 	data: Record<string, unknown>,
 	expressions: Record<string, DBExpression>,
 	id: unknown,
-	symbols: Record<string, SQLSymbol> = {},
+	symbols: Record<string, SQLBuiltin> = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const regularCols = Object.keys(data);
 	const exprCols = Object.keys(expressions);
@@ -619,7 +662,7 @@ function buildUpdateByIdsParts(
 	data: Record<string, unknown>,
 	expressions: Record<string, DBExpression>,
 	ids: unknown[],
-	symbols: Record<string, SQLSymbol> = {},
+	symbols: Record<string, SQLBuiltin> = {},
 ): {strings: TemplateStringsArray; values: unknown[]} {
 	const regularCols = Object.keys(data);
 	const exprCols = Object.keys(expressions);
@@ -718,11 +761,13 @@ function buildSelectCols(tables: Table<any>[]): {
 			// For derived expressions, merge their template and wrap in parentheses
 			strings[strings.length - 1] += "(";
 			// Merge the expression template
-			strings[strings.length - 1] += expr.template[0][0];
-			for (let i = 1; i < expr.template[0].length; i++) {
-				strings.push(expr.template[0][i]);
+			const exprStrings = expr.template[0];
+			const exprValues = expr.template.slice(1);
+			strings[strings.length - 1] += exprStrings[0];
+			for (let i = 1; i < exprStrings.length; i++) {
+				strings.push(exprStrings[i]);
 			}
-			values.push(...expr.template[1]);
+			values.push(...exprValues);
 			// Add closing paren and AS alias
 			strings[strings.length - 1] += ") AS ";
 			values.push(ident(alias));
@@ -835,15 +880,17 @@ function expandFragments(
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
 		if (isSQLTemplate(value)) {
-			// Expand template: merge its parts directly (tuple format: [strings, values])
-			// Append template[0][0] to last newString
-			newStrings[newStrings.length - 1] += value[0][0];
+			// Expand template: merge its parts directly (tuple format: [strings, ...values])
+			const valueStrings = value[0];
+			const valueValues = value.slice(1);
+			// Append valueStrings[0] to last newString
+			newStrings[newStrings.length - 1] += valueStrings[0];
 
 			// Push remaining template strings and all template values
-			for (let j = 1; j < value[0].length; j++) {
-				newStrings.push(value[0][j]);
+			for (let j = 1; j < valueStrings.length; j++) {
+				newStrings.push(valueStrings[j]);
 			}
-			newValues.push(...value[1]);
+			newValues.push(...valueValues);
 
 			// Append the next template string part
 			newStrings[newStrings.length - 1] += strings[i + 1];
@@ -1627,7 +1674,7 @@ export class Transaction {
 			if (field !== softDeleteField) {
 				queryStrings[queryStrings.length - 1] += ", ";
 				queryValues.push(ident(field));
-				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+				queryStrings.push(` = ${resolveSQLBuiltin(sym)}`);
 			}
 		}
 
@@ -1685,7 +1732,7 @@ export class Transaction {
 			if (field !== softDeleteField) {
 				queryStrings[queryStrings.length - 1] += ", ";
 				queryValues.push(ident(field));
-				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+				queryStrings.push(` = ${resolveSQLBuiltin(sym)}`);
 			}
 		}
 
@@ -1743,7 +1790,7 @@ export class Transaction {
 			if (field !== softDeleteField) {
 				queryStrings[queryStrings.length - 1] += ", ";
 				queryValues.push(ident(field));
-				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+				queryStrings.push(` = ${resolveSQLBuiltin(sym)}`);
 			}
 		}
 
@@ -2729,7 +2776,7 @@ export class Database extends EventTarget {
 			if (field !== softDeleteField) {
 				queryStrings[queryStrings.length - 1] += ", ";
 				queryValues.push(ident(field));
-				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+				queryStrings.push(` = ${resolveSQLBuiltin(sym)}`);
 			}
 		}
 
@@ -2787,7 +2834,7 @@ export class Database extends EventTarget {
 			if (field !== softDeleteField) {
 				queryStrings[queryStrings.length - 1] += ", ";
 				queryValues.push(ident(field));
-				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+				queryStrings.push(` = ${resolveSQLBuiltin(sym)}`);
 			}
 		}
 
@@ -2845,7 +2892,7 @@ export class Database extends EventTarget {
 			if (field !== softDeleteField) {
 				queryStrings[queryStrings.length - 1] += ", ";
 				queryValues.push(ident(field));
-				queryStrings.push(` = ${resolveSQLSymbol(sym)}`);
+				queryStrings.push(` = ${resolveSQLBuiltin(sym)}`);
 			}
 		}
 

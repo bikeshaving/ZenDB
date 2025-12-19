@@ -10,7 +10,7 @@
 import type {Driver} from "./zen.js";
 import {
 	ConstraintViolationError,
-	isSQLSymbol,
+	isSQLBuiltin,
 	isSQLIdentifier,
 	NOW,
 } from "./zen.js";
@@ -50,7 +50,7 @@ function buildSQL(
 
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
-		if (isSQLSymbol(value)) {
+		if (isSQLBuiltin(value)) {
 			// Inline the symbol's SQL directly
 			sql += resolveSQLSymbol(value) + strings[i + 1];
 		} else if (isSQLIdentifier(value)) {

@@ -12,7 +12,7 @@ import {
 	EnsureError,
 	SchemaDriftError,
 	ConstraintPreflightError,
-	isSQLSymbol,
+	isSQLBuiltin,
 	isSQLIdentifier,
 	NOW,
 } from "./zen.js";
@@ -79,7 +79,7 @@ function buildSQL(
 
 	for (let i = 0; i < values.length; i++) {
 		const value = values[i];
-		if (isSQLSymbol(value)) {
+		if (isSQLBuiltin(value)) {
 			// Inline the symbol's SQL directly
 			sql += resolveSQLSymbol(value) + strings[i + 1];
 		} else if (isSQLIdentifier(value)) {
@@ -511,7 +511,11 @@ export default class BunDriver implements Driver {
 				// Step 1: Create table with full structure
 				step = 1;
 				const ddlTemplate = generateDDL(table, {dialect: this.#dialect});
-				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate[1], this.#dialect);
+				const ddlSQL = renderDDL(
+					ddlTemplate[0],
+					ddlTemplate.slice(1),
+					this.#dialect,
+				);
 
 				// Execute each statement (CREATE TABLE + CREATE INDEX statements)
 				for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
@@ -882,7 +886,11 @@ export default class BunDriver implements Driver {
 			fieldMeta,
 			this.#dialect,
 		);
-		const colSQL = renderDDL(colTemplate[0], colTemplate[1], this.#dialect);
+		const colSQL = renderDDL(
+			colTemplate[0],
+			colTemplate.slice(1),
+			this.#dialect,
+		);
 
 		// Note: SQLite doesn't support IF NOT EXISTS in ALTER TABLE ADD COLUMN
 		// PostgreSQL 9.6+ supports ADD COLUMN IF NOT EXISTS

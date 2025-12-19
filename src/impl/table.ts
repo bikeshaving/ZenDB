@@ -8,7 +8,7 @@
 import {z, ZodType, ZodObject, ZodRawShape} from "zod";
 
 import {TableDefinitionError} from "./errors.js";
-import {isSQLSymbol, type SQLSymbol} from "./database.js";
+import {isSQLBuiltin, type SQLBuiltin} from "./database.js";
 import {
 	ident,
 	makeTemplate,
@@ -222,7 +222,7 @@ export interface FieldDBMeta {
 		type: "sql" | "symbol" | "function";
 		/** SQL template (for type: "sql") */
 		template?: SQLTemplate;
-		symbol?: SQLSymbol;
+		symbol?: SQLBuiltin;
 		fn?: () => unknown;
 	};
 	/** Value to apply on UPDATE only */
@@ -230,7 +230,7 @@ export interface FieldDBMeta {
 		type: "sql" | "symbol" | "function";
 		/** SQL template (for type: "sql") */
 		template?: SQLTemplate;
-		symbol?: SQLSymbol;
+		symbol?: SQLBuiltin;
 		fn?: () => unknown;
 	};
 	/** Value to apply on both INSERT and UPDATE */
@@ -238,7 +238,7 @@ export interface FieldDBMeta {
 		type: "sql" | "symbol" | "function";
 		/** SQL template (for type: "sql") */
 		template?: SQLTemplate;
-		symbol?: SQLSymbol;
+		symbol?: SQLBuiltin;
 		fn?: () => unknown;
 	};
 }
@@ -269,14 +269,16 @@ function mergeFragment(
 	template: SQLTemplate,
 	suffix: string,
 ): void {
-	// Append template[0][0] to last string
-	strings[strings.length - 1] += template[0][0];
+	const templateStrings = template[0];
+	const templateValues = template.slice(1);
+	// Append templateStrings[0] to last string
+	strings[strings.length - 1] += templateStrings[0];
 
 	// Push remaining template strings and all template values
-	for (let j = 1; j < template[0].length; j++) {
-		strings.push(template[0][j]);
+	for (let j = 1; j < templateStrings.length; j++) {
+		strings.push(templateStrings[j]);
 	}
-	values.push(...template[1]);
+	values.push(...templateValues);
 
 	// Append suffix
 	strings[strings.length - 1] += suffix;
@@ -444,7 +446,7 @@ function createDBMethods(schema: ZodType) {
 		 * slug: z.string().db.inserted`LOWER(name)`
 		 */
 		inserted(
-			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
+			stringsOrValue: TemplateStringsArray | SQLBuiltin | (() => unknown),
 			...templateValues: unknown[]
 		) {
 			let insertedMeta: FieldDBMeta["inserted"];
@@ -478,7 +480,7 @@ function createDBMethods(schema: ZodType) {
 					type: "sql",
 					template: createTemplate(makeTemplate(strings), values),
 				};
-			} else if (isSQLSymbol(stringsOrValue)) {
+			} else if (isSQLBuiltin(stringsOrValue)) {
 				insertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
 				insertedMeta = {type: "function", fn: stringsOrValue};
@@ -515,7 +517,7 @@ function createDBMethods(schema: ZodType) {
 		 * lastModified: z.date().db.updated(() => new Date())
 		 */
 		updated(
-			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
+			stringsOrValue: TemplateStringsArray | SQLBuiltin | (() => unknown),
 			...templateValues: unknown[]
 		) {
 			let updatedMeta: FieldDBMeta["updated"];
@@ -549,7 +551,7 @@ function createDBMethods(schema: ZodType) {
 					type: "sql",
 					template: createTemplate(makeTemplate(strings), values),
 				};
-			} else if (isSQLSymbol(stringsOrValue)) {
+			} else if (isSQLBuiltin(stringsOrValue)) {
 				updatedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
 				updatedMeta = {type: "function", fn: stringsOrValue};
@@ -586,7 +588,7 @@ function createDBMethods(schema: ZodType) {
 		 * lastModified: z.date().db.upserted(() => new Date())
 		 */
 		upserted(
-			stringsOrValue: TemplateStringsArray | SQLSymbol | (() => unknown),
+			stringsOrValue: TemplateStringsArray | SQLBuiltin | (() => unknown),
 			...templateValues: unknown[]
 		) {
 			let upsertedMeta: FieldDBMeta["upserted"];
@@ -620,7 +622,7 @@ function createDBMethods(schema: ZodType) {
 					type: "sql",
 					template: createTemplate(makeTemplate(strings), values),
 				};
-			} else if (isSQLSymbol(stringsOrValue)) {
+			} else if (isSQLBuiltin(stringsOrValue)) {
 				upsertedMeta = {type: "symbol", symbol: stringsOrValue};
 			} else if (typeof stringsOrValue === "function") {
 				upsertedMeta = {type: "function", fn: stringsOrValue};
@@ -1953,7 +1955,7 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 * slug: z.string().db.inserted`LOWER(name)`
 	 */
 	inserted(
-		value: import("./database.js").SQLSymbol | (() => z.infer<Schema>),
+		value: import("./database.js").SQLBuiltin | (() => z.infer<Schema>),
 	): Schema;
 	inserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
 
@@ -1970,7 +1972,7 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 * lastModified: z.date().db.updated(() => new Date())
 	 */
 	updated(
-		value: import("./database.js").SQLSymbol | (() => z.infer<Schema>),
+		value: import("./database.js").SQLBuiltin | (() => z.infer<Schema>),
 	): Schema;
 	updated(strings: TemplateStringsArray, ...values: unknown[]): Schema;
 
@@ -1987,7 +1989,7 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 * lastModified: z.date().db.upserted(() => new Date())
 	 */
 	upserted(
-		value: import("./database.js").SQLSymbol | (() => z.infer<Schema>),
+		value: import("./database.js").SQLBuiltin | (() => z.infer<Schema>),
 	): Schema;
 	upserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
 

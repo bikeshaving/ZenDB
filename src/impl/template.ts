@@ -15,20 +15,20 @@
 const SQL_TEMPLATE = Symbol.for("@b9g/zen:template");
 
 /**
- * A SQL template as a branded tuple: [strings, values]
+ * A SQL template as a branded tuple: [strings, ...values]
  *
  * Maintains invariant: strings.length === values.length + 1
  *
- * Access: template[0] for strings, template[1] for values
+ * Access: template[0] for strings, template.slice(1) for values
  * The strings array preserves .raw for TemplateStringsArray compatibility.
+ *
+ * This structure matches template tag function parameters, allowing templates
+ * to be directly applied to functions that accept (strings, ...values).
  *
  * Branded with symbol for injection protection - prevents user-crafted
  * objects from being interpolated as raw SQL.
  */
-export type SQLTemplate = readonly [
-	TemplateStringsArray,
-	readonly unknown[],
-] & {
+export type SQLTemplate = readonly [TemplateStringsArray, ...unknown[]] & {
 	readonly [SQL_TEMPLATE]: true;
 };
 
@@ -42,7 +42,7 @@ export function createTemplate(
 	strings: TemplateStringsArray,
 	values: readonly unknown[] = [],
 ): SQLTemplate {
-	const tuple = [strings, values] as const;
+	const tuple = [strings, ...values] as const;
 	return Object.assign(tuple, {[SQL_TEMPLATE]: true}) as SQLTemplate;
 }
 
@@ -117,11 +117,13 @@ export function mergeTemplate(
 	values: unknown[],
 	template: SQLTemplate,
 ): void {
+	const templateStrings = template[0];
+	const templateValues = template.slice(1);
 	// Append first template string to last accumulator string
-	strings[strings.length - 1] += template[0][0];
+	strings[strings.length - 1] += templateStrings[0];
 	// Push remaining template parts
-	for (let i = 0; i < template[1].length; i++) {
-		values.push(template[1][i]);
-		strings.push(template[0][i + 1]);
+	for (let i = 0; i < templateValues.length; i++) {
+		values.push(templateValues[i]);
+		strings.push(templateStrings[i + 1]);
 	}
 }
