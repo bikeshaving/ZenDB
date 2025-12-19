@@ -1,6 +1,5 @@
 # Zen
-
-@b9g/zen The simple database client.
+The simple database client.
 
 Define tables. Write SQL. Get objects.
 
