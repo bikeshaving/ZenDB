@@ -601,7 +601,7 @@ describe("DDL generation", () => {
 	describe("autoIncrement", () => {
 		test("SQLite auto-increment primary key", () => {
 			const items = table("items", {
-				id: z.number().int().db.primary().db.autoIncrement(),
+				id: z.number().int().db.primary().db.auto(),
 				name: z.string(),
 			});
 
@@ -615,7 +615,7 @@ describe("DDL generation", () => {
 
 		test("PostgreSQL auto-increment with GENERATED ALWAYS AS IDENTITY", () => {
 			const items = table("items", {
-				id: z.number().int().db.primary().db.autoIncrement(),
+				id: z.number().int().db.primary().db.auto(),
 				name: z.string(),
 			});
 
@@ -629,7 +629,7 @@ describe("DDL generation", () => {
 
 		test("MySQL auto-increment", () => {
 			const items = table("items", {
-				id: z.number().int().db.primary().db.autoIncrement(),
+				id: z.number().int().db.primary().db.auto(),
 				name: z.string(),
 			});
 
@@ -643,7 +643,7 @@ describe("DDL generation", () => {
 
 		test("auto-increment excludes NOT NULL and DEFAULT", () => {
 			const items = table("items", {
-				id: z.number().int().db.primary().db.autoIncrement(),
+				id: z.number().int().db.primary().db.auto(),
 				name: z.string(),
 			});
 

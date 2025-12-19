@@ -662,24 +662,6 @@ function createDBMethods(schema: ZodType) {
 		},
 
 		/**
-		 * Mark this field as auto-incrementing.
-		 *
-		 * Field becomes optional for insert - the database generates the value.
-		 * Typically used for integer primary keys.
-		 *
-		 * @example
-		 * id: z.number().db.primary().db.autoIncrement()
-		 *
-		 * @deprecated Use .db.auto() instead, which detects the type automatically.
-		 */
-		autoIncrement() {
-			// Preserve existing db metadata when wrapping with optional
-			const existing = getDBMeta(schema);
-			const optionalSchema = schema.optional();
-			return setDBMeta(optionalSchema, {...existing, autoIncrement: true});
-		},
-
-		/**
 		 * Auto-generate value on insert based on field type.
 		 *
 		 * Type-aware behavior:
@@ -2158,19 +2140,6 @@ export interface ZodDBMethods<Schema extends ZodType> {
 		value: import("./database.js").SQLBuiltin | (() => z.infer<Schema>),
 	): Schema;
 	upserted(strings: TemplateStringsArray, ...values: unknown[]): Schema;
-
-	/**
-	 * Mark this field as auto-incrementing.
-	 *
-	 * Field becomes optional for insert - the database generates the value.
-	 * Typically used for integer primary keys.
-	 *
-	 * @example
-	 * id: z.number().int().db.primary().db.autoIncrement()
-	 *
-	 * @deprecated Use .db.auto() instead, which detects the type automatically.
-	 */
-	autoIncrement(): Schema;
 
 	/**
 	 * Auto-generate value on insert based on field type.
