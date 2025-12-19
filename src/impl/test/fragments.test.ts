@@ -1,7 +1,7 @@
 import {test, expect, describe} from "bun:test";
 import {z} from "zod";
-import {table, extendZod} from "./table.js";
-import {parseTemplate, renderFragment} from "./query.js";
+import {table, extendZod} from "../table.js";
+import {parseTemplate, renderFragment} from "../query.js";
 
 // Extend Zod once before tests
 extendZod(z);
