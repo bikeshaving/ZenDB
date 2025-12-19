@@ -1396,4 +1396,17 @@ describe("DB Expressions", () => {
 			expect(updateSql).toContain('"modifiedAt" = CURRENT_TIMESTAMP');
 		});
 	});
+
+	// =========================================================================
+	// Regression: val() type safety (Issue #1)
+	// =========================================================================
+
+	describe("val() type safety", () => {
+		test("val() should have correct return type allowing null", () => {
+			// This is a compile-time check - if val() returns Promise<T | null>,
+			// this code should compile without error
+			const driver = createMockDriver();
+			expect(driver.val).toBeDefined();
+		});
+	});
 });

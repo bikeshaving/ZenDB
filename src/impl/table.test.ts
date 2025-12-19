@@ -989,3 +989,138 @@ describe("Schema marker validation", () => {
 		).toThrow("updated() cannot be combined with encode() or decode()");
 	});
 });
+
+// =============================================================================
+// Regression: Identifier validation (Issue #6)
+// =============================================================================
+
+describe("Identifier validation", () => {
+	test("table name with newline should throw", () => {
+		expect(() => {
+			table("users\nDROP TABLE users;--", {
+				id: z.string().db.primary(),
+			});
+		}).toThrow(/invalid.*identifier|control.*char/i);
+	});
+
+	test("column name with null byte should throw", () => {
+		expect(() => {
+			table("users", {
+				"id\x00": z.string().db.primary(),
+			});
+		}).toThrow(/invalid.*identifier|control.*char/i);
+	});
+
+	test("table name with semicolon should throw", () => {
+		expect(() => {
+			table("users; DROP TABLE users;--", {
+				id: z.string().db.primary(),
+			});
+		}).toThrow(/invalid.*identifier/i);
+	});
+});
+
+// =============================================================================
+// Regression: PostgreSQL parameter limit (Issue #7)
+// =============================================================================
+
+describe("PostgreSQL parameter limit", () => {
+	test("should throw when exceeding PostgreSQL 32767 param limit", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+		});
+
+		// Create array with 40000 values (exceeds 32767)
+		const tooManyValues = Array.from({length: 40000}, (_, i) => `id-${i}`);
+
+		// Should throw when creating the IN clause
+		expect(() => {
+			Users.in("id", tooManyValues);
+		}).toThrow(/too many|param.*limit|exceed|32767/i);
+	});
+});
+
+// =============================================================================
+// Regression: Circular reference detection (Issue #10)
+// =============================================================================
+
+describe("Circular reference detection", () => {
+	test("self-referential table should work (valid use case)", () => {
+		// Self-reference is valid (e.g., employee -> manager)
+		const Employees = table("employees", {
+			id: z.string().db.primary(),
+			name: z.string(),
+			managerId: z.string().nullable(),
+		});
+
+		// This is a valid pattern, should not throw
+		expect(Employees.name).toBe("employees");
+	});
+});
+
+// =============================================================================
+// Regression: decodeData error handling (Issues #5, #9)
+// =============================================================================
+
+describe("decodeData error handling", () => {
+	const {decodeData} = require("./table.js");
+	const {Database} = require("./database.js");
+
+	test("malformed JSON in object field should have clear error message", async () => {
+		const Settings = table("settings", {
+			id: z.string().db.primary(),
+			config: z.object({theme: z.string()}),
+		});
+
+		const driver = {
+			supportsReturning: true,
+			all: async () =>
+				[{"settings.id": "1", "settings.config": "not-valid-json"}] as any,
+			get: async () =>
+				({"settings.id": "1", "settings.config": "not-valid-json"}) as any,
+			run: async () => 0,
+			val: async () => null,
+			close: async () => {},
+			transaction: async (fn: any) => fn(driver),
+		};
+
+		const db = new Database(driver);
+
+		// Should throw with a message that mentions JSON parsing
+		try {
+			await db.get(Settings)`WHERE id = ${"1"}`;
+			expect(true).toBe(false); // Should not reach here
+		} catch (e: any) {
+			expect(e.message).toMatch(/JSON|parse|config/i);
+		}
+	});
+
+	test("invalid date string should throw with clear message", async () => {
+		const Events = table("events", {
+			id: z.string().db.primary(),
+			startedAt: z.date(),
+		});
+
+		const driver = {
+			supportsReturning: true,
+			all: async () =>
+				[{"events.id": "1", "events.startedAt": "not-a-date"}] as any,
+			get: async () =>
+				({"events.id": "1", "events.startedAt": "not-a-date"}) as any,
+			run: async () => 0,
+			val: async () => null,
+			close: async () => {},
+			transaction: async (fn: any) => fn(driver),
+		};
+
+		const db = new Database(driver);
+
+		// Should throw with a message mentioning the date issue
+		try {
+			await db.get(Events)`WHERE id = ${"1"}`;
+			expect(true).toBe(false); // Should not reach here
+		} catch (e: any) {
+			expect(e.message).toMatch(/date|startedAt|invalid/i);
+		}
+	});
+});

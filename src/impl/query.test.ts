@@ -443,3 +443,53 @@ describe("SQL fragment placeholder handling", () => {
 		expect(result.params).toEqual(["value"]);
 	});
 });
+
+// =============================================================================
+// Regression: Empty array in in() (Issue #3)
+// =============================================================================
+
+describe("Empty array in in() clause", () => {
+	test("in() with empty array returns 1 = 0 (always false)", () => {
+		const {renderFragment} = require("./query.js");
+		const {sql, params} = renderFragment(users.in("id", []));
+		expect(sql).toBe("1 = 0");
+		expect(params).toEqual([]);
+	});
+});
+
+// =============================================================================
+// Regression: findNextPlaceholder safety (Issue #11)
+// =============================================================================
+
+describe("findNextPlaceholder safety", () => {
+	test("unterminated string should not cause infinite loop", () => {
+		// Unterminated single quote - should handle gracefully, not hang
+		const strings = ["WHERE name = '", ""] as unknown as TemplateStringsArray;
+
+		// Should complete within reasonable time (not hang)
+		const start = Date.now();
+		try {
+			parseTemplate(strings, ["test"], "postgresql");
+		} catch {
+			// Error is fine, hanging is not
+		}
+		const elapsed = Date.now() - start;
+
+		expect(elapsed).toBeLessThan(1000); // Should complete in under 1 second
+	});
+
+	test("deeply nested quotes should not cause issues", () => {
+		// Many nested quote patterns
+		const strings = [
+			`WHERE a = '"'"'"'"'"' AND b = `,
+			"",
+		] as unknown as TemplateStringsArray;
+
+		const start = Date.now();
+		const result = parseTemplate(strings, [123], "postgresql");
+		const elapsed = Date.now() - start;
+
+		expect(elapsed).toBeLessThan(100);
+		expect(result.params).toEqual([123]);
+	});
+});

@@ -346,3 +346,53 @@ describe("DatabaseUpgradeEvent", () => {
 		expect(resolved).toBe(true);
 	});
 });
+
+// =============================================================================
+// Regression: Migration race condition (Issue #2)
+// =============================================================================
+
+describe("Migration race condition", () => {
+	test("ensureMigrationsTable should be called inside lock", async () => {
+		// This verifies the code path ensures #ensureMigrationsTable is called
+		// within withMigrationLock
+
+		let lockAcquired = false;
+		let tableCreatedWhileLocked = false;
+
+		const driver: Driver = {
+			supportsReturning: true,
+			all: async () => [],
+			get: async (strings: TemplateStringsArray) => {
+				const sql = buildSql(strings);
+				if (sql.includes("MAX(version)")) {
+					return {version: 0} as any;
+				}
+				return null;
+			},
+			run: async (strings: TemplateStringsArray) => {
+				const sql = buildSql(strings);
+				if (sql.includes("CREATE TABLE") && sql.includes("_migrations")) {
+					tableCreatedWhileLocked = lockAcquired;
+				}
+				return 0;
+			},
+			val: async () => null,
+			close: async () => {},
+			transaction: async (fn) => fn(driver),
+			withMigrationLock: async (fn) => {
+				lockAcquired = true;
+				try {
+					return await fn();
+				} finally {
+					lockAcquired = false;
+				}
+			},
+		};
+
+		const db = new Database(driver);
+		await db.open(1);
+
+		// The migrations table should be created while the lock is held
+		expect(tableCreatedWhileLocked).toBe(true);
+	});
+});
