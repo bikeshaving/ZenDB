@@ -231,84 +231,10 @@ export function encodeData<T extends Table<any>>(
 	return encoded;
 }
 
-/**
- * Decode data from database read operations.
- * Converts DB values → app values using .db.decode() functions.
- * Automatically decodes JSON strings to objects/arrays unless custom decoding is specified.
- */
-export function decodeData<T extends Table<any>>(
-	table: T,
-	data: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-	if (!data) return data;
-
-	const decoded: Record<string, unknown> = {};
-	const shape = table.schema.shape;
-
-	for (const [key, value] of Object.entries(data)) {
-		const fieldMeta = table.meta.fields[key];
-		const fieldSchema = shape?.[key];
-
-		if (fieldMeta?.decode && typeof fieldMeta.decode === "function") {
-			// Custom decoding specified - use it
-			decoded[key] = fieldMeta.decode(value);
-		} else if (fieldSchema) {
-			// Check if field is an object or array type - auto-decode from JSON
-			let core = fieldSchema;
-			while (typeof (core as any).unwrap === "function") {
-				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
-				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
-					break;
-				}
-				core = (core as any).unwrap();
-			}
-
-			if (core instanceof z.ZodObject || core instanceof z.ZodArray) {
-				// Automatic JSON decoding for objects and arrays
-				if (typeof value === "string") {
-					try {
-						decoded[key] = JSON.parse(value);
-					} catch (e) {
-						// Throw with helpful error message mentioning JSON and field
-						throw new Error(
-							`JSON parse error for field "${key}": ${e instanceof Error ? e.message : String(e)}. ` +
-								`Value was: ${value.slice(0, 100)}${value.length > 100 ? "..." : ""}`,
-						);
-					}
-				} else {
-					// Already an object (e.g., from PostgreSQL JSONB)
-					decoded[key] = value;
-				}
-			} else if (core instanceof z.ZodDate) {
-				// Automatic date decoding from ISO string
-				if (typeof value === "string") {
-					const date = new Date(value);
-					if (isNaN(date.getTime())) {
-						throw new Error(
-							`Invalid date value for field "${key}": "${value}" cannot be parsed as a valid date`,
-						);
-					}
-					decoded[key] = date;
-				} else if (value instanceof Date) {
-					if (isNaN(value.getTime())) {
-						throw new Error(
-							`Invalid Date object for field "${key}": received an Invalid Date`,
-						);
-					}
-					decoded[key] = value;
-				} else {
-					decoded[key] = value;
-				}
-			} else {
-				decoded[key] = value;
-			}
-		} else {
-			decoded[key] = value;
-		}
-	}
-
-	return decoded;
-}
+// Import decodeData from table.ts (moved there to break circular dependency)
+import {decodeData} from "./table.js";
+// Re-export for backward compatibility
+export {decodeData};
 
 // ============================================================================
 // Driver Interface

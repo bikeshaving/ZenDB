@@ -4,8 +4,12 @@
  * Generates SELECT statements with prefixed column aliases for entity normalization.
  */
 
-import {type Table, isTable, validateWithStandardSchema} from "./table.js";
-import {decodeData} from "./database.js";
+import {
+	type Table,
+	isTable,
+	validateWithStandardSchema,
+	decodeData,
+} from "./table.js";
 import {
 	ident,
 	makeTemplate,
