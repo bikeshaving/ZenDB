@@ -7,9 +7,12 @@
  * Requires: mysql2
  */
 
-import type {Driver} from "./zen.js";
+import type {Driver, Table, EnsureResult} from "./zen.js";
 import {
 	ConstraintViolationError,
+	EnsureError,
+	SchemaDriftError,
+	ConstraintPreflightError,
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
@@ -43,25 +46,8 @@ function buildSQL(
 	strings: TemplateStringsArray,
 	values: unknown[],
 ): {sql: string; params: unknown[]} {
-	let sql = strings[0];
-	const params: unknown[] = [];
-
-	for (let i = 0; i < values.length; i++) {
-		const value = values[i];
-		if (isSQLBuiltin(value)) {
-			// Inline the symbol's SQL directly
-			sql += resolveSQLBuiltin(value) + strings[i + 1];
-		} else if (isSQLIdentifier(value)) {
-			// Quote identifier with MySQL backticks
-			sql += quoteIdent(value.name) + strings[i + 1];
-		} else {
-			// Add placeholder and keep value
-			sql += "?" + strings[i + 1];
-			params.push(value);
-		}
-	}
-
-	return {sql, params};
+	const {buildSQL: sharedBuildSQL} = require("./impl/test-driver.js");
+	return sharedBuildSQL(strings, values, "mysql");
 }
 
 /**
@@ -319,6 +305,497 @@ export default class MySQLDriver implements Driver {
 			return await fn();
 		} finally {
 			await this.#pool.execute(`SELECT RELEASE_LOCK(?)`, [LOCK_NAME]);
+		}
+	}
+
+	// ========================================================================
+	// Schema Management Methods
+	// ========================================================================
+
+	/**
+	 * Ensure table exists with the specified structure.
+	 * Creates table if missing, adds missing columns/indexes.
+	 * Throws SchemaDriftError if constraints are missing.
+	 */
+	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		const tableName = table.name;
+		let step = 0;
+		let applied = false;
+
+		try {
+			const exists = await this.#tableExists(tableName);
+
+			if (!exists) {
+				step = 1;
+				// Create table with full structure using DDL generation
+				const {generateDDL} = await import("./impl/ddl.js");
+				const {renderDDL} = await import("./impl/test-driver.js");
+				const ddlTemplate = generateDDL(table, {dialect: "mysql"});
+				const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), "mysql");
+
+				for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+					await this.#pool.execute(stmt.trim(), []);
+				}
+				applied = true;
+			} else {
+				step = 2;
+				// Add missing columns, indexes, check constraints
+				const columnsApplied = await this.#ensureMissingColumns(table);
+				applied = applied || columnsApplied;
+
+				step = 3;
+				const indexesApplied = await this.#ensureMissingIndexes(table);
+				applied = applied || indexesApplied;
+
+				step = 4;
+				await this.#checkMissingConstraints(table);
+			}
+
+			return {applied};
+		} catch (error) {
+			if (
+				error instanceof SchemaDriftError ||
+				error instanceof ConstraintPreflightError
+			) {
+				throw error;
+			}
+
+			throw new EnsureError(
+				`Failed to ensure table "${tableName}" exists (step ${step})`,
+				{
+					operation: "ensureTable",
+					table: tableName,
+					step,
+				},
+				{
+					cause: error,
+				},
+			);
+		}
+	}
+
+	/**
+	 * Ensure constraints exist on the table.
+	 * Applies unique and foreign key constraints with preflight checks.
+	 */
+	async ensureConstraints<T extends Table<any>>(
+		table: T,
+	): Promise<EnsureResult> {
+		const tableName = table.name;
+		let step = 0;
+		let applied = false;
+
+		try {
+			step = 1;
+			const existingConstraints = await this.#getConstraints(tableName);
+
+			step = 2;
+			const uniqueApplied =
+				await this.#ensureUniqueConstraints(table, existingConstraints);
+			applied = applied || uniqueApplied;
+
+			step = 3;
+			const fkApplied =
+				await this.#ensureForeignKeys(table, existingConstraints);
+			applied = applied || fkApplied;
+
+			return {applied};
+		} catch (error) {
+			if (
+				error instanceof SchemaDriftError ||
+				error instanceof ConstraintPreflightError
+			) {
+				throw error;
+			}
+
+			throw new EnsureError(
+				`Failed to ensure constraints on table "${tableName}" (step ${step})`,
+				{
+					operation: "ensureConstraints",
+					table: tableName,
+					step,
+				},
+				{
+					cause: error,
+				},
+			);
+		}
+	}
+
+	// ========================================================================
+	// Private Helper Methods
+	// ========================================================================
+
+	async #tableExists(tableName: string): Promise<boolean> {
+		const [rows] = await this.#pool.execute(
+			`SELECT COUNT(*) as count FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`,
+			[tableName],
+		);
+		return ((rows as any[])[0]?.count ?? 0) > 0;
+	}
+
+	async #getColumns(
+		tableName: string,
+	): Promise<{name: string; type: string; notnull: boolean}[]> {
+		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
+			`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position`,
+			[tableName],
+		);
+
+		return rows.map((row) => ({
+			name: row.column_name,
+			type: row.data_type,
+			notnull: row.is_nullable === "NO",
+		}));
+	}
+
+	async #getIndexes(
+		tableName: string,
+	): Promise<{name: string; columns: string[]; unique: boolean}[]> {
+		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
+			`SELECT
+				index_name,
+				GROUP_CONCAT(column_name ORDER BY seq_in_index) as columns,
+				MAX(non_unique = 0) as is_unique
+			FROM information_schema.statistics
+			WHERE table_schema = DATABASE() AND table_name = ? AND index_name != 'PRIMARY'
+			GROUP BY index_name`,
+			[tableName],
+		);
+
+		return rows.map((row) => ({
+			name: row.index_name,
+			columns: row.columns.split(","),
+			unique: row.is_unique === 1,
+		}));
+	}
+
+	async #getConstraints(tableName: string): Promise<
+		Array<{
+			name: string;
+			type: "unique" | "foreign_key" | "primary_key";
+			columns: string[];
+			referencedTable?: string;
+			referencedColumns?: string[];
+		}>
+	> {
+		const constraints: Array<{
+			name: string;
+			type: "unique" | "foreign_key" | "primary_key";
+			columns: string[];
+			referencedTable?: string;
+			referencedColumns?: string[];
+		}> = [];
+
+		// Get unique constraints from indexes
+		const indexes = await this.#getIndexes(tableName);
+		for (const idx of indexes) {
+			if (idx.unique) {
+				constraints.push({
+					name: idx.name,
+					type: "unique",
+					columns: idx.columns,
+				});
+			}
+		}
+
+		// Get foreign keys
+		const [fkRows] = await this.#pool.execute<mysql.RowDataPacket[]>(
+			`SELECT
+				constraint_name,
+				GROUP_CONCAT(column_name ORDER BY ordinal_position) as columns,
+				referenced_table_name,
+				GROUP_CONCAT(referenced_column_name ORDER BY ordinal_position) as ref_columns
+			FROM information_schema.key_column_usage
+			WHERE table_schema = DATABASE()
+				AND table_name = ?
+				AND referenced_table_name IS NOT NULL
+			GROUP BY constraint_name, referenced_table_name`,
+			[tableName],
+		);
+
+		for (const row of fkRows) {
+			constraints.push({
+				name: row.constraint_name,
+				type: "foreign_key",
+				columns: row.columns.split(","),
+				referencedTable: row.referenced_table_name,
+				referencedColumns: row.ref_columns.split(","),
+			});
+		}
+
+		return constraints;
+	}
+
+	async #ensureMissingColumns(table: Table): Promise<boolean> {
+		const existingCols = await this.#getColumns(table.name);
+		const existingColNames = new Set(existingCols.map((c) => c.name));
+		const schemaFields = Object.keys(table.schema.shape);
+
+		let applied = false;
+
+		for (const fieldName of schemaFields) {
+			if (!existingColNames.has(fieldName)) {
+				await this.#addColumn(table, fieldName);
+				applied = true;
+			}
+		}
+
+		return applied;
+	}
+
+	async #addColumn(table: Table, fieldName: string): Promise<void> {
+		const {generateColumnDDL} = await import("./impl/ddl.js");
+		const {renderDDL} = await import("./impl/test-driver.js");
+		const zodType = table.schema.shape[fieldName] as any;
+		const fieldMeta = table.meta.fields[fieldName] || {};
+
+		const colTemplate = generateColumnDDL(
+			fieldName,
+			zodType,
+			fieldMeta,
+			"mysql",
+		);
+		const colSQL = renderDDL(colTemplate[0], colTemplate.slice(1), "mysql");
+
+		// MySQL doesn't support IF NOT EXISTS for ADD COLUMN
+		await this.#pool.execute(
+			`ALTER TABLE ${quoteIdent(table.name)} ADD COLUMN ${colSQL}`,
+			[],
+		);
+	}
+
+	async #ensureMissingIndexes(table: Table): Promise<boolean> {
+		const existingIndexes = await this.#getIndexes(table.name);
+		const existingIndexNames = new Set(existingIndexes.map((idx) => idx.name));
+		const meta = table.meta;
+
+		let applied = false;
+
+		// Per-field indexes (non-unique)
+		for (const fieldName of meta.indexed) {
+			const indexName = `idx_${table.name}_${fieldName}`;
+			if (!existingIndexNames.has(indexName)) {
+				await this.#createIndex(table.name, [fieldName], false);
+				applied = true;
+			}
+		}
+
+		// Compound indexes
+		for (const indexCols of table.indexes) {
+			const indexName = `idx_${table.name}_${indexCols.join("_")}`;
+			if (!existingIndexNames.has(indexName)) {
+				await this.#createIndex(table.name, indexCols, false);
+				applied = true;
+			}
+		}
+
+		return applied;
+	}
+
+	async #createIndex(
+		tableName: string,
+		columns: string[],
+		unique: boolean,
+	): Promise<string> {
+		// Use different prefixes for unique vs non-unique to avoid conflicts
+		const prefix = unique ? "uniq" : "idx";
+		const indexName = `${prefix}_${tableName}_${columns.join("_")}`;
+		const uniqueClause = unique ? "UNIQUE " : "";
+		const columnList = columns.map(quoteIdent).join(", ");
+		// MySQL doesn't support IF NOT EXISTS for indexes
+		const sql = `CREATE ${uniqueClause}INDEX ${quoteIdent(indexName)} ON ${quoteIdent(tableName)} (${columnList})`;
+		await this.#pool.execute(sql, []);
+		return indexName;
+	}
+
+	async #checkMissingConstraints(table: Table): Promise<void> {
+		const existingConstraints = await this.#getConstraints(table.name);
+		const meta = table.meta;
+
+		// Check unique constraints
+		for (const fieldName of Object.keys(meta.fields)) {
+			const fieldMeta = meta.fields[fieldName];
+			if (fieldMeta.unique) {
+				const hasConstraint = existingConstraints.some(
+					(c) =>
+						c.type === "unique" &&
+						c.columns.length === 1 &&
+						c.columns[0] === fieldName,
+				);
+				if (!hasConstraint) {
+					throw new SchemaDriftError(
+						`Table "${table.name}" is missing UNIQUE constraint on column "${fieldName}"`,
+						{
+							table: table.name,
+							drift: `missing unique:${fieldName}`,
+							suggestion: `Run ensureConstraints() to apply constraints`,
+						},
+					);
+				}
+			}
+		}
+
+		// Check foreign keys
+		for (const ref of meta.references) {
+			const hasFK = existingConstraints.some(
+				(c) =>
+					c.type === "foreign_key" &&
+					c.columns.length === 1 &&
+					c.columns[0] === ref.fieldName &&
+					c.referencedTable === ref.table.name &&
+					c.referencedColumns?.[0] === ref.referencedField,
+			);
+			if (!hasFK) {
+				throw new SchemaDriftError(
+					`Table "${table.name}" is missing FOREIGN KEY constraint on column "${ref.fieldName}"`,
+					{
+						table: table.name,
+						drift: `missing foreign_key:${ref.fieldName}->${ref.table.name}.${ref.referencedField}`,
+						suggestion: `Run ensureConstraints() to apply constraints`,
+					},
+				);
+			}
+		}
+	}
+
+	async #ensureUniqueConstraints(
+		table: Table,
+		existingConstraints: Array<{
+			name: string;
+			type: "unique" | "foreign_key" | "primary_key";
+			columns: string[];
+		}>,
+	): Promise<boolean> {
+		const meta = table.meta;
+		let applied = false;
+
+		// Per-field unique constraints
+		for (const fieldName of Object.keys(meta.fields)) {
+			const fieldMeta = meta.fields[fieldName];
+			if (fieldMeta.unique) {
+				const hasConstraint = existingConstraints.some(
+					(c) =>
+						c.type === "unique" &&
+						c.columns.length === 1 &&
+						c.columns[0] === fieldName,
+				);
+
+				if (!hasConstraint) {
+					// Preflight check
+					await this.#preflightUnique(table.name, [fieldName]);
+
+					// Create unique index
+					await this.#createIndex(table.name, [fieldName], true);
+					applied = true;
+				}
+			}
+		}
+
+		return applied;
+	}
+
+	async #ensureForeignKeys(
+		table: Table,
+		existingConstraints: Array<{
+			name: string;
+			type: "unique" | "foreign_key" | "primary_key";
+			columns: string[];
+			referencedTable?: string;
+			referencedColumns?: string[];
+		}>,
+	): Promise<boolean> {
+		const meta = table.meta;
+		let applied = false;
+
+		for (const ref of meta.references) {
+			const hasFK = existingConstraints.some(
+				(c) =>
+					c.type === "foreign_key" &&
+					c.columns.length === 1 &&
+					c.columns[0] === ref.fieldName &&
+					c.referencedTable === ref.table.name &&
+					c.referencedColumns?.[0] === ref.referencedField,
+			);
+
+			if (!hasFK) {
+				// Preflight check
+				await this.#preflightForeignKey(
+					table.name,
+					ref.fieldName,
+					ref.table.name,
+					ref.referencedField,
+				);
+
+				// Add foreign key constraint
+				const constraintName = `fk_${table.name}_${ref.fieldName}`;
+				const onDelete = ref.onDelete
+					? ` ON DELETE ${ref.onDelete.toUpperCase()}`
+					: "";
+
+				await this.#pool.execute(
+					`ALTER TABLE ${quoteIdent(table.name)} ADD CONSTRAINT ${quoteIdent(constraintName)} FOREIGN KEY (${quoteIdent(ref.fieldName)}) REFERENCES ${quoteIdent(ref.table.name)} (${quoteIdent(ref.referencedField)})${onDelete}`,
+					[],
+				);
+				applied = true;
+			}
+		}
+
+		return applied;
+	}
+
+	async #preflightUnique(
+		tableName: string,
+		columns: string[],
+	): Promise<void> {
+		const columnList = columns.map(quoteIdent).join(", ");
+		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
+			`SELECT COUNT(*) as count FROM ${quoteIdent(tableName)} GROUP BY ${columnList} HAVING COUNT(*) > 1`,
+			[],
+		);
+
+		const violationCount = rows.length;
+
+		if (violationCount > 0) {
+			const diagQuery = `SELECT ${columnList}, COUNT(*) FROM ${quoteIdent(tableName)} GROUP BY ${columnList} HAVING COUNT(*) > 1`;
+
+			throw new ConstraintPreflightError(
+				`Cannot add UNIQUE constraint on "${tableName}"(${columns.join(", ")}): duplicate values exist`,
+				{
+					table: tableName,
+					constraint: `unique:${columns.join(",")}`,
+					violationCount,
+					query: diagQuery,
+				},
+			);
+		}
+	}
+
+	async #preflightForeignKey(
+		tableName: string,
+		column: string,
+		refTable: string,
+		refColumn: string,
+	): Promise<void> {
+		const [rows] = await this.#pool.execute<mysql.RowDataPacket[]>(
+			`SELECT COUNT(*) as count FROM ${quoteIdent(tableName)} t WHERE t.${quoteIdent(column)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(refTable)} r WHERE r.${quoteIdent(refColumn)} = t.${quoteIdent(column)})`,
+			[],
+		);
+
+		const violationCount = parseInt(String(rows[0]?.count ?? "0"), 10);
+
+		if (violationCount > 0) {
+			const diagQuery = `SELECT t.${quoteIdent(column)} FROM ${quoteIdent(tableName)} t WHERE t.${quoteIdent(column)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(refTable)} r WHERE r.${quoteIdent(refColumn)} = t.${quoteIdent(column)})`;
+
+			throw new ConstraintPreflightError(
+				`Cannot add FOREIGN KEY constraint on "${tableName}"(${column}): ${violationCount} orphaned rows exist`,
+				{
+					table: tableName,
+					constraint: `foreign_key:${column}->${refTable}.${refColumn}`,
+					violationCount,
+					query: diagQuery,
+				},
+			);
 		}
 	}
 }
