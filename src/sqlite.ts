@@ -14,6 +14,7 @@ import {
 	isSQLIdentifier,
 } from "./zen.js";
 import type {Table} from "./impl/table.js";
+import {getTableMeta} from "./impl/table.js";
 import {
 	EnsureError,
 	SchemaDriftError,
@@ -454,7 +455,7 @@ export default class SQLiteDriver implements Driver {
 		fieldName: string,
 	): Promise<void> {
 		const zodType = table.schema.shape[fieldName];
-		const fieldMeta = table.meta.fields[fieldName] || {};
+		const fieldMeta = getTableMeta(table).fields[fieldName] || {};
 
 		const colTemplate = generateColumnDDL(
 			fieldName,
@@ -474,7 +475,7 @@ export default class SQLiteDriver implements Driver {
 	): Promise<boolean> {
 		const existingIndexes = await this.#getIndexes(table.name);
 		const existingIndexNames = new Set(existingIndexes.map((i) => i.name));
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 
 		let applied = false;
 
@@ -519,7 +520,7 @@ export default class SQLiteDriver implements Driver {
 		table: T,
 	): Promise<void> {
 		const existingConstraints = await this.#getConstraints(table.name);
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 
 		// Check for missing unique constraints
 		for (const fieldName of Object.keys(meta.fields)) {
@@ -579,7 +580,7 @@ export default class SQLiteDriver implements Driver {
 			columns: string[];
 		}[],
 	): Promise<boolean> {
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 		let applied = false;
 
 		for (const fieldName of Object.keys(meta.fields)) {
@@ -616,7 +617,7 @@ export default class SQLiteDriver implements Driver {
 			referencedColumns?: string[];
 		}[],
 	): Promise<boolean> {
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 
 		for (const ref of meta.references) {
 			const hasFk = existingConstraints.some(

@@ -8,9 +8,12 @@
  */
 
 import {describe, test, expect} from "./node-test-utils.js";
-import {table} from "./table.js";
+import {table, extendZod} from "./table.js";
 import {z} from "zod";
 import {SchemaDriftError} from "./errors.js";
+
+// Extend Zod before using .db extensions
+extendZod(z);
 
 // Connection string matching docker-compose.yml
 const MYSQL_URL = "mysql://testuser:testpass@localhost:13306/test_db";

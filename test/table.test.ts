@@ -30,9 +30,12 @@ describe("table", () => {
 
 		const fields = users.fields();
 
-		// Primary key
+		// Primary key via fields()
 		expect(fields.id.primaryKey).toBe(true);
 		expect(fields.id.type).toBe("text");
+
+		// Primary key via primaryKey() method
+		expect(users.primaryKey()).toBe("id");
 
 		// Email field
 		expect(fields.email.type).toBe("email");
@@ -181,6 +184,15 @@ describe("table", () => {
 		]);
 		expect(OrderItems.compoundReferences[0].table).toBe(OrderProducts);
 		expect(OrderItems.compoundReferences[0].as).toBe("orderProduct");
+	});
+
+	test("primaryKey() returns null for tables without primary key", () => {
+		const logs = table("logs", {
+			message: z.string(),
+			timestamp: z.date(),
+		});
+
+		expect(logs.primaryKey()).toBe(null);
 	});
 
 	test("extracts Zod 4 .meta() for UI metadata", () => {
@@ -1137,7 +1149,6 @@ describe("Circular reference detection", () => {
 // =============================================================================
 
 describe("decodeData error handling", () => {
-	const {decodeData} = require("../src/impl/table.js");
 	const {Database} = require("../src/impl/database.js");
 
 	test("malformed JSON in object field should have clear error message", async () => {

@@ -13,6 +13,7 @@ import {
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
+import {getTableMeta} from "./impl/table.js";
 import {
 	EnsureError,
 	SchemaDriftError,
@@ -560,7 +561,7 @@ export default class MySQLDriver implements Driver {
 
 	async #addColumn(table: Table, fieldName: string): Promise<void> {
 		const zodType = table.schema.shape[fieldName] as any;
-		const fieldMeta = table.meta.fields[fieldName] || {};
+		const fieldMeta = getTableMeta(table).fields[fieldName] || {};
 
 		const colTemplate = generateColumnDDL(
 			fieldName,
@@ -580,7 +581,7 @@ export default class MySQLDriver implements Driver {
 	async #ensureMissingIndexes(table: Table): Promise<boolean> {
 		const existingIndexes = await this.#getIndexes(table.name);
 		const existingIndexNames = new Set(existingIndexes.map((idx) => idx.name));
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 
 		let applied = false;
 
@@ -623,7 +624,7 @@ export default class MySQLDriver implements Driver {
 
 	async #checkMissingConstraints(table: Table): Promise<void> {
 		const existingConstraints = await this.#getConstraints(table.name);
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 
 		// Check unique constraints
 		for (const fieldName of Object.keys(meta.fields)) {
@@ -679,7 +680,7 @@ export default class MySQLDriver implements Driver {
 			columns: string[];
 		}>,
 	): Promise<boolean> {
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 		let applied = false;
 
 		// Per-field unique constraints
@@ -717,7 +718,7 @@ export default class MySQLDriver implements Driver {
 			referencedColumns?: string[];
 		}>,
 	): Promise<boolean> {
-		const meta = table.meta;
+		const meta = getTableMeta(table);
 		let applied = false;
 
 		for (const ref of meta.references) {

@@ -285,9 +285,13 @@ describe("DDL generation", () => {
 			authorId: z.string().uuid().db.references(users, "author", {
 				onDelete: "cascade",
 			}),
-			categoryId: z.string().uuid().nullable().db.references(categories, "category", {
-				onDelete: "set null",
-			}),
+			categoryId: z
+				.string()
+				.uuid()
+				.nullable()
+				.db.references(categories, "category", {
+					onDelete: "set null",
+				}),
 			title: z.string(),
 		});
 

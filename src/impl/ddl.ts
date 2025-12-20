@@ -7,6 +7,7 @@
 
 import {z} from "zod";
 import type {Table} from "./table.js";
+import {getTableMeta} from "./table.js";
 import {
 	ident,
 	makeTemplate,
@@ -246,7 +247,7 @@ export function generateDDL<T extends Table<any>>(
 ): SQLTemplate {
 	const {dialect = "sqlite", ifNotExists = true} = options;
 	const shape = table.schema.shape;
-	const meta = table.meta;
+	const meta = getTableMeta(table);
 
 	// We'll build a template that looks like:
 	// CREATE TABLE [IF NOT EXISTS] ${tableName} (

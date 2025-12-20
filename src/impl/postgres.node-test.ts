@@ -8,9 +8,12 @@
  */
 
 import {describe, test, expect} from "./node-test-utils.js";
-import {table} from "./table.js";
+import {table, extendZod} from "./table.js";
 import {z} from "zod";
 import {SchemaDriftError} from "./errors.js";
+
+// Extend Zod before using .db extensions
+extendZod(z);
 
 // Connection string matching docker-compose.yml
 const POSTGRES_URL = "postgresql://testuser:testpass@localhost:15432/test_db";
@@ -41,12 +44,15 @@ if (postgresAvailable) {
 		test("ensureTable() creates new table", async () => {
 			const driver = new PostgresDriver(POSTGRES_URL);
 
-			const users = table("test_users_create", {
-				id: z.number().int().db.primary(),
-				email: z.string(),
-			});
-
 			try {
+				// Cleanup from previous runs
+				await driver.run(["DROP TABLE IF EXISTS test_users_create"] as any, []);
+
+				const users = table("test_users_create", {
+					id: z.number().int().db.primary(),
+					email: z.string(),
+				});
+
 				const result = await driver.ensureTable(users);
 				expect(result.applied).toBe(true);
 
@@ -61,6 +67,9 @@ if (postgresAvailable) {
 			const driver = new PostgresDriver(POSTGRES_URL);
 
 			try {
+				// Cleanup from previous runs
+				await driver.run(["DROP TABLE IF EXISTS test_users_unique"] as any, []);
+
 				// Create table without unique constraint
 				await driver.run(
 					[
@@ -89,6 +98,10 @@ if (postgresAvailable) {
 			const driver = new PostgresDriver(POSTGRES_URL);
 
 			try {
+				// Cleanup from previous runs (order matters for FK)
+				await driver.run(["DROP TABLE IF EXISTS test_posts_fk"] as any, []);
+				await driver.run(["DROP TABLE IF EXISTS test_users_fk"] as any, []);
+
 				const users = table("test_users_fk", {
 					id: z.number().int().db.primary(),
 				});

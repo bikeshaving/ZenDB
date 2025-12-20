@@ -787,23 +787,53 @@ export type FieldType =
 	| "hidden";
 
 export interface FieldMeta {
+	// Field identity
 	name: string;
 	type: FieldType;
 	required: boolean;
+
+	// From .db.*() methods
 	primaryKey?: boolean;
 	unique?: boolean;
 	indexed?: boolean;
+	softDelete?: boolean;
+	reference?: {
+		table: Table<any>;
+		field: string;
+		as: string;
+		onDelete?: "cascade" | "set null" | "restrict";
+	};
+	encode?: (value: any) => any;
+	decode?: (value: any) => any;
+	columnType?: string;
+	autoIncrement?: boolean;
+	inserted?: {
+		type: "sql" | "symbol" | "function";
+		template?: SQLTemplate;
+		symbol?: SQLBuiltin;
+		fn?: () => unknown;
+	};
+	updated?: {
+		type: "sql" | "symbol" | "function";
+		template?: SQLTemplate;
+		symbol?: SQLBuiltin;
+		fn?: () => unknown;
+	};
+	upserted?: {
+		type: "sql" | "symbol" | "function";
+		template?: SQLTemplate;
+		symbol?: SQLBuiltin;
+		fn?: () => unknown;
+	};
+
+	// From Zod schema
 	default?: unknown;
 	maxLength?: number;
 	minLength?: number;
 	min?: number;
 	max?: number;
 	options?: readonly string[];
-	reference?: {
-		table: string;
-		field: string;
-		as: string;
-	};
+
 	/** Additional user-defined metadata from Zod's .meta() (label, helpText, widget, etc.) */
 	[key: string]: unknown;
 }
@@ -864,6 +894,9 @@ export interface TableOptions {
 // Symbol to identify Table objects
 const TABLE_MARKER = Symbol.for("@b9g/zen:table");
 
+// Symbol for internal table metadata (not part of public API)
+const TABLE_META = Symbol.for("@b9g/zen:table-meta");
+
 /**
  * Check if a value is a Table object.
  */
@@ -874,6 +907,29 @@ export function isTable(value: unknown): value is Table<any> {
 		TABLE_MARKER in value &&
 		(value as any)[TABLE_MARKER] === true
 	);
+}
+
+/** Internal table metadata type */
+export interface TableMeta {
+	primary: string | null;
+	unique: string[];
+	indexed: string[];
+	softDeleteField: string | null;
+	references: ReferenceInfo[];
+	fields: Record<string, FieldDBMeta>;
+	derive?: Record<string, (entity: any) => any>;
+	isPartial?: boolean;
+	isDerived?: boolean;
+	derivedExprs?: DerivedExpr[];
+	derivedFields?: string[];
+}
+
+/**
+ * Get internal metadata from a Table.
+ * For internal library use only - not part of public API.
+ */
+export function getTableMeta(table: Table<any>): TableMeta {
+	return (table as any)[TABLE_META];
 }
 
 export interface ReferenceInfo {
@@ -909,53 +965,48 @@ export type SetValues<T extends Table<any>> = {
 /**
  * A partial view of a table created via pick().
  * Can be used for queries but not for insert().
+ * Check via table.meta.isPartial at runtime.
  */
-export interface PartialTable<T extends ZodRawShape = ZodRawShape> extends Omit<
-	Table<T>,
-	"meta"
-> {
-	readonly meta: Table<T>["meta"] & {isPartial: true};
-}
+export interface PartialTable<
+	T extends ZodRawShape = ZodRawShape,
+> extends Table<T> {}
 
 /**
  * A table with SQL-derived columns created via derive().
  * Can be used for queries but not for insert/update.
+ * Check via table.meta.isDerived at runtime.
  */
-export interface DerivedTable<T extends ZodRawShape = ZodRawShape> extends Omit<
-	Table<T>,
-	"meta"
-> {
-	readonly meta: Table<T>["meta"] & {
-		isDerived: true;
-		derivedExprs: DerivedExpr[];
-		derivedFields: string[];
-	};
-}
+export interface DerivedTable<
+	T extends ZodRawShape = ZodRawShape,
+> extends Table<T> {}
 
 export interface Table<T extends ZodRawShape = ZodRawShape> {
 	readonly [TABLE_MARKER]: true;
+	/** @internal Symbol-keyed internal metadata */
+	readonly [TABLE_META]: TableMeta;
 	readonly name: string;
 	readonly schema: ZodObject<T>;
 	readonly indexes: string[][];
 	readonly unique: string[][];
 	readonly compoundReferences: CompoundReference[];
 
-	// Pre-extracted metadata (no Zod walking needed)
-	readonly meta: {
-		primary: string | null;
-		unique: string[];
-		indexed: string[];
-		softDeleteField: string | null;
-		references: ReferenceInfo[];
-		fields: Record<string, FieldDBMeta>;
-		/** Derived property functions (non-enumerable getters on entities) */
-		derive?: Record<string, (entity: any) => any>;
-		/** True if this is a partial table created via pick() */
-		isPartial?: boolean;
-	};
+	/**
+	 * @internal Internal table metadata. Use getTableMeta() or table methods instead.
+	 */
+	readonly meta: TableMeta;
 
 	/** Get field metadata for forms/admin */
 	fields(): Record<string, FieldMeta>;
+
+	/**
+	 * Get the primary key field name.
+	 *
+	 * @returns The primary key field name, or null if no primary key is defined.
+	 *
+	 * @example
+	 * const pk = Users.primaryKey(); // "id"
+	 */
+	primaryKey(): string | null;
 
 	/**
 	 * Fully qualified primary key column as SQL fragment.
@@ -1258,7 +1309,7 @@ export function table<T extends Record<string, ZodType>>(
 			meta.references.push({
 				fieldName: key,
 				table: ref.table,
-				referencedField: ref.field ?? ref.table.meta.primary ?? "id",
+				referencedField: ref.field ?? getTableMeta(ref.table).primary ?? "id",
 				as: ref.as,
 				reverseAs: ref.reverseAs,
 				onDelete: ref.onDelete,
@@ -1367,16 +1418,23 @@ function createTableObject(
 		}
 	}
 
+	// Combine options.derive with meta for internal storage
+	const internalMeta = {...meta, derive: options.derive};
+
 	const table: Table<any> = {
 		[TABLE_MARKER]: true,
+		[TABLE_META]: internalMeta,
 		name,
 		schema,
 		indexes: options.indexes ?? [],
 		unique: options.unique ?? [],
 		compoundReferences: options.references ?? [],
-		meta: {...meta, derive: options.derive},
 		cols,
 		primary,
+		// Internal getter for backward compatibility - use getTableMeta() instead
+		get meta() {
+			return internalMeta;
+		},
 
 		fields(): Record<string, FieldMeta> {
 			const result: Record<string, FieldMeta> = {};
@@ -1387,6 +1445,10 @@ function createTableObject(
 			}
 
 			return result;
+		},
+
+		primaryKey(): string | null {
+			return meta.primary;
 		},
 
 		references(): ReferenceInfo[] {
@@ -1616,7 +1678,7 @@ function createTableObject(
 
 		on(referencingTable: Table<any>, alias?: string): SQLTemplate {
 			// Find FKs in the referencing table that point to this table
-			const refs = referencingTable.meta.references.filter(
+			const refs = getTableMeta(referencingTable).references.filter(
 				(r) => r.table.name === name,
 			);
 
@@ -1653,15 +1715,12 @@ function createTableObject(
 			// Users write the JOIN clause: JOIN "users" ON ${Users.on(Posts)}
 			// For self-joins with aliases: JOIN "users" AS "author" ON ${Users.on(Posts, "author")}
 			const tableRef = alias ?? name;
-			return createTemplate(
-				makeTemplate(["", ".", " = ", ".", ""]),
-				[
-					ident(tableRef),
-					ident(ref.referencedField),
-					ident(referencingTable.name),
-					ident(ref.fieldName),
-				],
-			);
+			return createTemplate(makeTemplate(["", ".", " = ", ".", ""]), [
+				ident(tableRef),
+				ident(ref.referencedField),
+				ident(referencingTable.name),
+				ident(ref.fieldName),
+			]);
 		},
 
 		values(rows: Record<string, unknown>[]): SQLTemplate {
@@ -1838,25 +1897,39 @@ function extractFieldMeta(
 		collectedMeta,
 	} = unwrapType(zodType);
 
+	// Strip 'db' from collectedMeta - we flatten those properties directly
+	const {db: _db, ...userMeta} = collectedMeta;
+
 	const meta: FieldMeta = {
 		name,
 		type: "text",
 		required: !isOptional && !isNullable && !hasDefault,
-		...collectedMeta, // Spread user-defined metadata (label, helpText, widget, etc.)
+		...userMeta, // Spread user-defined metadata (label, helpText, widget, etc.)
 	};
 
-	// Apply database metadata
+	// Apply database metadata - merge all FieldDBMeta properties
 	if (dbMeta.primaryKey) meta.primaryKey = true;
 	if (dbMeta.unique) meta.unique = true;
 	if (dbMeta.indexed) meta.indexed = true;
+	if (dbMeta.softDelete) meta.softDelete = true;
 	if (dbMeta.reference) {
 		meta.reference = {
-			table: dbMeta.reference.table.name,
+			table: dbMeta.reference.table,
 			field:
-				dbMeta.reference.field ?? dbMeta.reference.table.meta.primary ?? "id",
+				dbMeta.reference.field ??
+				getTableMeta(dbMeta.reference.table).primary ??
+				"id",
 			as: dbMeta.reference.as,
+			onDelete: dbMeta.reference.onDelete,
 		};
 	}
+	if (dbMeta.encode) meta.encode = dbMeta.encode;
+	if (dbMeta.decode) meta.decode = dbMeta.decode;
+	if (dbMeta.columnType) meta.columnType = dbMeta.columnType;
+	if (dbMeta.autoIncrement) meta.autoIncrement = true;
+	if (dbMeta.inserted) meta.inserted = dbMeta.inserted;
+	if (dbMeta.updated) meta.updated = dbMeta.updated;
+	if (dbMeta.upserted) meta.upserted = dbMeta.upserted;
 
 	if (defaultValue !== undefined) {
 		meta.default = defaultValue;
@@ -2195,7 +2268,7 @@ export function decodeData<T extends Table<any>>(
 	const shape = table.schema.shape;
 
 	for (const [key, value] of Object.entries(data)) {
-		const fieldMeta = table.meta.fields[key];
+		const fieldMeta = getTableMeta(table).fields[key];
 		const fieldSchema = shape?.[key];
 
 		if (fieldMeta?.decode && typeof fieldMeta.decode === "function") {

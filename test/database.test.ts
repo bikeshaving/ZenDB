@@ -1,7 +1,12 @@
 import {test, expect, describe, beforeEach, mock} from "bun:test";
 import {z} from "zod";
 import {table, extendZod} from "../src/impl/table.js";
-import {Database, NOW, isSQLBuiltin, type Driver} from "../src/impl/database.js";
+import {
+	Database,
+	NOW,
+	isSQLBuiltin,
+	type Driver,
+} from "../src/impl/database.js";
 import {isSQLIdentifier} from "../src/impl/template.js";
 import {renderFragment} from "../src/impl/query.js";
 

@@ -1,5 +1,9 @@
 import {test, expect, describe, mock} from "bun:test";
-import {Database, DatabaseUpgradeEvent, type Driver} from "../src/impl/database.js";
+import {
+	Database,
+	DatabaseUpgradeEvent,
+	type Driver,
+} from "../src/impl/database.js";
 
 // Helper to build SQL from template parts
 function buildSql(strings: TemplateStringsArray): string {

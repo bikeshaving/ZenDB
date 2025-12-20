@@ -98,16 +98,10 @@ describe("Table.on()", () => {
 
 		// With alias - uses alias in ON condition for self-joins
 		const {sql: authorSql} = renderFragment(Editors.on(Articles, "author"));
-		expect(authorSql).toBe(
-			'"author"."id" = "articles"."authorId"',
-		);
+		expect(authorSql).toBe('"author"."id" = "articles"."authorId"');
 
-		const {sql: reviewerSql} = renderFragment(
-			Editors.on(Articles, "reviewer"),
-		);
-		expect(reviewerSql).toBe(
-			'"reviewer"."id" = "articles"."reviewerId"',
-		);
+		const {sql: reviewerSql} = renderFragment(Editors.on(Articles, "reviewer"));
+		expect(reviewerSql).toBe('"reviewer"."id" = "articles"."reviewerId"');
 	});
 
 	test("throws for invalid alias", () => {

@@ -828,9 +828,7 @@ describe("reverse relationships (has-many)", () => {
 
 		const postTags = table("post_tags", {
 			id: z.string().db.primary(), // Add primary key for join table
-			postId: z
-				.string()
-				.db.references(posts, "post", {reverseAs: "postTags"}),
+			postId: z.string().db.references(posts, "post", {reverseAs: "postTags"}),
 			tagId: z.string().db.references(tags, "tag", {reverseAs: "postTags"}),
 		});
 
@@ -891,9 +889,7 @@ describe("many-to-many relationships (comprehensive)", () => {
 		postId: z.string().db.references(postsTable, "post", {
 			reverseAs: "postTags",
 		}),
-		tagId: z
-			.string()
-			.db.references(tagsTable, "tag", {reverseAs: "postTags"}),
+		tagId: z.string().db.references(tagsTable, "tag", {reverseAs: "postTags"}),
 	});
 
 	test("query from posts side - get all tags for posts", () => {
