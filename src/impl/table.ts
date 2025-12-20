@@ -375,15 +375,22 @@ function createDBMethods(schema: ZodType) {
 		 *   ondelete: "cascade",
 		 * })
 		 */
-		references<RefTable extends Table<any, any>, As extends string>(
+		references<
+			RefTable extends Table<any, any>,
+			As extends string,
+			ReverseAs extends string | undefined = undefined,
+		>(
 			table: RefTable,
 			as: As,
 			options?: {
 				field?: string;
-				reverseAs?: string;
+				reverseAs?: ReverseAs;
 				onDelete?: "cascade" | "set null" | "restrict";
 			},
-		): ZodType & {readonly __refTable: RefTable; readonly __refAs: As} {
+		): ZodType & {
+			readonly __refTable: RefTable;
+			readonly __refAs: As;
+		} {
 			return setDBMeta(schema, {
 				reference: {
 					table,
@@ -2115,6 +2122,49 @@ export type Row<T extends Table<any>> = z.infer<T["schema"]>;
  */
 export type Infer<T extends Table<any>> = Row<T>;
 
+// ============================================================================
+// Join Result Types (Magic Types for Multi-Table Queries)
+// ============================================================================
+
+/**
+ * Extract the Refs type parameter from a Table.
+ */
+type GetRefs<T extends Table<any, any>> =
+	T extends Table<any, infer R> ? R : {};
+
+/**
+ * Given a primary table and a tuple of joined tables, build an object type
+ * that maps each matching ref alias to Row<RefTable>.
+ *
+ * For example, if Posts has `{ author: typeof Users }` refs and Users is in JoinedTables,
+ * this produces `{ author: Row<typeof Users> }`.
+ */
+type ResolveRefs<
+	Refs extends Record<string, Table<any, any>>,
+	JoinedTables extends readonly Table<any, any>[],
+> = {
+	[Alias in keyof Refs as Refs[Alias] extends JoinedTables[number]
+		? Alias
+		: never]: Refs[Alias] extends Table<any, any>
+		? Row<Refs[Alias]> | null
+		: never;
+};
+
+/**
+ * A row type with resolved relationship properties from joined tables.
+ *
+ * When you query `db.all([Posts, Users])`, this type produces:
+ * `Row<Posts> & { author?: Row<Users> }`
+ *
+ * @example
+ * const posts = await db.all([Posts, Users])`JOIN users ON ...`;
+ * posts[0].author?.name;  // typed as string | undefined
+ */
+export type WithRefs<
+	PrimaryTable extends Table<any, any>,
+	JoinedTables extends readonly Table<any, any>[],
+> = Row<PrimaryTable> & ResolveRefs<GetRefs<PrimaryTable>, JoinedTables>;
+
 /**
  * Type guard that evaluates to `never` for partial or derived tables.
  * Use this to prevent insert/update operations at compile time.
@@ -2209,15 +2259,23 @@ export interface ZodDBMethods<Schema extends ZodType> {
 	 *   ondelete: "cascade",
 	 * })
 	 */
-	references<RefTable extends Table<any, any>, As extends string>(
+	references<
+		RefTable extends Table<any, any>,
+		As extends string,
+		ReverseAs extends string | undefined = undefined,
+	>(
 		table: RefTable,
 		as: As,
 		options?: {
 			field?: string;
-			reverseAs?: string;
+			reverseAs?: ReverseAs;
 			onDelete?: "cascade" | "set null" | "restrict";
 		},
-	): Schema & {readonly __refTable: RefTable; readonly __refAs: As};
+	): Schema & {
+		readonly __refTable: RefTable;
+		readonly __refAs: As;
+		readonly __refReverseAs: ReverseAs;
+	};
 
 	/**
 	 * Encode app values to DB values (for INSERT/UPDATE).

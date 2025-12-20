@@ -5,7 +5,7 @@
  * Extends EventTarget for IndexedDB-style migration events.
  */
 
-import type {Table, Infer, Insert, FullTableOnly} from "./table.js";
+import type {Table, Row, Insert, FullTableOnly, WithRefs} from "./table.js";
 import {validateWithStandardSchema} from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
@@ -861,7 +861,11 @@ export class Transaction {
 	// Queries - Return Normalized Entities
 	// ==========================================================================
 
-	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
+	all<T extends Table<any, any>>(table: T): TaggedQuery<Row<T>[]>;
+	all<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+		tables: [T, ...Rest],
+	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
+	all<T extends Table<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const {strings: colStrings, values: colValues} =
@@ -896,19 +900,22 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
+			return normalize<Row<T>>(rows, tableArray as Table<any>[]);
 		};
 	}
 
-	get<T extends Table<any>>(
+	get<T extends Table<any, any>>(
 		table: T,
 		id: string | number,
-	): Promise<Infer<T> | null>;
-	get<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T> | null>;
-	get<T extends Table<any>>(
+	): Promise<Row<T> | null>;
+	get<T extends Table<any, any>>(table: T): TaggedQuery<Row<T> | null>;
+	get<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+		tables: [T, ...Rest],
+	): TaggedQuery<WithRefs<T, [T, ...Rest]> | null>;
+	get<T extends Table<any, any>>(
 		tables: T | T[],
 		id?: string | number,
-	): Promise<Infer<T> | null> | TaggedQuery<Infer<T> | null> {
+	): Promise<Row<T> | null> | TaggedQuery<Row<T> | null> {
 		// Convenience overload: get by primary key
 		if (id !== undefined) {
 			const table = tables as T;
@@ -923,7 +930,7 @@ export class Transaction {
 				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
-					return decodeData(table, row) as Infer<T>;
+					return decodeData(table, row) as Row<T>;
 				});
 		}
 
@@ -962,7 +969,7 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
+			return normalizeOne<Row<T>>(row, tableArray as Table<any>[]);
 		};
 	}
 
@@ -973,20 +980,20 @@ export class Transaction {
 	async insert<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
-	): Promise<Infer<T>>;
+	): Promise<Row<T>>;
 	async insert<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>[],
-	): Promise<Infer<T>[]>;
+	): Promise<Row<T>[]>;
 	async insert<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T> | Insert<T>[],
-	): Promise<Infer<T> | Infer<T>[]> {
+	): Promise<Row<T> | Row<T>[]> {
 		if (Array.isArray(data)) {
 			if (data.length === 0) {
 				return [];
 			}
-			const results: Infer<T>[] = [];
+			const results: Row<T>[] = [];
 			for (const row of data) {
 				results.push(await this.#insertOne(table, row));
 			}
@@ -999,7 +1006,7 @@ export class Transaction {
 	async #insertOne<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
-	): Promise<Infer<T>> {
+	): Promise<Row<T>> {
 		if (table.meta.isPartial) {
 			throw new Error(
 				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
@@ -1054,7 +1061,7 @@ export class Transaction {
 				strings,
 				values,
 			);
-			return decodeData(table, row) as Infer<T>;
+			return decodeData(table, row) as Row<T>;
 		}
 
 		// Fallback: INSERT then SELECT
@@ -1071,35 +1078,35 @@ export class Transaction {
 				values,
 			);
 			if (row) {
-				return decodeData(table, row) as Infer<T>;
+				return decodeData(table, row) as Row<T>;
 			}
 		}
 
-		return validated as Infer<T>;
+		return validated as Row<T>;
 	}
 
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		id: string | number,
-	): Promise<Infer<T> | null>;
+	): Promise<Row<T> | null>;
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		ids: (string | number)[],
-	): Promise<(Infer<T> | null)[]>;
+	): Promise<(Row<T> | null)[]>;
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
-	): TaggedQuery<Infer<T>[]>;
+	): TaggedQuery<Row<T>[]>;
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		idOrIds?: string | number | (string | number)[],
 	):
-		| Promise<Infer<T> | null>
-		| Promise<(Infer<T> | null)[]>
-		| TaggedQuery<Infer<T>[]> {
+		| Promise<Row<T> | null>
+		| Promise<(Row<T> | null)[]>
+		| TaggedQuery<Row<T>[]> {
 		if (idOrIds === undefined) {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 				return this.#updateWithWhere(table, data, strings, values);
@@ -1117,7 +1124,7 @@ export class Transaction {
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		id: string | number,
-	): Promise<Infer<T> | null> {
+	): Promise<Row<T> | null> {
 		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
@@ -1172,7 +1179,7 @@ export class Transaction {
 				values,
 			);
 			if (!row) return null;
-			return decodeData(table, row) as Infer<T>;
+			return decodeData(table, row) as Row<T>;
 		}
 
 		// Fallback: UPDATE then SELECT
@@ -1188,14 +1195,14 @@ export class Transaction {
 			selectValues,
 		);
 		if (!row) return null;
-		return decodeData(table, row) as Infer<T>;
+		return decodeData(table, row) as Row<T>;
 	}
 
 	async #updateByIds<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		ids: (string | number)[],
-	): Promise<(Infer<T> | null)[]> {
+	): Promise<(Row<T> | null)[]> {
 		if (ids.length === 0) {
 			return [];
 		}
@@ -1254,9 +1261,9 @@ export class Transaction {
 				values,
 			);
 
-			const resultMap = new Map<string | number, Infer<T>>();
+			const resultMap = new Map<string | number, Row<T>>();
 			for (const row of rows) {
-				const entity = decodeData(table, row) as Infer<T>;
+				const entity = decodeData(table, row) as Row<T>;
 				resultMap.set(row[pk] as string | number, entity);
 			}
 
@@ -1273,9 +1280,9 @@ export class Transaction {
 			selectValues,
 		);
 
-		const resultMap = new Map<string | number, Infer<T>>();
+		const resultMap = new Map<string | number, Row<T>>();
 		for (const row of rows) {
-			const entity = decodeData(table, row) as Infer<T>;
+			const entity = decodeData(table, row) as Row<T>;
 			resultMap.set(row[pk] as string | number, entity);
 		}
 
@@ -1287,7 +1294,7 @@ export class Transaction {
 		data: Partial<Insert<T>>,
 		strings: TemplateStringsArray,
 		templateValues: unknown[],
-	): Promise<Infer<T>[]> {
+	): Promise<Row<T>[]> {
 		if ((table.meta as any).isDerived) {
 			throw new Error(
 				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
@@ -1371,7 +1378,7 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return rows.map((row) => decodeData(table, row) as Infer<T>);
+			return rows.map((row) => decodeData(table, row) as Row<T>);
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
@@ -1411,7 +1418,7 @@ export class Transaction {
 			selectVals,
 		);
 
-		return rows.map((row) => decodeData(table, row) as Infer<T>);
+		return rows.map((row) => decodeData(table, row) as Row<T>);
 	}
 
 	delete<T extends Table<any>>(table: T, id: string | number): Promise<number>;
@@ -1874,14 +1881,18 @@ export class Database extends EventTarget {
 	 * // Single table
 	 * const posts = await db.all(Posts)`WHERE published = ${true}`;
 	 *
-	 * // Multi-table with joins
+	 * // Multi-table with joins (typed!)
 	 * const posts = await db.all([Posts, Users])`
 	 *   JOIN users ON users.id = posts.author_id
 	 *   WHERE published = ${true}
 	 * `;
-	 * posts[0].author.name  // "Alice"
+	 * posts[0].author.name  // typed as string!
 	 */
-	all<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T>[]> {
+	all<T extends Table<any, any>>(table: T): TaggedQuery<Row<T>[]>;
+	all<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+		tables: [T, ...Rest],
+	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
+	all<T extends Table<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
 			const {strings: colStrings, values: colValues} =
@@ -1916,7 +1927,7 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalize<Infer<T>>(rows, tableArray as Table<any>[]);
+			return normalize<Row<T>>(rows, tableArray as Table<any>[]);
 		};
 	}
 
@@ -1930,21 +1941,25 @@ export class Database extends EventTarget {
 	 * // With query
 	 * const post = await db.get(Posts)`WHERE slug = ${slug}`;
 	 *
-	 * // Multi-table
+	 * // Multi-table (typed!)
 	 * const post = await db.get([Posts, Users])`
 	 *   JOIN users ON users.id = posts.author_id
 	 *   WHERE posts.id = ${postId}
 	 * `;
+	 * post?.author.name  // typed as string!
 	 */
-	get<T extends Table<any>>(
+	get<T extends Table<any, any>>(
 		table: T,
 		id: string | number,
-	): Promise<Infer<T> | null>;
-	get<T extends Table<any>>(tables: T | T[]): TaggedQuery<Infer<T> | null>;
-	get<T extends Table<any>>(
+	): Promise<Row<T> | null>;
+	get<T extends Table<any, any>>(table: T): TaggedQuery<Row<T> | null>;
+	get<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+		tables: [T, ...Rest],
+	): TaggedQuery<WithRefs<T, [T, ...Rest]> | null>;
+	get<T extends Table<any, any>>(
 		tables: T | T[],
 		id?: string | number,
-	): Promise<Infer<T> | null> | TaggedQuery<Infer<T> | null> {
+	): Promise<Row<T> | null> | TaggedQuery<Row<T> | null> {
 		// Convenience overload: get by primary key
 		if (id !== undefined) {
 			const table = tables as T;
@@ -1959,7 +1974,7 @@ export class Database extends EventTarget {
 				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
-					return decodeData(table, row) as Infer<T>;
+					return decodeData(table, row) as Row<T>;
 				});
 		}
 
@@ -1998,7 +2013,7 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalizeOne<Infer<T>>(row, tableArray as Table<any>[]);
+			return normalizeOne<Row<T>>(row, tableArray as Table<any>[]);
 		};
 	}
 
@@ -2028,22 +2043,22 @@ export class Database extends EventTarget {
 	async insert<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
-	): Promise<Infer<T>>;
+	): Promise<Row<T>>;
 	async insert<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>[],
-	): Promise<Infer<T>[]>;
+	): Promise<Row<T>[]>;
 	async insert<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T> | Insert<T>[],
-	): Promise<Infer<T> | Infer<T>[]> {
+	): Promise<Row<T> | Row<T>[]> {
 		// Handle array insert
 		if (Array.isArray(data)) {
 			if (data.length === 0) {
 				return [];
 			}
 			// Insert each row and collect results
-			const results: Infer<T>[] = [];
+			const results: Row<T>[] = [];
 			for (const row of data) {
 				results.push(await this.#insertOne(table, row));
 			}
@@ -2056,7 +2071,7 @@ export class Database extends EventTarget {
 	async #insertOne<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Insert<T>,
-	): Promise<Infer<T>> {
+	): Promise<Row<T>> {
 		if (table.meta.isPartial) {
 			throw new Error(
 				`Cannot insert into partial table "${table.name}". Use the full table definition instead.`,
@@ -2111,7 +2126,7 @@ export class Database extends EventTarget {
 				strings,
 				values,
 			);
-			return decodeData(table, row) as Infer<T>;
+			return decodeData(table, row) as Row<T>;
 		}
 
 		// Fallback: INSERT then SELECT
@@ -2128,11 +2143,11 @@ export class Database extends EventTarget {
 				values,
 			);
 			if (row) {
-				return decodeData(table, row) as Infer<T>;
+				return decodeData(table, row) as Row<T>;
 			}
 		}
 
-		return validated as Infer<T>;
+		return validated as Row<T>;
 	}
 
 	/**
@@ -2152,24 +2167,24 @@ export class Database extends EventTarget {
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		id: string | number,
-	): Promise<Infer<T> | null>;
+	): Promise<Row<T> | null>;
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		ids: (string | number)[],
-	): Promise<(Infer<T> | null)[]>;
+	): Promise<(Row<T> | null)[]>;
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
-	): TaggedQuery<Infer<T>[]>;
+	): TaggedQuery<Row<T>[]>;
 	update<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		idOrIds?: string | number | (string | number)[],
 	):
-		| Promise<Infer<T> | null>
-		| Promise<(Infer<T> | null)[]>
-		| TaggedQuery<Infer<T>[]> {
+		| Promise<Row<T> | null>
+		| Promise<(Row<T> | null)[]>
+		| TaggedQuery<Row<T>[]> {
 		// Template overload - update with custom WHERE
 		if (idOrIds === undefined) {
 			return async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -2190,7 +2205,7 @@ export class Database extends EventTarget {
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		id: string | number,
-	): Promise<Infer<T> | null> {
+	): Promise<Row<T> | null> {
 		const pk = table.meta.primary;
 		if (!pk) {
 			throw new Error(`Table ${table.name} has no primary key defined`);
@@ -2245,7 +2260,7 @@ export class Database extends EventTarget {
 				values,
 			);
 			if (!row) return null;
-			return decodeData(table, row) as Infer<T>;
+			return decodeData(table, row) as Row<T>;
 		}
 
 		// Fallback: UPDATE then SELECT
@@ -2261,14 +2276,14 @@ export class Database extends EventTarget {
 			selectValues,
 		);
 		if (!row) return null;
-		return decodeData(table, row) as Infer<T>;
+		return decodeData(table, row) as Row<T>;
 	}
 
 	async #updateByIds<T extends Table<any>>(
 		table: T & FullTableOnly<T>,
 		data: Partial<Insert<T>>,
 		ids: (string | number)[],
-	): Promise<(Infer<T> | null)[]> {
+	): Promise<(Row<T> | null)[]> {
 		if (ids.length === 0) {
 			return [];
 		}
@@ -2327,9 +2342,9 @@ export class Database extends EventTarget {
 				values,
 			);
 
-			const resultMap = new Map<string | number, Infer<T>>();
+			const resultMap = new Map<string | number, Row<T>>();
 			for (const row of rows) {
-				const entity = decodeData(table, row) as Infer<T>;
+				const entity = decodeData(table, row) as Row<T>;
 				resultMap.set(row[pk] as string | number, entity);
 			}
 
@@ -2346,9 +2361,9 @@ export class Database extends EventTarget {
 			selectValues,
 		);
 
-		const resultMap = new Map<string | number, Infer<T>>();
+		const resultMap = new Map<string | number, Row<T>>();
 		for (const row of rows) {
-			const entity = decodeData(table, row) as Infer<T>;
+			const entity = decodeData(table, row) as Row<T>;
 			resultMap.set(row[pk] as string | number, entity);
 		}
 
@@ -2360,7 +2375,7 @@ export class Database extends EventTarget {
 		data: Partial<Insert<T>>,
 		strings: TemplateStringsArray,
 		templateValues: unknown[],
-	): Promise<Infer<T>[]> {
+	): Promise<Row<T>[]> {
 		if ((table.meta as any).isDerived) {
 			throw new Error(
 				`Cannot update derived table "${table.name}". Derived tables are SELECT-only.`,
@@ -2444,7 +2459,7 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return rows.map((row) => decodeData(table, row) as Infer<T>);
+			return rows.map((row) => decodeData(table, row) as Row<T>);
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
@@ -2484,7 +2499,7 @@ export class Database extends EventTarget {
 			selectVals,
 		);
 
-		return rows.map((row) => decodeData(table, row) as Infer<T>);
+		return rows.map((row) => decodeData(table, row) as Row<T>);
 	}
 
 	/**

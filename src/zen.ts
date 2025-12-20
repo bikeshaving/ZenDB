@@ -24,8 +24,6 @@ export {
 	type Row,
 	type Insert,
 	type Update,
-	/** @deprecated Use `Row<T>` instead */
-	type Infer,
 	type FieldMeta,
 	type FieldType,
 	type Relation,

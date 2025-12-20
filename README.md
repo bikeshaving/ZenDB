@@ -46,17 +46,16 @@ import {z, table, Database} from "@b9g/zen";
 import SQLiteDriver from "@b9g/zen/sqlite";
 
 const driver = new SQLiteDriver("file:app.db");
-const db = new Database(driver);
 
 // 1. Define tables
 const Users = table("users", {
-  id: z.string().uuid().db.primary(),
+  id: z.string().uuid().db.primary().db.auto(),
   email: z.string().email().db.unique(),
   name: z.string(),
 });
 
 const Posts = table("posts", {
-  id: z.string().uuid().db.primary(),
+  id: z.string().uuid().db.primary().db.auto(),
   authorId: z.string().uuid().db.references(Users, "author"),
   title: z.string(),
   published: z.boolean().default(false),
@@ -76,7 +75,7 @@ db.addEventListener("upgradeneeded", (e) => {
     if (e.oldVersion < 2) {
       // Evolve schema: add avatar column (safe, additive)
       const UsersV2 = table("users", {
-        id: z.string().uuid().db.primary(),
+        id: z.string().uuid().db.primary().db.auto(),
         email: z.string().email().db.unique(),
         name: z.string(),
         avatar: z.string().optional(),
@@ -89,9 +88,8 @@ db.addEventListener("upgradeneeded", (e) => {
 
 await db.open(2);
 
-// 3. Insert with validation
+// 3. Insert with validation (id auto-generated)
 const user = await db.insert(Users, {
-  id: crypto.randomUUID(),
   email: "alice@example.com",
   name: "Alice",
 });
@@ -99,34 +97,36 @@ const user = await db.insert(Users, {
 // 4. Query with normalization
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
-  WHERE ${Posts.where({published: true})}
+  WHERE ${Posts.cols.published} = ${true}
 `;
 
-posts[0].author.name;              // "Alice" — resolved from JOIN
-posts[0].author === posts[1].author; // true — same instance
+const author = posts[0].author;
+author?.name; // "Alice" — resolved from JOIN
+author === posts[1].author; // true — same instance
 
 // 5. Get by primary key
-const post = await db.get(Posts, postId);
+const post = await db.get(Posts, posts[0].id);
 
 // 6. Update
-await db.update(Users, user.id, {name: "Alice Smith"});
+await db.update(Users, {name: "Alice Smith"}, user.id);
 ```
 
 ## Table Definitions
 
 ```typescript
 import {z, table} from "@b9g/zen";
+import type {Row} from "@b9g/zen";
 
 const Users = table("users", {
-  id: z.string().uuid().db.primary(),
+  id: z.string().uuid().db.primary().db.auto(),
   email: z.string().email().db.unique(),
   name: z.string().max(100),
   role: z.enum(["user", "admin"]).default("user"),
-  createdAt: z.date().default(() => new Date()),
+  createdAt: z.date().db.auto(),
 });
 
 const Posts = table("posts", {
-  id: z.string().uuid().db.primary(),
+  id: z.string().uuid().db.primary().db.auto(),
   title: z.string(),
   content: z.string().optional(),
   authorId: z.string().uuid().db.references(Users, "author", {onDelete: "cascade"}),
@@ -141,6 +141,7 @@ The `.db` property is available on all Zod types imported from `@b9g/zen`. It pr
 - `.db.primary()` — Primary key
 - `.db.unique()` — Unique constraint
 - `.db.index()` — Create an index
+- `.db.auto()` — Auto-generate value on insert (type-aware)
 - `.db.references(table, as, {field?, reverseAs?, onDelete?})` — Foreign key with resolved property name
 - `.db.softDelete()` — Soft delete timestamp field
 - `.db.encode(fn)` — Custom encoding for database storage
@@ -156,27 +157,48 @@ extendZod(z);
 // .db is available on all Zod types
 ```
 
+**Auto-generated values with `.db.auto()`:**
+
+The `.db.auto()` modifier auto-generates values on insert based on the field type:
+
+| Type | Behavior |
+|------|----------|
+| `z.string().uuid()` | Generates UUID via `crypto.randomUUID()` |
+| `z.number().int()` | Auto-increment (database-side) |
+| `z.date()` | Current timestamp via `NOW` |
+
+```typescript
+const Users = table("users", {
+  id: z.string().uuid().db.primary().db.auto(),  // UUID generated on insert
+  name: z.string(),
+  createdAt: z.date().db.auto(),                 // NOW on insert
+});
+
+// id and createdAt are optional - auto-generated if not provided
+const user = await db.insert(Users, {name: "Alice"});
+user.id;        // "550e8400-e29b-41d4-a716-446655440000"
+user.createdAt; // 2024-01-15T10:30:00.000Z
+```
+
 **Automatic JSON encoding/decoding:**
 
 Objects (`z.object()`) and arrays (`z.array()`) are automatically serialized to JSON when stored and parsed back when read:
 
 ```typescript
 const Settings = table("settings", {
-  id: z.string().db.primary(),
+  id: z.string().uuid().db.primary().db.auto(),
   config: z.object({theme: z.string(), fontSize: z.number()}),
   tags: z.array(z.string()),
 });
 
 // On insert: config and tags are JSON.stringify'd
-await db.insert(Settings, {
-  id: "s1",
+const settings = await db.insert(Settings, {
   config: {theme: "dark", fontSize: 14},
   tags: ["admin", "premium"],
 });
 // Stored as: config='{"theme":"dark","fontSize":14}', tags='["admin","premium"]'
 
 // On read: JSON strings are parsed back to objects/arrays
-const settings = await db.get(Settings, "s1");
 settings.config.theme; // "dark" (object, not string)
 settings.tags[0];      // "admin" (array, not string)
 ```
@@ -214,10 +236,12 @@ Without `.db.type()`, DDL generation would incorrectly use JSONB for a field tha
 **Soft delete:**
 ```typescript
 const Users = table("users", {
-  id: z.string().uuid().db.primary(),
+  id: z.string().uuid().db.primary().db.auto(),
   name: z.string(),
-  deletedAt: z.date().nullable().default(null).db.softDelete(),
+  deletedAt: z.date().nullable().db.softDelete(),
 });
+
+const userId = "u1";
 
 // Soft delete a record (sets deletedAt to current timestamp)
 await db.softDelete(Users, userId);
@@ -234,8 +258,12 @@ const activeUsers = await db.all(Users)`
 
 **Compound indexes** via table options:
 ```typescript
-const Posts = table("posts", schema, {
-  indexes: [["authorId", "createdAt"]]
+const Posts = table("posts", {
+  id: z.string().db.primary(),
+  authorId: z.string(),
+  createdAt: z.date(),
+}, {
+  indexes: [["authorId", "createdAt"]],
 });
 ```
 
@@ -259,9 +287,11 @@ const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
 `;
 
-posts[0].titleUpper;  // ✅ "HELLO WORLD"
-Object.keys(posts[0]);  // ["id", "title", "authorId", "author"] (no "titleUpper")
-JSON.stringify(posts[0]);  // ✅ Excludes derived properties (non-enumerable)
+type PostWithDerived = Row<typeof Posts> & {titleUpper: string; tags: string[]};
+const post = posts[0] as PostWithDerived;
+post.titleUpper;  // ✅ "HELLO WORLD"
+Object.keys(post);  // ["id", "title", "authorId", "author"] (no "titleUpper")
+JSON.stringify(post);  // ✅ Excludes derived properties (non-enumerable)
 ```
 
 Derived properties:
@@ -287,17 +317,21 @@ const posts = await db.all([Posts, UserSummary])`
 Tagged templates with automatic parameterization:
 
 ```typescript
+const title = "Hello";
+const postId = "p1";
+const userId = "u1";
+
 // Single table query
 const posts = await db.all(Posts)`WHERE published = ${true}`;
 
 // Multi-table with joins — pass array
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
-  WHERE ${Posts.where({published: true})}
+  WHERE ${Posts.cols.published} = ${true}
 `;
 
 // Get single entity
-const post = await db.get(Posts)`WHERE slug = ${slug}`;
+const post = await db.get(Posts)`WHERE ${Posts.cols.title} = ${title}`;
 
 // Get by primary key (convenience)
 const post = await db.get(Posts, postId);
@@ -319,13 +353,19 @@ const count = await db.val<number>`SELECT COUNT(*) FROM ${Posts}`;
 Type-safe SQL fragments as methods on Table objects:
 
 ```typescript
+const postId = "p1";
+const rows = [
+  {id: "p1", title: "Hello", published: true},
+  {id: "p2", title: "World", published: false},
+];
+
 // UPDATE with set()
 await db.exec`
   UPDATE ${Posts}
-  SET ${Posts.set({title: "New Title", updatedAt: new Date()})}
+  SET ${Posts.set({title: "New Title", published: true})}
   WHERE ${Posts.cols.id} = ${postId}
 `;
-// → UPDATE "posts" SET "title" = ?, "updatedAt" = ? WHERE "posts"."id" = ?
+// → UPDATE "posts" SET "title" = ?, "published" = ? WHERE "posts"."id" = ?
 
 // JOIN with on()
 const posts = await db.all([Posts, Users])`
@@ -343,9 +383,9 @@ await db.exec`
 // Qualified column names with cols
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
-  ORDER BY ${Posts.cols.createdAt} DESC
+  ORDER BY ${Posts.cols.title} DESC
 `;
-// → ORDER BY "posts"."createdAt" DESC
+// → ORDER BY "posts"."title" DESC
 
 // Safe IN clause with in()
 const postIds = ["id1", "id2", "id3"];
@@ -362,14 +402,14 @@ const posts = await db.all(Posts)`WHERE ${Posts.in("id", [])}`;
 ```typescript
 // Insert with Zod validation (uses RETURNING to get actual row)
 const user = await db.insert(Users, {
-  id: crypto.randomUUID(),
   email: "alice@example.com",
   name: "Alice",
 });
-// Returns actual row from DB, including DB-computed defaults
+// Returns actual row from DB, including auto-generated id and DB-computed defaults
+const userId = user.id;
 
 // Update by primary key (uses RETURNING)
-const updated = await db.update(Users, userId, {name: "Bob"});
+const updated = await db.update(Users, {name: "Bob"}, userId);
 
 // Delete by primary key
 await db.delete(Users, userId);
@@ -384,14 +424,24 @@ await db.softDelete(Users, userId);
 
 ```typescript
 await db.transaction(async (tx) => {
-  const user = await tx.insert(Users, {...});
-  await tx.insert(Posts, {authorId: user.id, ...});
+  const user = await tx.insert(Users, {
+    email: "alice@example.com",
+    name: "Alice",
+  });
+  await tx.insert(Posts, {
+    authorId: user.id,
+    title: "Hello",
+    published: true,
+  });
   // Commits on success, rollbacks on error
 });
 
 // Returns values
 const user = await db.transaction(async (tx) => {
-  return await tx.insert(Users, {...});
+  return await tx.insert(Users, {
+    email: "bob@example.com",
+    name: "Bob",
+  });
 });
 ```
 
@@ -410,7 +460,7 @@ db.addEventListener("upgradeneeded", (e) => {
       await db.exec`${Posts.ensureColumn("views")}`;
     }
     if (e.oldVersion < 3) {
-      await db.exec`${Posts.ensureIndex(["authorId", "createdAt"])}`;
+      await db.exec`${Posts.ensureIndex(["title"])}`;
     }
   })());
 });
@@ -445,9 +495,9 @@ if (e.oldVersion < 2) {
 
 // Add an index
 if (e.oldVersion < 3) {
-  await db.exec`${Posts.ensureIndex(["authorId", "createdAt"])}`;
+  await db.exec`${Posts.ensureIndex(["title", "views"])}`;
 }
-// → CREATE INDEX IF NOT EXISTS "idx_posts_authorId_createdAt" ON "posts"("authorId", "createdAt")
+// → CREATE INDEX IF NOT EXISTS "idx_posts_title_views" ON "posts"("title", "views")
 
 // Safe column rename (additive, non-destructive)
 const Users = table("users", {
@@ -487,7 +537,7 @@ if (e.oldVersion < 5) {
 | Date type | TEXT | TIMESTAMPTZ | DATETIME |
 | Date default | CURRENT_TIMESTAMP | NOW() | CURRENT_TIMESTAMP |
 | Boolean | INTEGER | BOOLEAN | BOOLEAN |
-| JSON | TEXT | JSONB | JSON |
+| JSON | TEXT | JSONB | TEXT |
 | Quoting | "double" | "double" | \`backtick\` |
 
 ## Entity Normalization
@@ -499,6 +549,8 @@ The `all()`/`get()` methods:
 2. Parse rows into per-table entities
 3. Deduplicate by primary key (same PK = same object instance)
 4. Resolve `references()` to actual entity objects (forward and reverse)
+
+**Typed relationships:** When you pass multiple tables to `db.all([Posts, Users])`, the return type includes optional relationship properties based on your `references()` declarations. TypeScript knows `posts[0].author` may exist because `Posts` has a reference to `Users`.
 
 ### Forward References (belongs-to)
 
@@ -512,7 +564,7 @@ const Posts = table("posts", {
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
 `;
-// posts[0].author = {id: "u1", name: "Alice"}
+posts[0].author?.name; // typed as string | undefined
 ```
 
 ### Reverse References (has-many)
@@ -531,10 +583,10 @@ const Posts = table("posts", {
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
 `;
-// posts[0].author.posts = [{id: "p1", ...}, {id: "p2", ...}]
+posts[0].author?.posts; // [{id: "p1", ...}, {id: "p2", ...}]
 ```
 
-**Important:** Reverse relationships are runtime-only materializations. They are NOT part of TypeScript type inference and only reflect data in the current query result set. No automatic JOINs, lazy loading, or cascade fetching.
+**Note:** Reverse relationships are runtime-only materializations that reflect data in the current query result set. No automatic JOINs, lazy loading, or cascade fetching.
 
 ### Many-to-Many
 
@@ -555,18 +607,20 @@ const PostTags = table("post_tags", {
   tagId: z.string().db.references(Tags, "tag", {reverseAs: "postTags"}),
 });
 
+const postId = "p1";
+
 const results = await db.all([PostTags, Posts, Tags])`
   JOIN "posts" ON ${Posts.on(PostTags)}
   JOIN "tags" ON ${Tags.on(PostTags)}
-  WHERE ${Posts.where({id: postId})}
+  WHERE ${Posts.cols.id} = ${postId}
 `;
 
 // Access through join table:
-const tags = results.map(pt => pt.tag);
+const tags = results.map((pt) => pt.tag);
 
 // Or access via reverse relationship:
 const post = results[0].post;
-post.postTags.forEach(pt => console.log(pt.tag.name));
+post?.postTags?.forEach((pt) => console.log(pt.tag?.name));
 ```
 
 ### Serialization Rules
@@ -583,14 +637,13 @@ const post = posts[0];
 // Forward references (belongs-to): enumerable and immutable
 Object.keys(post);    // ["id", "title", "authorId", "author"]
 JSON.stringify(post); // Includes "author"
-post.author = {...};  // TypeError (immutable)
 
 // Reverse references (has-many): non-enumerable and immutable
 const author = post.author;
-Object.keys(author);    // ["id", "name"] (no "posts")
-JSON.stringify(author); // Excludes "posts" (prevents circular JSON)
-author.posts;           // Accessible (just hidden from enumeration)
-author.posts = [];      // TypeError (immutable)
+if (author) {
+  Object.keys(author);    // ["id", "name"] (no "posts")
+  JSON.stringify(author); // Excludes "posts" (prevents circular JSON)
+  author.posts;           // Accessible (just hidden from enumeration)
 
 // Circular references are safe:
 JSON.stringify(post); // No error
@@ -601,9 +654,10 @@ JSON.stringify(post); // No error
 //   "author": {"id": "u1", "name": "Alice"}  // No "posts" = no cycle
 // }
 
-// Explicit inclusion when needed:
-const explicit = {...author, posts: author.posts};
-JSON.stringify(explicit);  // Now includes posts
+  // Explicit inclusion when needed:
+  const explicit = {...author, posts: author.posts};
+  JSON.stringify(explicit);  // Now includes posts
+}
 ```
 
 **Why this design:**
@@ -616,8 +670,8 @@ JSON.stringify(explicit);  // Now includes posts
 ## Type Inference
 
 ```typescript
-type User = Infer<typeof Users>;     // Full type (after read)
-type NewUser = Insert<typeof Users>; // Insert type (respects defaults)
+type User = Row<typeof Users>;       // Full row type (after read)
+type NewUser = Insert<typeof Users>; // Insert type (respects defaults/.db.auto())
 ```
 
 ## Field Metadata
@@ -632,8 +686,8 @@ const fields = Users.fields();
 //   role: { name: "role", type: "select", options: ["user", "admin"], default: "user" },
 // }
 
-const pkName = Users._meta.primary;   // "id" (field name)
-const pkFragment = Users.primary;     // ColumnFragment: "users"."id"
+const pkName = Users.primaryKey();    // "id" (field name)
+const pkFragment = Users.primary;     // SQLTemplate: "users"."id"
 const refs = Posts.references();      // [{fieldName: "authorId", table: Users, as: "author"}]
 ```
 
@@ -729,9 +783,11 @@ await db.transaction(async (tx) => {
 Inspect generated SQL and query plans:
 
 ```typescript
+const userId = "u1";
+
 // Print SQL without executing
-const query = db.print`SELECT * FROM ${Posts} WHERE ${Posts.where({ published: true })}`;
-console.log(query.sql);     // SELECT * FROM "posts" WHERE "posts"."published" = $1
+const query = db.print`SELECT * FROM ${Posts} WHERE ${Posts.cols.published} = ${true}`;
+console.log(query.sql);     // SELECT * FROM "posts" WHERE "posts"."published" = ?
 console.log(query.params);  // [true]
 
 // Inspect DDL generation
@@ -741,15 +797,15 @@ console.log(ddl.sql);  // CREATE TABLE IF NOT EXISTS "posts" (...)
 // Analyze query execution plan
 const plan = await db.explain`
   SELECT * FROM ${Posts}
-  WHERE ${Posts.where({ authorId: userId })}
+  WHERE ${Posts.cols.authorId} = ${userId}
 `;
 console.log(plan);
 // SQLite: [{ detail: "SEARCH posts USING INDEX idx_posts_authorId (authorId=?)" }]
 // PostgreSQL: [{ "QUERY PLAN": "Index Scan using idx_posts_authorId on posts" }]
 
 // Debug fragments
-console.log(Posts.where({ published: true }).toString());
-// SQLFragment { sql: "\"posts\".\"published\" = ?", params: [true] }
+console.log(Posts.set({ title: "Updated" }).toString());
+// SQLFragment { sql: "\"title\" = ?", params: ["Updated"] }
 
 console.log(Posts.ddl().toString());
 // DDLFragment { type: "create-table", table: "posts" }
@@ -833,9 +889,9 @@ import type {
   FieldDBMeta,        // Database-specific field metadata
 
   // Type inference
-  Infer,              // Infer entity type from Table (after read)
-  Insert,             // Infer insert type from Table (respects defaults)
-  FullTableOnly,      // Type constraint for non-partial tables
+  Row,                // Infer row type from Table (after read)
+  Insert,             // Infer insert type from Table (respects defaults/.db.auto())
+  Update,             // Infer update type from Table (all fields optional)
 
   // Fragment types
   SetValues,          // Values accepted by Table.set()
@@ -858,70 +914,95 @@ import type {
 ### Table Methods
 
 ```typescript
-const Users = table("users", schema, options?);
+import {z, table} from "@b9g/zen";
+
+const Users = table("users", {
+  id: z.string().db.primary(),
+  email: z.string().email(),
+  emailAddress: z.string().email().optional(),
+  deletedAt: z.date().nullable().db.softDelete(),
+});
+
+const Posts = table("posts", {
+  id: z.string().db.primary(),
+  authorId: z.string().db.references(Users, "author"),
+  title: z.string(),
+});
+
+const rows = [{id: "u1", email: "alice@example.com", deletedAt: null}];
 
 // DDL Generation
-Users.ddl(options?)           // DDLFragment for CREATE TABLE
-Users.ensureColumn(field)     // DDLFragment for ALTER TABLE ADD COLUMN
-Users.ensureIndex(fields)     // DDLFragment for CREATE INDEX
-Users.copyColumn(from, to)    // SQLFragment for UPDATE (copy data)
+Users.ddl();                     // DDLFragment for CREATE TABLE
+Users.ensureColumn("emailAddress"); // DDLFragment for ALTER TABLE ADD COLUMN
+Users.ensureIndex(["email"]);    // DDLFragment for CREATE INDEX
+Users.copyColumn("email", "emailAddress"); // SQLFragment for UPDATE (copy data)
 
 // Query Fragments
-Users.where(conditions)       // SQLFragment for WHERE clause
-Users.set(values)             // SQLFragment for SET clause
-Users.values(rows)            // SQLFragment for INSERT VALUES
-Users.on(field)               // SQLFragment for JOIN ON (foreign key)
-Users.in(field, values)       // SQLFragment for IN clause
-Users.deleted()               // SQLFragment for soft delete check
+Users.set({email: "alice@example.com"}); // SQLFragment for SET clause
+Users.values(rows);                      // SQLFragment for INSERT VALUES
+Users.on(Posts);                         // SQLFragment for JOIN ON (foreign key)
+Users.in("id", ["u1"]);                  // SQLFragment for IN clause
+Users.deleted();                         // SQLFragment for soft delete check
 
 // Column References
-Users.cols                    // Proxy: Users.cols.email → "users"."email"
-Users.cols.email              // ColumnFragment for qualified column
-Users.primary                 // ColumnFragment for primary key column
+Users.cols.email;              // SQLTemplate for qualified column
+Users.primary;                 // SQLTemplate for primary key column
 
 // Metadata
-Users.name                    // Table name string
-Users.schema                  // Zod schema
-Users.meta                    // Table metadata (primary, indexes, etc.)
-Users.fields()                // Field metadata for form generation
-Users.references()            // Foreign key references
+Users.name;                    // Table name string
+Users.schema;                  // Zod schema
+Users.meta;                    // Table metadata (primary, indexes, etc.)
+Users.primaryKey();            // Primary key field name or null
+Users.fields();                // Field metadata for form generation
+Users.references();            // Foreign key references
 
 // Derived Tables
-Users.pick("id", "name")      // PartialTable with subset of fields
-Users.derive("fullName", ...)  // DerivedTable with computed field
+Users.pick("id", "email");     // PartialTable with subset of fields
+Users.derive("hasEmail", z.boolean())`
+  ${Users.cols.email} IS NOT NULL
+`;
 ```
 
 ### Database Methods
 
 ```typescript
-const db = new Database(driver);
+import {z, table, Database} from "@b9g/zen";
+import SQLiteDriver from "@b9g/zen/sqlite";
+
+const Users = table("users", {
+  id: z.string().db.primary(),
+  email: z.string().email(),
+});
+
+const db = new Database(new SQLiteDriver("file:app.db"));
 
 // Lifecycle
-await db.open(version)        // Open and run migrations if needed
-db.addEventListener("upgradeneeded", handler)  // Migration handler
+await db.open(1);
+db.addEventListener("upgradeneeded", () => {});
 
 // Query Methods (with normalization)
-await db.all(tables)`SQL`     // Query returning normalized entities
-await db.get(table)`SQL`      // Single entity query
-await db.get(table, id)       // Get by primary key
+await db.all(Users)`WHERE ${Users.cols.email} = ${"alice@example.com"}`;
+await db.get(Users)`WHERE ${Users.cols.id} = ${"u1"}`;
+await db.get(Users, "u1");
 
 // Raw Query Methods (no normalization)
-await db.query<T>`SQL`        // Raw query returning rows
-await db.exec`SQL`            // Execute statement (DDL, DML)
-await db.val<T>`SQL`          // Single value query
+await db.query<{count: number}>`SELECT COUNT(*) as count FROM ${Users}`;
+await db.exec`CREATE INDEX idx_users_email ON ${Users}(${Users.cols.email})`;
+await db.val<number>`SELECT COUNT(*) FROM ${Users}`;
 
 // CRUD Helpers
-await db.insert(table, data)  // Insert with validation, returns entity
-await db.update(table, id, data)  // Update by primary key
-await db.delete(table, id)    // Hard delete by primary key
-await db.softDelete(table, id)  // Soft delete (sets deletedAt)
+await db.insert(Users, {id: "u1", email: "alice@example.com"});
+await db.update(Users, {email: "alice2@example.com"}, "u1");
+await db.delete(Users, "u1");
 
 // Transactions
-await db.transaction(async (tx) => { ... })  // Transaction block
+await db.transaction(async (tx) => {
+  await tx.exec`SELECT 1`;
+});
 
 // Debugging
-db.print`SQL`                 // { sql: string, params: unknown[] }
-await db.explain`SQL`         // Query execution plan
+db.print`SELECT 1`;
+await db.explain`SELECT * FROM ${Users}`;
 ```
 
 ### Driver Exports
