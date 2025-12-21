@@ -30,7 +30,6 @@ export {
 	type FieldMeta,
 	type FieldType,
 	type Relation,
-	type InferRefs,
 	isView,
 	getViewMeta,
 	type ViewMeta,

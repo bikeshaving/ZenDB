@@ -987,7 +987,7 @@ export interface DerivedExpr {
  * Set values for updates - plain values only.
  */
 export type SetValues<T extends Table<any>> = {
-	[K in keyof Infer<T>]?: Infer<T>[K];
+	[K in keyof Row<T>]?: Row<T>[K];
 };
 
 // ============================================================================
@@ -1017,10 +1017,10 @@ type UnwrapZod<T> =
  * const Posts = table("posts", {
  *   authorId: z.string().db.references(Users, "author"),
  * });
- * type PostRefs = InferRefs<typeof Posts["schema"]["shape"]>;
+ * type PostRefs = RowRefs<typeof Posts["schema"]["shape"]>;
  * // { author: typeof Users }
  */
-export type InferRefs<T extends ZodRawShape> = {
+export type RowRefs<T extends ZodRawShape> = {
 	[K in keyof T as UnwrapZod<T[K]> extends {readonly __refAs: infer As}
 		? As extends string
 			? As
@@ -1040,7 +1040,7 @@ type FilterRefs<
 	PickedShape extends ZodRawShape,
 	OriginalRefs extends Record<string, Table<any, any>>,
 > = {
-	[Alias in keyof OriginalRefs as Alias extends keyof InferRefs<PickedShape>
+	[Alias in keyof OriginalRefs as Alias extends keyof RowRefs<PickedShape>
 		? Alias
 		: never]: OriginalRefs[Alias];
 };
@@ -1610,7 +1610,7 @@ export function table<T extends Record<string, ZodType>>(
 	name: string,
 	shape: T,
 	options: TableOptions = {},
-): Table<T, InferRefs<T>> {
+): Table<T, RowRefs<T>> {
 	// Validate table name for dangerous characters
 	validateIdentifier(name, "table");
 
@@ -2468,11 +2468,6 @@ export type Queryable<
  */
 export type Row<T extends Queryable<any>> = z.infer<T["schema"]>;
 
-/**
- * @deprecated Use `Row<T>` instead.
- */
-export type Infer<T extends Queryable<any>> = Row<T>;
-
 // ============================================================================
 // Join Result Types (Magic Types for Multi-Table Queries)
 // ============================================================================
@@ -2490,7 +2485,7 @@ type GetRefs<T extends Queryable<any, any>> =
  * For example, if Posts has `{ author: typeof Users }` refs and Users is in JoinedTables,
  * this produces `{ author: Row<typeof Users> }`.
  */
-type ResolveRefs<
+type ResolvedRow<
 	Refs extends Record<string, Table<any, any>>,
 	JoinedTables extends readonly Queryable<any, any>[],
 > = {
@@ -2511,10 +2506,10 @@ type ResolveRefs<
  * const posts = await db.all([Posts, Users])`JOIN users ON ...`;
  * posts[0].author?.name;  // typed as string | undefined
  */
-export type WithRefs<
+export type JoinedRow<
 	PrimaryTable extends Queryable<any, any>,
 	JoinedTables extends readonly Queryable<any, any>[],
-> = Row<PrimaryTable> & ResolveRefs<GetRefs<PrimaryTable>, JoinedTables>;
+> = Row<PrimaryTable> & ResolvedRow<GetRefs<PrimaryTable>, JoinedTables>;
 
 /**
  * Type guard that evaluates to `never` for partial or derived tables.

@@ -12,7 +12,7 @@ import type {
 	Row,
 	Insert,
 	FullTableOnly,
-	WithRefs,
+	JoinedRow,
 } from "./table.js";
 import {
 	validateWithStandardSchema,
@@ -959,7 +959,7 @@ export class Transaction {
 	all<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T>[]>;
 	all<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
-	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
+	): TaggedQuery<JoinedRow<T, [T, ...Rest]>[]>;
 	all<T extends Queryable<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		const primaryTable = tableArray[0];
@@ -1007,7 +1007,7 @@ export class Transaction {
 	get<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T> | null>;
 	get<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
-	): TaggedQuery<WithRefs<T, [T, ...Rest]> | null>;
+	): TaggedQuery<JoinedRow<T, [T, ...Rest]> | null>;
 	get<T extends Queryable<any, any>>(
 		tables: T | T[],
 		id?: string | number,
@@ -2002,7 +2002,7 @@ export class Database extends EventTarget {
 	all<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T>[]>;
 	all<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
-	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
+	): TaggedQuery<JoinedRow<T, [T, ...Rest]>[]>;
 	all<T extends Queryable<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		const primaryTable = tableArray[0];
@@ -2067,7 +2067,7 @@ export class Database extends EventTarget {
 	get<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T> | null>;
 	get<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
-	): TaggedQuery<WithRefs<T, [T, ...Rest]> | null>;
+	): TaggedQuery<JoinedRow<T, [T, ...Rest]> | null>;
 	get<T extends Queryable<any, any>>(
 		tables: T | T[],
 		id?: string | number,
