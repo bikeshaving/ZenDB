@@ -76,7 +76,8 @@ export function renderSQL(
 
 /**
  * Render a DDL template to SQL string.
- * DDL templates only contain identifiers (no parameter placeholders).
+ * Handles identifiers (quoted), SQL builtins (resolved), and literal values (escaped/inlined).
+ * Used for CREATE TABLE, CREATE VIEW, etc.
  */
 export function renderDDL(
 	strings: TemplateStringsArray,
@@ -88,14 +89,47 @@ export function renderDDL(
 		sql += strings[i];
 		if (i < values.length) {
 			const value = values[i];
-			if (isSQLIdentifier(value)) {
+			if (isSQLBuiltin(value)) {
+				// Resolve SQL builtins (NOW, CURRENT_DATE, etc.) to their SQL representation
+				sql += resolveSQLBuiltin(value);
+			} else if (isSQLIdentifier(value)) {
 				sql += quoteIdent(value.name, dialect);
 			} else {
-				throw new Error(`Unexpected value in DDL template: ${value}`);
+				// Inline literal values for DDL (CREATE VIEW WHERE clause, etc.)
+				sql += inlineLiteral(value, dialect);
 			}
 		}
 	}
 	return sql;
+}
+
+/**
+ * Convert a value to an inline SQL literal.
+ * Used for DDL statements where parameter placeholders aren't supported.
+ */
+function inlineLiteral(value: unknown, dialect: SQLDialect): string {
+	if (value === null || value === undefined) {
+		return "NULL";
+	}
+	if (typeof value === "boolean") {
+		// SQLite uses 0/1 for booleans
+		if (dialect === "sqlite") {
+			return value ? "1" : "0";
+		}
+		return value ? "TRUE" : "FALSE";
+	}
+	if (typeof value === "number") {
+		return String(value);
+	}
+	if (typeof value === "string") {
+		// Escape single quotes by doubling them
+		return `'${value.replace(/'/g, "''")}'`;
+	}
+	if (value instanceof Date) {
+		return `'${value.toISOString()}'`;
+	}
+	// Fallback: stringify and escape
+	return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 // ============================================================================

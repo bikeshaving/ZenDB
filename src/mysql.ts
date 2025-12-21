@@ -13,13 +13,14 @@ import {
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
+import type {View} from "./impl/table.js";
 import {getTableMeta} from "./impl/table.js";
 import {
 	EnsureError,
 	SchemaDriftError,
 	ConstraintPreflightError,
 } from "./impl/errors.js";
-import {generateDDL, generateColumnDDL} from "./impl/ddl.js";
+import {generateDDL, generateColumnDDL, generateViewDDL} from "./impl/ddl.js";
 import {
 	renderDDL,
 	quoteIdent as quoteIdentDialect,
@@ -331,6 +332,12 @@ export default class MySQLDriver implements Driver {
 	 * Throws SchemaDriftError if constraints are missing.
 	 */
 	async ensureTable<T extends Table<any>>(table: T): Promise<EnsureResult> {
+		const meta = getTableMeta(table);
+		if (meta.isView) {
+			throw new Error(
+				`Cannot ensure view "${table.name}". Use the base table "${meta.viewOf}" instead.`,
+			);
+		}
 		const tableName = table.name;
 		let step = 0;
 		let applied = false;
@@ -362,6 +369,10 @@ export default class MySQLDriver implements Driver {
 				await this.#checkMissingConstraints(table);
 			}
 
+			step = 5;
+			const viewsApplied = await this.#ensureViews(table);
+			applied = applied || viewsApplied;
+
 			return {applied};
 		} catch (error) {
 			if (
@@ -385,6 +396,51 @@ export default class MySQLDriver implements Driver {
 		}
 	}
 
+	async ensureView<T extends View<any>>(viewObj: T): Promise<EnsureResult> {
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(viewObj, {dialect: DIALECT});
+		const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
+
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#pool.execute(stmt.trim(), []);
+		}
+
+		return {applied: true};
+	}
+
+	/**
+	 * Ensure the active view exists for this table (if it has soft delete).
+	 * Creates the view using generateViewDDL.
+	 */
+	async #ensureViews<T extends Table<any>>(table: T): Promise<boolean> {
+		const meta = getTableMeta(table);
+
+		// If table has soft delete, ensure the active view is registered
+		// by accessing .active (which lazily creates it)
+		if (meta.softDeleteField && !meta.activeView) {
+			void (table as any).active;
+		}
+
+		const activeView = meta.activeView;
+
+		// Skip if no active view registered
+		if (!activeView) {
+			return false;
+		}
+
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(activeView, {dialect: DIALECT});
+		const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
+
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#pool.execute(stmt.trim(), []);
+		}
+
+		return true;
+	}
+
 	/**
 	 * Ensure constraints exist on the table.
 	 * Applies unique and foreign key constraints with preflight checks.
@@ -392,6 +448,12 @@ export default class MySQLDriver implements Driver {
 	async ensureConstraints<T extends Table<any>>(
 		table: T,
 	): Promise<EnsureResult> {
+		const meta = getTableMeta(table);
+		if (meta.isView) {
+			throw new Error(
+				`Cannot ensure view "${table.name}". Use the base table "${meta.viewOf}" instead.`,
+			);
+		}
 		const tableName = table.name;
 		let step = 0;
 		let applied = false;

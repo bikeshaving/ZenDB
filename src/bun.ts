@@ -6,7 +6,7 @@
  */
 
 import {SQL} from "bun";
-import type {Driver, Table, EnsureResult} from "./zen.js";
+import type {Driver, Table, View, EnsureResult} from "./zen.js";
 import {
 	ConstraintViolationError,
 	EnsureError,
@@ -15,7 +15,8 @@ import {
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
-import {generateDDL} from "./impl/ddl.js";
+import {getTableMeta} from "./impl/table.js";
+import {generateDDL, generateViewDDL} from "./impl/ddl.js";
 import {
 	renderDDL,
 	quoteIdent,
@@ -515,6 +516,11 @@ export default class BunDriver implements Driver {
 				await this.#checkMissingConstraints(table);
 			}
 
+			// Step 5: Ensure all defined views exist
+			step = 5;
+			const viewApplied = await this.#ensureViews(table);
+			applied = applied || viewApplied;
+
 			return {applied};
 		} catch (error) {
 			if (error instanceof SchemaDriftError || error instanceof EnsureError) {
@@ -526,6 +532,25 @@ export default class BunDriver implements Driver {
 				{cause: error},
 			);
 		}
+	}
+
+	async ensureView<T extends View<any>>(viewObj: T): Promise<EnsureResult> {
+		await this.#ensureSqliteInit();
+
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(viewObj, {dialect: this.#dialect});
+		const ddlSQL = renderDDL(
+			ddlTemplate[0],
+			ddlTemplate.slice(1),
+			this.#dialect,
+		);
+
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#sql.unsafe(stmt.trim(), []);
+		}
+
+		return {applied: true};
 	}
 
 	async ensureConstraints<T extends Table<any>>(
@@ -905,6 +930,43 @@ export default class BunDriver implements Driver {
 		}
 
 		return applied;
+	}
+
+	/**
+	 * Ensure the active view exists for this table (if it has soft delete).
+	 * Creates the view using generateViewDDL.
+	 */
+	async #ensureViews<T extends Table<any>>(table: T): Promise<boolean> {
+		const meta = getTableMeta(table);
+
+		// If table has soft delete, ensure the active view is registered
+		// by accessing .active (which lazily creates it)
+		if (meta.softDeleteField && !meta.activeView) {
+			// Access .active to trigger view creation and registration
+			void (table as any).active;
+		}
+
+		const activeView = meta.activeView;
+
+		// Skip if no active view registered
+		if (!activeView) {
+			return false;
+		}
+
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(activeView, {dialect: this.#dialect});
+		const ddlSQL = renderDDL(
+			ddlTemplate[0],
+			ddlTemplate.slice(1),
+			this.#dialect,
+		);
+
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#sql.unsafe(stmt.trim(), []);
+		}
+
+		return true;
 	}
 
 	async #createIndex(

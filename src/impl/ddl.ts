@@ -6,8 +6,8 @@
  */
 
 import {z} from "zod";
-import type {Table} from "./table.js";
-import {getTableMeta} from "./table.js";
+import type {Table, View} from "./table.js";
+import {getTableMeta, getViewMeta} from "./table.js";
 import {
 	ident,
 	makeTemplate,
@@ -450,6 +450,53 @@ export function generateDDL<T extends Table<any>>(
 		}
 		strings[strings.length - 1] += ");";
 	}
+
+	return createTemplate(makeTemplate(strings), values);
+}
+
+/**
+ * Generate CREATE VIEW DDL as a template.
+ *
+ * For views, the DDL is:
+ * DROP VIEW IF EXISTS "view_name";
+ * CREATE VIEW "view_name" AS SELECT * FROM "base_table" WHERE ...;
+ *
+ * Note: We use DROP + CREATE because SQLite doesn't support CREATE OR REPLACE VIEW.
+ */
+export function generateViewDDL<T extends View<any>>(
+	viewObj: T,
+	_options: DDLOptions = {},
+): SQLTemplate {
+	const viewMeta = getViewMeta(viewObj);
+
+	const strings: string[] = [];
+	const values: unknown[] = [];
+
+	// DROP VIEW IF EXISTS
+	strings.push("DROP VIEW IF EXISTS ");
+	values.push(ident(viewObj.name));
+	strings.push(";\n\n");
+
+	// CREATE VIEW ... AS SELECT * FROM base_table
+	strings[strings.length - 1] += "CREATE VIEW ";
+	values.push(ident(viewObj.name));
+	strings.push(" AS SELECT * FROM ");
+	values.push(ident(viewMeta.baseTable.name));
+	strings.push(" ");
+
+	// Append the WHERE clause from the view's template
+	const whereTemplate = viewMeta.whereTemplate;
+	const whereStrings = whereTemplate[0];
+	const whereValues = whereTemplate.slice(1);
+
+	// Merge the WHERE clause template
+	strings[strings.length - 1] += whereStrings[0];
+	for (let i = 0; i < whereValues.length; i++) {
+		values.push(whereValues[i]);
+		strings.push(whereStrings[i + 1]);
+	}
+
+	strings[strings.length - 1] += ";";
 
 	return createTemplate(makeTemplate(strings), values);
 }
