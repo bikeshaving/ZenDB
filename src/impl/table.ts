@@ -2806,11 +2806,16 @@ export function decodeData<T extends Queryable<any>>(
 			// Custom decoding specified - use it
 			decoded[key] = fieldMeta.decode(value);
 		} else if (fieldSchema) {
-			// Check if field is an object or array type - auto-decode from JSON
+			// Check if field needs auto-decode (JSON, boolean, date)
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {
-				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
-				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+				// Stop unwrapping if we hit a type that needs special handling
+				if (
+					core instanceof z.ZodArray ||
+					core instanceof z.ZodObject ||
+					core instanceof z.ZodBoolean ||
+					core instanceof z.ZodDate
+				) {
 					break;
 				}
 				core = (core as any).unwrap();
@@ -2832,10 +2837,29 @@ export function decodeData<T extends Queryable<any>>(
 					// Already an object (e.g., from PostgreSQL JSONB)
 					decoded[key] = value;
 				}
+			} else if (core instanceof z.ZodBoolean) {
+				// Automatic boolean decoding from 0/1 (SQLite, MySQL)
+				// Also handles string "0"/"1" from some MySQL configurations
+				if (typeof value === "number") {
+					decoded[key] = value !== 0;
+				} else if (typeof value === "string") {
+					decoded[key] = value !== "0" && value !== "";
+				} else if (typeof value === "boolean") {
+					decoded[key] = value;
+				} else {
+					decoded[key] = value;
+				}
 			} else if (core instanceof z.ZodDate) {
-				// Automatic date decoding from ISO string
+				// Automatic date decoding from datetime string
+				// Accepts both ISO 8601 ("2025-01-01T00:00:00.000Z") and
+				// space-separated UTC format ("2025-01-01 00:00:00.000")
 				if (typeof value === "string") {
-					const date = new Date(value);
+					// Normalize space-separated format to ISO 8601 for consistent parsing
+					// "2025-01-01 00:00:00.000" → "2025-01-01T00:00:00.000Z"
+					const normalized = value.includes("T")
+						? value
+						: value.replace(" ", "T") + "Z";
+					const date = new Date(normalized);
 					if (isNaN(date.getTime())) {
 						throw new Error(
 							`Invalid date value for field "${key}": "${value}" cannot be parsed as a valid date`,

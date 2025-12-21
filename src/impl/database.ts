@@ -199,7 +199,9 @@ function injectSchemaExpressions<T extends Table<any>>(
 /**
  * Encode data for database insert/update operations.
  * Converts app values → DB values using .db.encode() functions.
- * Automatically encodes objects/arrays as JSON unless custom encoding is specified.
+ * Automatically encodes:
+ * - Objects/arrays as JSON strings
+ * - Date objects as ISO 8601 strings
  */
 export function encodeData<T extends Table<any>>(
 	table: T,
@@ -216,11 +218,15 @@ export function encodeData<T extends Table<any>>(
 			// Custom encoding specified - use it
 			encoded[key] = fieldMeta.encode(value);
 		} else if (fieldSchema) {
-			// Check if field is an object or array type - auto-encode as JSON
+			// Check if field is an object, array, or date type - auto-encode
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {
-				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
-				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+				// Stop unwrapping if we hit an array, object, or date
+				if (
+					core instanceof z.ZodArray ||
+					core instanceof z.ZodObject ||
+					core instanceof z.ZodDate
+				) {
 					break;
 				}
 				core = (core as any).unwrap();
@@ -233,6 +239,17 @@ export function encodeData<T extends Table<any>>(
 			) {
 				// Automatic JSON encoding for objects and arrays
 				encoded[key] = JSON.stringify(value);
+			} else if (
+				core instanceof z.ZodDate &&
+				value instanceof Date &&
+				!isNaN(value.getTime())
+			) {
+				// Automatic datetime string encoding for Date objects
+				// Convert to UTC string: "YYYY-MM-DD HH:MM:SS.mmm"
+				// Note: This format works with SQLite, PostgreSQL, and MySQL.
+				// The Z is stripped because MySQL doesn't accept it, but we preserve
+				// UTC semantics since toISOString() always returns UTC time.
+				encoded[key] = value.toISOString().replace("T", " ").replace("Z", "");
 			} else {
 				encoded[key] = value;
 			}
