@@ -2778,20 +2778,69 @@ declare module "zod" {
 }
 
 // ============================================================================
+// Field Type Inference
+// ============================================================================
+
+/**
+ * Infer the database field type from a Zod schema.
+ * Used by encodeData() and decodeData() to determine type-specific handling.
+ *
+ * @param schema - The Zod schema for the field
+ * @returns The field type: "text", "integer", "real", "boolean", "datetime", "json"
+ */
+export function inferFieldType(schema: z.ZodTypeAny): string {
+	let core = schema;
+
+	// Unwrap optional, nullable, default, etc. wrappers
+	while (typeof (core as any).unwrap === "function") {
+		// Stop unwrapping if we hit a type that determines the field type
+		if (
+			core instanceof z.ZodArray ||
+			core instanceof z.ZodObject ||
+			core instanceof z.ZodDate ||
+			core instanceof z.ZodBoolean ||
+			core instanceof z.ZodNumber
+		) {
+			break;
+		}
+		core = (core as any).unwrap();
+	}
+
+	if (core instanceof z.ZodDate) return "datetime";
+	if (core instanceof z.ZodBoolean) return "boolean";
+	if (core instanceof z.ZodObject || core instanceof z.ZodArray) return "json";
+	if (core instanceof z.ZodNumber) return "real";
+	return "text";
+}
+
+// ============================================================================
 // Data Decoding
 // ============================================================================
 
 /**
+ * Minimal interface for driver decoding capability.
+ * Defined here to avoid circular imports from database.ts.
+ */
+export interface DriverDecoder {
+	decodeValue?(value: unknown, fieldType: string): unknown;
+}
+
+/**
  * Decode database result data into proper JS types using table schema.
  *
- * Handles:
- * - Custom .db.decode() transformations
- * - Automatic JSON parsing for object/array fields
- * - Automatic Date parsing for date fields
+ * Priority order:
+ * 1. Custom field-level .db.decode() (always wins)
+ * 2. Driver.decodeValue() (dialect-specific)
+ * 3. Auto-decode fallback (JSON.parse, 0/1→boolean, string→Date)
+ *
+ * @param table - The table/view definition
+ * @param data - The raw database row
+ * @param driver - Optional driver for dialect-specific decoding
  */
 export function decodeData<T extends Queryable<any>>(
 	table: T,
 	data: Record<string, unknown> | null,
+	driver?: DriverDecoder,
 ): Record<string, unknown> | null {
 	if (!data) return data;
 
@@ -2803,14 +2852,24 @@ export function decodeData<T extends Queryable<any>>(
 		const fieldSchema = shape?.[key];
 
 		if (fieldMeta?.decode && typeof fieldMeta.decode === "function") {
-			// Custom decoding specified - use it
+			// 1. Custom field-level decoding - always wins
 			decoded[key] = fieldMeta.decode(value);
+		} else if (driver?.decodeValue && fieldSchema) {
+			// 2. Driver-level decoding - dialect-specific
+			const fieldType = inferFieldType(fieldSchema);
+			decoded[key] = driver.decodeValue(value, fieldType);
 		} else if (fieldSchema) {
-			// Check if field is an object or array type - auto-decode from JSON
+			// 3. Auto-decode fallback
+			// Check if field needs auto-decode (JSON, boolean, date)
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {
-				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
-				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+				// Stop unwrapping if we hit a type that needs special handling
+				if (
+					core instanceof z.ZodArray ||
+					core instanceof z.ZodObject ||
+					core instanceof z.ZodBoolean ||
+					core instanceof z.ZodDate
+				) {
 					break;
 				}
 				core = (core as any).unwrap();
@@ -2832,10 +2891,29 @@ export function decodeData<T extends Queryable<any>>(
 					// Already an object (e.g., from PostgreSQL JSONB)
 					decoded[key] = value;
 				}
+			} else if (core instanceof z.ZodBoolean) {
+				// Automatic boolean decoding from 0/1 (SQLite, MySQL)
+				// Also handles string "0"/"1" from some MySQL configurations
+				if (typeof value === "number") {
+					decoded[key] = value !== 0;
+				} else if (typeof value === "string") {
+					decoded[key] = value !== "0" && value !== "";
+				} else if (typeof value === "boolean") {
+					decoded[key] = value;
+				} else {
+					decoded[key] = value;
+				}
 			} else if (core instanceof z.ZodDate) {
-				// Automatic date decoding from ISO string
+				// Automatic date decoding from datetime string
+				// Accepts both ISO 8601 ("2025-01-01T00:00:00.000Z") and
+				// space-separated UTC format ("2025-01-01 00:00:00.000")
 				if (typeof value === "string") {
-					const date = new Date(value);
+					// Normalize space-separated format to ISO 8601 for consistent parsing
+					// "2025-01-01 00:00:00.000" → "2025-01-01T00:00:00.000Z"
+					const normalized = value.includes("T")
+						? value
+						: value.replace(" ", "T") + "Z";
+					const date = new Date(normalized);
 					if (isNaN(date.getTime())) {
 						throw new Error(
 							`Invalid date value for field "${key}": "${value}" cannot be parsed as a valid date`,

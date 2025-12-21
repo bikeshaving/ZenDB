@@ -14,7 +14,11 @@ import type {
 	FullTableOnly,
 	WithRefs,
 } from "./table.js";
-import {validateWithStandardSchema, getTableMeta} from "./table.js";
+import {
+	validateWithStandardSchema,
+	getTableMeta,
+	inferFieldType,
+} from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
 import {
@@ -199,11 +203,20 @@ function injectSchemaExpressions<T extends Table<any>>(
 /**
  * Encode data for database insert/update operations.
  * Converts app values → DB values using .db.encode() functions.
- * Automatically encodes objects/arrays as JSON unless custom encoding is specified.
+ *
+ * Priority order:
+ * 1. Custom field-level .db.encode() (always wins)
+ * 2. Driver.encodeValue() (dialect-specific)
+ * 3. Auto-encode fallback (JSON.stringify, Date→string)
+ *
+ * @param table - The table definition
+ * @param data - The data to encode
+ * @param driver - Optional driver for dialect-specific encoding
  */
 export function encodeData<T extends Table<any>>(
 	table: T,
 	data: Record<string, unknown>,
+	driver?: Driver,
 ): Record<string, unknown> {
 	const encoded: Record<string, unknown> = {};
 	const shape = table.schema.shape;
@@ -213,14 +226,23 @@ export function encodeData<T extends Table<any>>(
 		const fieldSchema = shape?.[key];
 
 		if (fieldMeta?.encode && typeof fieldMeta.encode === "function") {
-			// Custom encoding specified - use it
+			// 1. Custom field-level encoding - always wins
 			encoded[key] = fieldMeta.encode(value);
+		} else if (driver?.encodeValue && fieldSchema) {
+			// 2. Driver-level encoding - dialect-specific
+			const fieldType = inferFieldType(fieldSchema);
+			encoded[key] = driver.encodeValue(value, fieldType);
 		} else if (fieldSchema) {
-			// Check if field is an object or array type - auto-encode as JSON
+			// 3. Auto-encode fallback
+			// Check if field is an object, array, or date type - auto-encode
 			let core = fieldSchema;
 			while (typeof (core as any).unwrap === "function") {
-				// Stop unwrapping if we hit an array or object (they have unwrap() but it returns the element/shape)
-				if (core instanceof z.ZodArray || core instanceof z.ZodObject) {
+				// Stop unwrapping if we hit an array, object, or date
+				if (
+					core instanceof z.ZodArray ||
+					core instanceof z.ZodObject ||
+					core instanceof z.ZodDate
+				) {
 					break;
 				}
 				core = (core as any).unwrap();
@@ -233,6 +255,17 @@ export function encodeData<T extends Table<any>>(
 			) {
 				// Automatic JSON encoding for objects and arrays
 				encoded[key] = JSON.stringify(value);
+			} else if (
+				core instanceof z.ZodDate &&
+				value instanceof Date &&
+				!isNaN(value.getTime())
+			) {
+				// Automatic datetime string encoding for Date objects
+				// Convert to UTC string: "YYYY-MM-DD HH:MM:SS.mmm"
+				// Note: This format works with SQLite, PostgreSQL, and MySQL.
+				// The Z is stripped because MySQL doesn't accept it, but we preserve
+				// UTC semantics since toISOString() always returns UTC time.
+				encoded[key] = value.toISOString().replace("T", " ").replace("Z", "");
 			} else {
 				encoded[key] = value;
 			}
@@ -349,6 +382,30 @@ export interface Driver {
 	 * Execute a function while holding an exclusive migration lock.
 	 */
 	withMigrationLock?<T>(fn: () => Promise<T>): Promise<T>;
+
+	// ==========================================================================
+	// Type encoding/decoding (optional - dialect-specific implementations)
+	// ==========================================================================
+
+	/**
+	 * Encode a JS value for database insertion.
+	 * Called for each value before building the SQL query.
+	 *
+	 * @param value - The JS value to encode
+	 * @param fieldType - The field type: "text", "integer", "real", "boolean", "datetime", "json"
+	 * @returns The encoded value suitable for this database dialect
+	 */
+	encodeValue?(value: unknown, fieldType: string): unknown;
+
+	/**
+	 * Decode a database value to JS.
+	 * Called for each column value after query execution.
+	 *
+	 * @param value - The raw database value
+	 * @param fieldType - The field type: "text", "integer", "real", "boolean", "datetime", "json"
+	 * @returns The decoded JS value
+	 */
+	decodeValue?(value: unknown, fieldType: string): unknown;
 
 	// ==========================================================================
 	// Schema ensure operations (optional - dialect-specific implementations)
@@ -939,7 +996,7 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalize<Row<T>>(rows, tableArray as Table<any>[]);
+			return normalize<Row<T>>(rows, tableArray as Table<any>[], this.#driver);
 		};
 	}
 
@@ -969,7 +1026,7 @@ export class Transaction {
 				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
-					return decodeData(table, row) as Row<T>;
+					return decodeData(table, row, this.#driver) as Row<T>;
 				});
 		}
 
@@ -1009,7 +1066,11 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalizeOne<Row<T>>(row, tableArray as Table<any>[]);
+			return normalizeOne<Row<T>>(
+				row,
+				tableArray as Table<any>[],
+				this.#driver,
+			);
 		};
 	}
 
@@ -1088,7 +1149,7 @@ export class Transaction {
 			schema,
 			regularData,
 		);
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 
 		const insertParts = buildInsertParts(
 			table.name,
@@ -1103,7 +1164,7 @@ export class Transaction {
 				strings,
 				values,
 			);
-			return decodeData(table, row) as Row<T>;
+			return decodeData(table, row, this.#driver) as Row<T>;
 		}
 
 		// Fallback: INSERT then SELECT
@@ -1120,7 +1181,7 @@ export class Transaction {
 				values,
 			);
 			if (row) {
-				return decodeData(table, row) as Row<T>;
+				return decodeData(table, row, this.#driver) as Row<T>;
 			}
 		}
 
@@ -1206,7 +1267,7 @@ export class Transaction {
 			throw new Error("No fields to update");
 		}
 
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 		const updateParts = buildUpdateByIdParts(
 			table.name,
 			pk,
@@ -1223,7 +1284,7 @@ export class Transaction {
 				values,
 			);
 			if (!row) return null;
-			return decodeData(table, row) as Row<T>;
+			return decodeData(table, row, this.#driver) as Row<T>;
 		}
 
 		// Fallback: UPDATE then SELECT
@@ -1239,7 +1300,7 @@ export class Transaction {
 			selectValues,
 		);
 		if (!row) return null;
-		return decodeData(table, row) as Row<T>;
+		return decodeData(table, row, this.#driver) as Row<T>;
 	}
 
 	async #updateByIds<T extends Table<any>>(
@@ -1288,7 +1349,7 @@ export class Transaction {
 			throw new Error("No fields to update");
 		}
 
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 		const updateParts = buildUpdateByIdsParts(
 			table.name,
 			pk,
@@ -1307,7 +1368,7 @@ export class Transaction {
 
 			const resultMap = new Map<string | number, Row<T>>();
 			for (const row of rows) {
-				const entity = decodeData(table, row) as Row<T>;
+				const entity = decodeData(table, row, this.#driver) as Row<T>;
 				resultMap.set(row[pk] as string | number, entity);
 			}
 
@@ -1326,7 +1387,7 @@ export class Transaction {
 
 		const resultMap = new Map<string | number, Row<T>>();
 		for (const row of rows) {
-			const entity = decodeData(table, row) as Row<T>;
+			const entity = decodeData(table, row, this.#driver) as Row<T>;
 			resultMap.set(row[pk] as string | number, entity);
 		}
 
@@ -1372,7 +1433,7 @@ export class Transaction {
 			throw new Error("No fields to update");
 		}
 
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 
 		// Build UPDATE template: UPDATE <table> SET <col1> = <val1>, ... WHERE ...
 		const {strings: whereStrings, values: whereValues} = expandFragments(
@@ -1422,7 +1483,7 @@ export class Transaction {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return rows.map((row) => decodeData(table, row) as Row<T>);
+			return rows.map((row) => decodeData(table, row, this.#driver) as Row<T>);
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
@@ -1462,7 +1523,7 @@ export class Transaction {
 			selectVals,
 		);
 
-		return rows.map((row) => decodeData(table, row) as Row<T>);
+		return rows.map((row) => decodeData(table, row, this.#driver) as Row<T>);
 	}
 
 	delete<T extends Table<any>>(table: T, id: string | number): Promise<number>;
@@ -1978,7 +2039,7 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalize<Row<T>>(rows, tableArray as Table<any>[]);
+			return normalize<Row<T>>(rows, tableArray as Table<any>[], this.#driver);
 		};
 	}
 
@@ -2025,7 +2086,7 @@ export class Database extends EventTarget {
 				.get<Record<string, unknown>>(strings, values)
 				.then((row) => {
 					if (!row) return null;
-					return decodeData(table, row) as Row<T>;
+					return decodeData(table, row, this.#driver) as Row<T>;
 				});
 		}
 
@@ -2065,7 +2126,11 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return normalizeOne<Row<T>>(row, tableArray as Table<any>[]);
+			return normalizeOne<Row<T>>(
+				row,
+				tableArray as Table<any>[],
+				this.#driver,
+			);
 		};
 	}
 
@@ -2165,7 +2230,7 @@ export class Database extends EventTarget {
 			schema,
 			regularData,
 		);
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 
 		const insertParts = buildInsertParts(
 			table.name,
@@ -2180,7 +2245,7 @@ export class Database extends EventTarget {
 				strings,
 				values,
 			);
-			return decodeData(table, row) as Row<T>;
+			return decodeData(table, row, this.#driver) as Row<T>;
 		}
 
 		// Fallback: INSERT then SELECT
@@ -2197,7 +2262,7 @@ export class Database extends EventTarget {
 				values,
 			);
 			if (row) {
-				return decodeData(table, row) as Row<T>;
+				return decodeData(table, row, this.#driver) as Row<T>;
 			}
 		}
 
@@ -2299,7 +2364,7 @@ export class Database extends EventTarget {
 			throw new Error("No fields to update");
 		}
 
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 		const updateParts = buildUpdateByIdParts(
 			table.name,
 			pk,
@@ -2316,7 +2381,7 @@ export class Database extends EventTarget {
 				values,
 			);
 			if (!row) return null;
-			return decodeData(table, row) as Row<T>;
+			return decodeData(table, row, this.#driver) as Row<T>;
 		}
 
 		// Fallback: UPDATE then SELECT
@@ -2332,7 +2397,7 @@ export class Database extends EventTarget {
 			selectValues,
 		);
 		if (!row) return null;
-		return decodeData(table, row) as Row<T>;
+		return decodeData(table, row, this.#driver) as Row<T>;
 	}
 
 	async #updateByIds<T extends Table<any>>(
@@ -2381,7 +2446,7 @@ export class Database extends EventTarget {
 			throw new Error("No fields to update");
 		}
 
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 		const updateParts = buildUpdateByIdsParts(
 			table.name,
 			pk,
@@ -2400,7 +2465,7 @@ export class Database extends EventTarget {
 
 			const resultMap = new Map<string | number, Row<T>>();
 			for (const row of rows) {
-				const entity = decodeData(table, row) as Row<T>;
+				const entity = decodeData(table, row, this.#driver) as Row<T>;
 				resultMap.set(row[pk] as string | number, entity);
 			}
 
@@ -2419,7 +2484,7 @@ export class Database extends EventTarget {
 
 		const resultMap = new Map<string | number, Row<T>>();
 		for (const row of rows) {
-			const entity = decodeData(table, row) as Row<T>;
+			const entity = decodeData(table, row, this.#driver) as Row<T>;
 			resultMap.set(row[pk] as string | number, entity);
 		}
 
@@ -2465,7 +2530,7 @@ export class Database extends EventTarget {
 			throw new Error("No fields to update");
 		}
 
-		const encoded = encodeData(table, validated);
+		const encoded = encodeData(table, validated, this.#driver);
 
 		// Build UPDATE template: UPDATE <table> SET <col1> = <val1>, ... WHERE ...
 		const {strings: whereStrings, values: whereValues} = expandFragments(
@@ -2515,7 +2580,7 @@ export class Database extends EventTarget {
 				makeTemplate(queryStrings),
 				queryValues,
 			);
-			return rows.map((row) => decodeData(table, row) as Row<T>);
+			return rows.map((row) => decodeData(table, row, this.#driver) as Row<T>);
 		}
 
 		// Fallback: Get IDs first, then UPDATE, then SELECT
@@ -2555,7 +2620,7 @@ export class Database extends EventTarget {
 			selectVals,
 		);
 
-		return rows.map((row) => decodeData(table, row) as Row<T>);
+		return rows.map((row) => decodeData(table, row, this.#driver) as Row<T>);
 	}
 
 	/**

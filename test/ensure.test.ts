@@ -1187,6 +1187,282 @@ for (const dialect of dialects) {
 				expect((PublishedPosts.meta as any).derivedExprs).toBeUndefined();
 				expect((PublishedPosts.meta as any).derivedFields).toBeUndefined();
 			});
+
+			it("Date objects are automatically encoded/decoded", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Events = table(`events_date_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					eventDate: z.date(),
+					optionalDate: z.date().nullable(),
+				});
+
+				await db.ensureTable(Events);
+
+				// Insert with Date objects
+				const testDate = new Date("2025-06-15T10:30:00.000Z");
+				await db.insert(Events, {
+					id: "1",
+					name: "Conference",
+					eventDate: testDate,
+					optionalDate: null,
+				});
+
+				const futureDate = new Date("2025-12-25T00:00:00.000Z");
+				await db.insert(Events, {
+					id: "2",
+					name: "Holiday",
+					eventDate: futureDate,
+					optionalDate: futureDate,
+				});
+
+				// Query and verify dates are decoded back to Date objects
+				const events = await db.all(Events)`ORDER BY ${Events.cols.id}`;
+				expect(events).toHaveLength(2);
+
+				// First event
+				expect(events[0].name).toBe("Conference");
+				expect(events[0].eventDate).toBeInstanceOf(Date);
+				expect(events[0].eventDate.toISOString()).toBe(
+					"2025-06-15T10:30:00.000Z",
+				);
+				expect(events[0].optionalDate).toBeNull();
+
+				// Second event
+				expect(events[1].name).toBe("Holiday");
+				expect(events[1].eventDate).toBeInstanceOf(Date);
+				expect(events[1].eventDate.toISOString()).toBe(
+					"2025-12-25T00:00:00.000Z",
+				);
+				expect(events[1].optionalDate).toBeInstanceOf(Date);
+				expect(events[1].optionalDate?.toISOString()).toBe(
+					"2025-12-25T00:00:00.000Z",
+				);
+
+				// Query by id to verify single record fetch
+				const event = await db.get(Events, "1");
+				expect(event).not.toBeNull();
+				expect(event!.eventDate).toBeInstanceOf(Date);
+				expect(event!.eventDate.toISOString()).toBe("2025-06-15T10:30:00.000Z");
+			});
+
+			it("Boolean values are automatically encoded/decoded", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Features = table(`features_bool_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					enabled: z.boolean(),
+					optionalFlag: z.boolean().nullable(),
+				});
+
+				await db.ensureTable(Features);
+
+				// Insert with boolean values
+				await db.insert(Features, {
+					id: "1",
+					name: "Feature A",
+					enabled: true,
+					optionalFlag: null,
+				});
+
+				await db.insert(Features, {
+					id: "2",
+					name: "Feature B",
+					enabled: false,
+					optionalFlag: true,
+				});
+
+				await db.insert(Features, {
+					id: "3",
+					name: "Feature C",
+					enabled: true,
+					optionalFlag: false,
+				});
+
+				// Query and verify booleans are decoded correctly
+				const features = await db.all(Features)`ORDER BY ${Features.cols.id}`;
+				expect(features).toHaveLength(3);
+
+				// Feature A: enabled=true, optionalFlag=null
+				expect(features[0].name).toBe("Feature A");
+				expect(features[0].enabled).toBe(true);
+				expect(typeof features[0].enabled).toBe("boolean");
+				expect(features[0].optionalFlag).toBeNull();
+
+				// Feature B: enabled=false, optionalFlag=true
+				expect(features[1].name).toBe("Feature B");
+				expect(features[1].enabled).toBe(false);
+				expect(typeof features[1].enabled).toBe("boolean");
+				expect(features[1].optionalFlag).toBe(true);
+				expect(typeof features[1].optionalFlag).toBe("boolean");
+
+				// Feature C: enabled=true, optionalFlag=false
+				expect(features[2].name).toBe("Feature C");
+				expect(features[2].enabled).toBe(true);
+				expect(features[2].optionalFlag).toBe(false);
+				expect(typeof features[2].optionalFlag).toBe("boolean");
+
+				// Query by id
+				const feature = await db.get(Features, "2");
+				expect(feature).not.toBeNull();
+				expect(feature!.enabled).toBe(false);
+				expect(typeof feature!.enabled).toBe("boolean");
+			});
+
+			it("JSON objects are automatically encoded/decoded", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Configs = table(`configs_json_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					settings: z.object({
+						theme: z.string(),
+						notifications: z.boolean(),
+						limits: z.object({
+							max: z.number(),
+							min: z.number(),
+						}),
+					}),
+					tags: z.array(z.string()).nullable(),
+				});
+
+				await db.ensureTable(Configs);
+
+				// Insert with JSON objects
+				await db.insert(Configs, {
+					id: "1",
+					name: "User Config",
+					settings: {
+						theme: "dark",
+						notifications: true,
+						limits: {max: 100, min: 0},
+					},
+					tags: ["admin", "beta"],
+				});
+
+				await db.insert(Configs, {
+					id: "2",
+					name: "Default Config",
+					settings: {
+						theme: "light",
+						notifications: false,
+						limits: {max: 50, min: 10},
+					},
+					tags: null,
+				});
+
+				// Query and verify JSON is decoded correctly
+				const configs = await db.all(Configs)`ORDER BY ${Configs.cols.id}`;
+				expect(configs).toHaveLength(2);
+
+				// First config
+				expect(configs[0].name).toBe("User Config");
+				expect(configs[0].settings).toEqual({
+					theme: "dark",
+					notifications: true,
+					limits: {max: 100, min: 0},
+				});
+				expect(configs[0].tags).toEqual(["admin", "beta"]);
+
+				// Second config
+				expect(configs[1].name).toBe("Default Config");
+				expect(configs[1].settings.theme).toBe("light");
+				expect(configs[1].settings.notifications).toBe(false);
+				expect(configs[1].tags).toBeNull();
+
+				// Query by id
+				const config = await db.get(Configs, "1");
+				expect(config).not.toBeNull();
+				expect(config!.settings.limits.max).toBe(100);
+			});
+
+			it("Type encoding/decoding works within transactions", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				const Items = table(`items_tx_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					active: z.boolean(),
+					createdAt: z.date(),
+					metadata: z.object({count: z.number()}),
+				});
+
+				await db.ensureTable(Items);
+
+				// Insert and query within transaction
+				await db.transaction(async (tx) => {
+					const now = new Date("2025-01-15T12:00:00.000Z");
+
+					await tx.insert(Items, {
+						id: "1",
+						active: true,
+						createdAt: now,
+						metadata: {count: 42},
+					});
+
+					await tx.insert(Items, {
+						id: "2",
+						active: false,
+						createdAt: now,
+						metadata: {count: 0},
+					});
+
+					// Query within transaction
+					const items = await tx.all(Items)`ORDER BY ${Items.cols.id}`;
+					expect(items).toHaveLength(2);
+
+					// Verify types are correct
+					expect(items[0].active).toBe(true);
+					expect(typeof items[0].active).toBe("boolean");
+					expect(items[0].createdAt).toBeInstanceOf(Date);
+					expect(items[0].createdAt.toISOString()).toBe(
+						"2025-01-15T12:00:00.000Z",
+					);
+					expect(items[0].metadata).toEqual({count: 42});
+
+					expect(items[1].active).toBe(false);
+					expect(typeof items[1].active).toBe("boolean");
+				});
+
+				// Verify data persisted correctly after transaction
+				const items = await db.all(Items)`ORDER BY ${Items.cols.id}`;
+				expect(items).toHaveLength(2);
+				expect(items[0].active).toBe(true);
+				expect(items[1].active).toBe(false);
+			});
+
+			it("Custom field-level encode/decode takes priority over driver", async () => {
+				if (maybeSkip()) return;
+				testId++;
+
+				// Custom encode: store array as CSV
+				// Custom decode: parse CSV back to array
+				const Records = table(`records_custom_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					tags: z
+						.array(z.string())
+						.db.encode((arr) => arr.join(","))
+						.db.decode((str: string) => str.split(","))
+						.db.type("TEXT"),
+				});
+
+				await db.ensureTable(Records);
+
+				await db.insert(Records, {
+					id: "1",
+					tags: ["alpha", "beta", "gamma"],
+				});
+
+				// Verify custom decode works (data comes back correctly)
+				const record = await db.get(Records, "1");
+				expect(record).not.toBeNull();
+				expect(record!.tags).toEqual(["alpha", "beta", "gamma"]);
+			});
 		});
 	});
 }
