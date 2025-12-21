@@ -6,7 +6,7 @@
  */
 
 import {SQL} from "bun";
-import type {Driver, Table, EnsureResult} from "./zen.js";
+import type {Driver, Table, View, EnsureResult} from "./zen.js";
 import {
 	ConstraintViolationError,
 	EnsureError,
@@ -16,7 +16,7 @@ import {
 	isSQLIdentifier,
 } from "./zen.js";
 import {getTableMeta} from "./impl/table.js";
-import {generateDDL} from "./impl/ddl.js";
+import {generateDDL, generateViewDDL} from "./impl/ddl.js";
 import {
 	renderDDL,
 	quoteIdent,
@@ -72,60 +72,6 @@ function buildSQL(
 	}
 
 	return {sql, params};
-}
-
-/**
- * Build SQL with all values inlined (for DDL like CREATE VIEW).
- * Values are escaped/quoted appropriately for the dialect.
- */
-function buildSQLInlined(
-	strings: TemplateStringsArray,
-	values: unknown[],
-	dialect: SQLDialect,
-): string {
-	let sql = strings[0];
-
-	for (let i = 0; i < values.length; i++) {
-		const value = values[i];
-		if (isSQLBuiltin(value)) {
-			sql += resolveSQLBuiltin(value) + strings[i + 1];
-		} else if (isSQLIdentifier(value)) {
-			sql += quoteIdent(value.name, dialect) + strings[i + 1];
-		} else {
-			// Inline the literal value
-			sql += inlineLiteral(value, dialect) + strings[i + 1];
-		}
-	}
-
-	return sql;
-}
-
-/**
- * Convert a value to an inline SQL literal.
- */
-function inlineLiteral(value: unknown, dialect: SQLDialect): string {
-	if (value === null || value === undefined) {
-		return "NULL";
-	}
-	if (typeof value === "boolean") {
-		// SQLite uses 0/1 for booleans
-		if (dialect === "sqlite") {
-			return value ? "1" : "0";
-		}
-		return value ? "TRUE" : "FALSE";
-	}
-	if (typeof value === "number") {
-		return String(value);
-	}
-	if (typeof value === "string") {
-		// Escape single quotes by doubling them
-		return `'${value.replace(/'/g, "''")}'`;
-	}
-	if (value instanceof Date) {
-		return `'${value.toISOString()}'`;
-	}
-	// Fallback: stringify and escape
-	return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 /**
@@ -588,6 +534,25 @@ export default class BunDriver implements Driver {
 		}
 	}
 
+	async ensureView<T extends View<any>>(viewObj: T): Promise<EnsureResult> {
+		await this.#ensureSqliteInit();
+
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(viewObj, {dialect: this.#dialect});
+		const ddlSQL = renderDDL(
+			ddlTemplate[0],
+			ddlTemplate.slice(1),
+			this.#dialect,
+		);
+
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#sql.unsafe(stmt.trim(), []);
+		}
+
+		return {applied: true};
+	}
+
 	async ensureConstraints<T extends Table<any>>(
 		table: T,
 	): Promise<EnsureResult> {
@@ -968,41 +933,37 @@ export default class BunDriver implements Driver {
 	}
 
 	/**
-	 * Ensure all defined views exist for this table.
-	 * Creates views from the table's view definitions.
+	 * Ensure the active view exists for this table (if it has soft delete).
+	 * Creates the view using generateViewDDL.
 	 */
 	async #ensureViews<T extends Table<any>>(table: T): Promise<boolean> {
 		const meta = getTableMeta(table);
-		const views = meta.views;
 
-		// Skip if no views defined
-		if (!views || views.length === 0) {
+		// If table has soft delete, ensure the active view is registered
+		// by accessing .active (which lazily creates it)
+		if (meta.softDeleteField && !meta.activeView) {
+			// Access .active to trigger view creation and registration
+			void (table as any).active;
+		}
+
+		const activeView = meta.activeView;
+
+		// Skip if no active view registered
+		if (!activeView) {
 			return false;
 		}
 
-		const tableName = table.name;
-		const quotedTable = quoteIdent(tableName, this.#dialect);
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(activeView, {dialect: this.#dialect});
+		const ddlSQL = renderDDL(
+			ddlTemplate[0],
+			ddlTemplate.slice(1),
+			this.#dialect,
+		);
 
-		for (const viewDef of views) {
-			const viewName = `${tableName}__${viewDef.name}`;
-			const quotedView = quoteIdent(viewName, this.#dialect);
-
-			// Render the WHERE clause from the template
-			// Use buildSQLInlined since CREATE VIEW doesn't support placeholders
-			const whereTemplate = viewDef.whereTemplate;
-			const whereSQL = buildSQLInlined(
-				whereTemplate[0],
-				whereTemplate.slice(1) as unknown[],
-				this.#dialect,
-			);
-
-			// SQLite doesn't support CREATE OR REPLACE VIEW
-			// Use DROP VIEW IF EXISTS + CREATE VIEW
-			await this.#sql.unsafe(`DROP VIEW IF EXISTS ${quotedView}`, []);
-			await this.#sql.unsafe(
-				`CREATE VIEW ${quotedView} AS SELECT * FROM ${quotedTable} ${whereSQL}`,
-				[],
-			);
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#sql.unsafe(stmt.trim(), []);
 		}
 
 		return true;

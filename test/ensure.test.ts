@@ -8,7 +8,7 @@
  */
 
 import {describe, it, expect, afterAll, beforeAll, beforeEach} from "bun:test";
-import {Database, table, z, ident} from "../src/impl/../zen.js";
+import {Database, table, view, z, ident} from "../src/impl/../zen.js";
 import BunDriver from "../src/impl/../bun.js";
 
 // =============================================================================
@@ -900,7 +900,7 @@ for (const dialect of dialects) {
 				await db.insert(Posts, {id: "p2", title: "Post 2", authorId: "a2"});
 
 				// Query posts with active authors only
-				const viewName = `${Authors.name}__active`;
+				const viewName = `${Authors.name}_active`;
 				const result = await db.query<{title: string; authorName: string}>`
 					SELECT ${ident("title")}, ${ident(viewName)}.${ident("name")} as ${ident("authorName")}
 					FROM ${ident(Posts.name)}
@@ -972,12 +972,15 @@ for (const dialect of dialects) {
 					role: stringField(),
 				});
 
-				// Define a custom view for admins
-				const AdminUsers = Users.view("admins")`
-					WHERE ${Users.cols.role} = ${"admin"}
-				`;
+				// Define a custom view for admins using top-level view() function
+				const AdminUsers = view(
+					`users_view_${runId}_${testId}_admins`,
+					Users,
+				)`WHERE ${Users.cols.role} = ${"admin"}`;
 
 				await db.ensureTable(Users);
+				// Ensure the view is created
+				await db.ensureView(AdminUsers);
 
 				// Insert users with different roles
 				await db.insert(Users, {id: "1", name: "Alice", role: "admin"});
@@ -1005,11 +1008,13 @@ for (const dialect of dialects) {
 				});
 
 				// View for expensive products (price > 100)
-				const ExpensiveProducts = Products.view("expensive")`
-					WHERE ${Products.cols.price} > ${100}
-				`;
+				const ExpensiveProducts = view(
+					`products_view_${runId}_${testId}_expensive`,
+					Products,
+				)`WHERE ${Products.cols.price} > ${100}`;
 
 				await db.ensureTable(Products);
+				await db.ensureView(ExpensiveProducts);
 
 				await db.insert(Products, {id: "1", name: "Cheap", price: 50});
 				await db.insert(Products, {id: "2", name: "Medium", price: 100});
@@ -1030,11 +1035,13 @@ for (const dialect of dialects) {
 					active: z.boolean(),
 				});
 
-				const ActiveUsers = Users.view("active_custom")`
-					WHERE ${Users.cols.active} = ${true}
-				`;
+				const ActiveUsers = view(
+					`users_view_ro_${runId}_${testId}_active`,
+					Users,
+				)`WHERE ${Users.cols.active} = ${true}`;
 
 				await db.ensureTable(Users);
+				await db.ensureView(ActiveUsers);
 
 				// Trying to insert into custom view should throw
 				await expect(

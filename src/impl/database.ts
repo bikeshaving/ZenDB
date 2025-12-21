@@ -5,7 +5,15 @@
  * Extends EventTarget for IndexedDB-style migration events.
  */
 
-import type {Table, Row, Insert, FullTableOnly, WithRefs} from "./table.js";
+import type {
+	Table,
+	View,
+	Queryable,
+	Row,
+	Insert,
+	FullTableOnly,
+	WithRefs,
+} from "./table.js";
 import {validateWithStandardSchema, getTableMeta} from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
@@ -370,6 +378,14 @@ export interface Driver {
 	ensureConstraints?<T extends Table<any>>(table: T): Promise<EnsureResult>;
 
 	/**
+	 * Ensure a view exists in the database.
+	 *
+	 * Creates the view if it doesn't exist, or replaces it if it does.
+	 * The base table must already exist.
+	 */
+	ensureView?<T extends View<any>>(view: T): Promise<EnsureResult>;
+
+	/**
 	 * Copy column data for safe rename migrations.
 	 *
 	 * Executes: UPDATE <table> SET <toField> = <fromField> WHERE <toField> IS NULL
@@ -615,7 +631,7 @@ function buildUpdateByIdsParts(
  * Returns template parts with identifiers as SQLIdentifier values.
  * Handles derived expressions too.
  */
-function buildSelectCols(tables: Table<any>[]): {
+function buildSelectCols(tables: Queryable<any>[]): {
 	strings: string[];
 	values: unknown[];
 } {
@@ -883,11 +899,11 @@ export class Transaction {
 	// Queries - Return Normalized Entities
 	// ==========================================================================
 
-	all<T extends Table<any, any>>(table: T): TaggedQuery<Row<T>[]>;
-	all<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+	all<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T>[]>;
+	all<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
 	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
-	all<T extends Table<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
+	all<T extends Queryable<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		const primaryTable = tableArray[0];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -927,15 +943,15 @@ export class Transaction {
 		};
 	}
 
-	get<T extends Table<any, any>>(
+	get<T extends Queryable<any, any>>(
 		table: T,
 		id: string | number,
 	): Promise<Row<T> | null>;
-	get<T extends Table<any, any>>(table: T): TaggedQuery<Row<T> | null>;
-	get<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+	get<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T> | null>;
+	get<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
 	): TaggedQuery<WithRefs<T, [T, ...Rest]> | null>;
-	get<T extends Table<any, any>>(
+	get<T extends Queryable<any, any>>(
 		tables: T | T[],
 		id?: string | number,
 	): Promise<Row<T> | null> | TaggedQuery<Row<T> | null> {
@@ -1922,11 +1938,11 @@ export class Database extends EventTarget {
 	 * `;
 	 * posts[0].author.name  // typed as string!
 	 */
-	all<T extends Table<any, any>>(table: T): TaggedQuery<Row<T>[]>;
-	all<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+	all<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T>[]>;
+	all<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
 	): TaggedQuery<WithRefs<T, [T, ...Rest]>[]>;
-	all<T extends Table<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
+	all<T extends Queryable<any, any>>(tables: T | T[]): TaggedQuery<Row<T>[]> {
 		const tableArray = Array.isArray(tables) ? tables : [tables];
 		const primaryTable = tableArray[0];
 		return async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -1983,15 +1999,15 @@ export class Database extends EventTarget {
 	 * `;
 	 * post?.author.name  // typed as string!
 	 */
-	get<T extends Table<any, any>>(
+	get<T extends Queryable<any, any>>(
 		table: T,
 		id: string | number,
 	): Promise<Row<T> | null>;
-	get<T extends Table<any, any>>(table: T): TaggedQuery<Row<T> | null>;
-	get<T extends Table<any, any>, Rest extends Table<any, any>[]>(
+	get<T extends Queryable<any, any>>(table: T): TaggedQuery<Row<T> | null>;
+	get<T extends Queryable<any, any>, Rest extends Queryable<any, any>[]>(
 		tables: [T, ...Rest],
 	): TaggedQuery<WithRefs<T, [T, ...Rest]> | null>;
-	get<T extends Table<any, any>>(
+	get<T extends Queryable<any, any>>(
 		tables: T | T[],
 		id?: string | number,
 	): Promise<Row<T> | null> | TaggedQuery<Row<T> | null> {
@@ -3058,6 +3074,34 @@ export class Database extends EventTarget {
 		}
 
 		const doEnsure = () => this.#driver.ensureTable!(table);
+
+		// Wrap in migration lock if available
+		if (this.#driver.withMigrationLock) {
+			return await this.#driver.withMigrationLock(doEnsure);
+		}
+		return await doEnsure();
+	}
+
+	/**
+	 * Ensure a view exists in the database.
+	 *
+	 * Creates the view if it doesn't exist, or replaces it if it does.
+	 * The base table must already exist.
+	 *
+	 * @example
+	 * const ActiveUsers = view("active_users", Users)`WHERE ${Users.cols.deletedAt} IS NULL`;
+	 * await db.ensureTable(Users);
+	 * await db.ensureView(ActiveUsers);
+	 */
+	async ensureView<T extends View<any>>(viewObj: T): Promise<EnsureResult> {
+		if (!this.#driver.ensureView) {
+			throw new Error(
+				"Driver does not implement ensureView(). " +
+					"Schema ensure methods require a driver with schema management support.",
+			);
+		}
+
+		const doEnsure = () => this.#driver.ensureView!(viewObj);
 
 		// Wrap in migration lock if available
 		if (this.#driver.withMigrationLock) {

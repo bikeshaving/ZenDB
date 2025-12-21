@@ -13,13 +13,14 @@ import {
 	isSQLBuiltin,
 	isSQLIdentifier,
 } from "./zen.js";
+import type {View} from "./impl/table.js";
 import {getTableMeta} from "./impl/table.js";
 import {
 	EnsureError,
 	SchemaDriftError,
 	ConstraintPreflightError,
 } from "./impl/errors.js";
-import {generateDDL, generateColumnDDL} from "./impl/ddl.js";
+import {generateDDL, generateColumnDDL, generateViewDDL} from "./impl/ddl.js";
 import {
 	renderDDL,
 	quoteIdent as quoteIdentDialect,
@@ -61,52 +62,6 @@ function buildSQL(
 	}
 
 	return {sql, params};
-}
-
-/**
- * Build SQL with all values inlined (for DDL like CREATE VIEW).
- * Values are escaped/quoted appropriately for PostgreSQL.
- */
-function buildSQLInlined(
-	strings: TemplateStringsArray,
-	values: unknown[],
-): string {
-	let sql = strings[0];
-
-	for (let i = 0; i < values.length; i++) {
-		const value = values[i];
-		if (isSQLBuiltin(value)) {
-			sql += resolveSQLBuiltin(value) + strings[i + 1];
-		} else if (isSQLIdentifier(value)) {
-			sql += quoteIdent(value.name) + strings[i + 1];
-		} else {
-			sql += inlineLiteral(value) + strings[i + 1];
-		}
-	}
-
-	return sql;
-}
-
-/**
- * Convert a value to an inline SQL literal for PostgreSQL.
- */
-function inlineLiteral(value: unknown): string {
-	if (value === null || value === undefined) {
-		return "NULL";
-	}
-	if (typeof value === "boolean") {
-		return value ? "TRUE" : "FALSE";
-	}
-	if (typeof value === "number") {
-		return String(value);
-	}
-	if (typeof value === "string") {
-		return `'${value.replace(/'/g, "''")}'`;
-	}
-	if (value instanceof Date) {
-		return `'${value.toISOString()}'`;
-	}
-	return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 /**
@@ -397,39 +352,49 @@ export default class PostgresDriver implements Driver {
 		}
 	}
 
+	async ensureView<T extends View<any>>(viewObj: T): Promise<EnsureResult> {
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(viewObj, {dialect: DIALECT});
+		const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
+
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#sql.unsafe(stmt.trim());
+		}
+
+		return {applied: true};
+	}
+
 	/**
-	 * Ensure all defined views exist for this table.
-	 * Creates views from the table's view definitions.
+	 * Ensure the active view exists for this table (if it has soft delete).
+	 * Creates the view using generateViewDDL.
 	 */
 	async #ensureViews<T extends Table<any>>(table: T): Promise<boolean> {
 		const meta = getTableMeta(table);
-		const views = meta.views;
-		if (!views || views.length === 0) {
+
+		// If table has soft delete, ensure the active view is registered
+		// by accessing .active (which lazily creates it)
+		if (meta.softDeleteField && !meta.activeView) {
+			void (table as any).active;
+		}
+
+		const activeView = meta.activeView;
+
+		// Skip if no active view registered
+		if (!activeView) {
 			return false;
 		}
 
-		const tableName = table.name;
-		const quotedTable = quoteIdent(tableName);
-		let applied = false;
+		// Generate and execute the view DDL
+		const ddlTemplate = generateViewDDL(activeView, {dialect: DIALECT});
+		const ddlSQL = renderDDL(ddlTemplate[0], ddlTemplate.slice(1), DIALECT);
 
-		for (const viewDef of views) {
-			const viewName = `${tableName}__${viewDef.name}`;
-			const quotedView = quoteIdent(viewName);
-
-			const whereTemplate = viewDef.whereTemplate;
-			const whereSQL = buildSQLInlined(
-				whereTemplate[0],
-				whereTemplate.slice(1) as unknown[],
-			);
-
-			await this.#sql.unsafe(`DROP VIEW IF EXISTS ${quotedView}`);
-			await this.#sql.unsafe(
-				`CREATE VIEW ${quotedView} AS SELECT * FROM ${quotedTable} ${whereSQL}`,
-			);
-			applied = true;
+		// Execute each statement (DROP VIEW + CREATE VIEW)
+		for (const stmt of ddlSQL.split(";").filter((s) => s.trim())) {
+			await this.#sql.unsafe(stmt.trim());
 		}
 
-		return applied;
+		return true;
 	}
 
 	/**

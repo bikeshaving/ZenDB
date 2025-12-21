@@ -19,7 +19,10 @@ export {zod as z};
 
 export {
 	table,
+	view,
 	type Table,
+	type View,
+	type Queryable,
 	type TableOptions,
 	type Row,
 	type Insert,
@@ -28,6 +31,9 @@ export {
 	type FieldType,
 	type Relation,
 	type InferRefs,
+	isView,
+	getViewMeta,
+	type ViewMeta,
 } from "./impl/table.js";
 
 // ============================================================================
