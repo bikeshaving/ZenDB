@@ -880,7 +880,13 @@ export interface CompoundReference {
 	onDelete?: "cascade" | "set null" | "restrict";
 }
 
-export interface TableOptions {
+export interface TableOptions<
+	TRow = any,
+	TDerive extends Record<string, (entity: TRow) => unknown> = Record<
+		string,
+		(entity: TRow) => unknown
+	>,
+> {
 	/** Compound indexes */
 	indexes?: string[][];
 	/** Compound unique constraints */
@@ -888,30 +894,39 @@ export interface TableOptions {
 	/** Compound foreign key references */
 	references?: CompoundReference[];
 	/**
-	 * Derived views - client-side transformations of already-fetched data.
+	 * Derived properties - client-side transformations of already-fetched data.
 	 *
 	 * Derived properties:
 	 * - Are NOT stored in the database
-	 * - Are NOT part of TypeScript type inference
+	 * - ARE part of TypeScript type inference (via Row<T>)
 	 * - Are lazy getters (computed on access)
 	 * - Are non-enumerable (don't appear in Object.keys() or JSON.stringify())
 	 * - Must be pure functions (no I/O, no side effects)
 	 * - Only transform data already in the entity
 	 *
 	 * @example
-	 * table("posts", schema, {
+	 * const Posts = table("posts", schema, {
 	 *   derive: {
-	 *     tags: (post) => post.postTags?.map(pt => pt.tag) ?? []
+	 *     titleUpper: (post) => post.title.toUpperCase(),
 	 *   }
 	 * });
 	 *
-	 * // Usage:
-	 * post.tags  // ✅ Returns array of tags (lazy getter)
-	 * JSON.stringify(post)  // ✅ Doesn't include tags (non-enumerable)
-	 * {...post, tags: post.tags}  // ✅ Explicit when needed
+	 * type Post = Row<typeof Posts>;  // includes titleUpper: string
+	 * post.titleUpper  // ✅ Typed as string
+	 * JSON.stringify(post)  // ✅ Doesn't include titleUpper (non-enumerable)
 	 */
-	derive?: Record<string, (entity: any) => any>;
+	derive?: TDerive;
 }
+
+/**
+ * Infer the derived property types from a TableOptions derive object.
+ */
+export type InferDerived<TDerive> = TDerive extends Record<
+	string,
+	(entity: any) => infer R
+>
+	? {[K in keyof TDerive]: TDerive[K] extends (entity: any) => infer R ? R : never}
+	: {};
 
 // Symbol to identify Table objects
 const TABLE_MARKER = Symbol.for("@b9g/zen:table");
@@ -984,10 +999,10 @@ export interface DerivedExpr {
 // ============================================================================
 
 /**
- * Set values for updates - plain values only.
+ * Set values for updates - schema columns only (excludes derived properties).
  */
 export type SetValues<T extends Table<any>> = {
-	[K in keyof Row<T>]?: Row<T>[K];
+	[K in keyof z.infer<T["schema"]>]?: z.infer<T["schema"]>[K];
 };
 
 // ============================================================================
@@ -1087,7 +1102,8 @@ export interface DerivedTable<
 
 export interface Table<
 	T extends ZodRawShape = ZodRawShape,
-	Refs extends Record<string, Table<any, any>> = {},
+	Refs extends Record<string, Table<any>> = {},
+	Derived extends Record<string, unknown> = {},
 > {
 	readonly [TABLE_MARKER]: true;
 	/** @internal Symbol-keyed internal metadata */
@@ -1606,11 +1622,14 @@ function createViewObject<
  *   role: z.enum(["user", "admin"]).default("user"),
  * });
  */
-export function table<T extends Record<string, ZodType>>(
+export function table<
+	T extends Record<string, ZodType>,
+	TDerive extends Record<string, (entity: z.infer<ZodObject<T>>) => unknown> = {},
+>(
 	name: string,
 	shape: T,
-	options: TableOptions = {},
-): Table<T, RowRefs<T>> {
+	options: TableOptions<z.infer<ZodObject<T>>, TDerive> = {},
+): Table<T, RowRefs<T>, InferDerived<TDerive>> {
 	// Validate table name for dangerous characters
 	validateIdentifier(name, "table");
 
@@ -2460,13 +2479,25 @@ export type Queryable<
 > = Table<T, Refs> | View<T, Refs>;
 
 /**
+ * Extract the Derived type parameter from a Table.
+ */
+type GetDerived<T> = T extends Table<any, any, infer D> ? D : {};
+
+/**
  * Infer the row type from a table or view (full entity after read).
+ * Includes derived properties if defined.
  *
  * @example
  * const Users = table("users", {...});
  * type User = Row<typeof Users>;
+ *
+ * // With derived properties:
+ * const Posts = table("posts", {...}, {
+ *   derive: { titleUpper: (p) => p.title.toUpperCase() }
+ * });
+ * type Post = Row<typeof Posts>;  // includes titleUpper: string
  */
-export type Row<T extends Queryable<any>> = z.infer<T["schema"]>;
+export type Row<T extends Queryable<any>> = z.infer<T["schema"]> & GetDerived<T>;
 
 // ============================================================================
 // Join Result Types (Magic Types for Multi-Table Queries)
@@ -2930,6 +2961,20 @@ export function decodeData<T extends Queryable<any>>(
 			}
 		} else {
 			decoded[key] = value;
+		}
+	}
+
+	// Apply derived properties as non-enumerable getters
+	const derive = getTableMeta(table).derive;
+	if (derive) {
+		for (const [propName, deriveFn] of Object.entries(derive)) {
+			Object.defineProperty(decoded, propName, {
+				get() {
+					return deriveFn(this);
+				},
+				enumerable: false,
+				configurable: true,
+			});
 		}
 	}
 

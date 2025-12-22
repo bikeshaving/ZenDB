@@ -111,6 +111,38 @@ const post = await db.get(Posts, posts[0].id);
 await db.update(Users, {name: "Alice Smith"}, user.id);
 ```
 
+## Why Zen?
+
+
+### What Zen is not:
+**Zen is not a query builder** —
+**Zen is not an ORM** —
+**Zen is not a startup** —
+
+### Safety philosophy
+
+
+**Query Generation:**
+- **No model classes** — Tables are plain definitions, not class instances
+- **No hidden JOINs** — You write all SQL explicitly
+- **No implicit query building** — No `.where().orderBy().limit()` chains
+- **No lazy loading** — Related data comes from your JOINs
+- **No ORM identity map** — Normalization is per-query, not session-wide
+
+**Migrations:**
+- **No down migrations** — Forward-only, monotonic versioning (1 → 2 → 3)
+- **No destructive helpers** — No `dropColumn()`, `dropTable()`, `renameColumn()` methods
+- **No automatic migrations** — DDL must be written explicitly in upgrade events
+- **No migration files** — Event handlers replace traditional migration folders
+- **No branching versions** — Linear version history only
+
+**Safety Philosophy:**
+- Migrations are **additive and idempotent** by design
+- Use `ensureColumn()`, `ensureIndex()`, `copyColumn()` for safe schema changes
+- Breaking changes require multi-step migrations (add, migrate data, deprecate)
+- Version numbers never decrease — rollbacks are new forward migrations
+
+
 ## Table Definitions
 
 ```typescript
@@ -286,19 +318,22 @@ const Posts = table("posts", {
   derive: {
     // Pure functions only (no I/O, no side effects)
     titleUpper: (post) => post.title.toUpperCase(),
-    tags: (post) => post.postTags?.map(pt => pt.tag) ?? [],
+    wordCount: (post) => post.title.split(" ").length,
   }
 });
+
+type Post = Row<typeof Posts>;
+// Post includes: id, title, authorId, titleUpper, wordCount
 
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
 `;
 
-type PostWithDerived = Row<typeof Posts> & {titleUpper: string; tags: string[]};
-const post = posts[0] as PostWithDerived;
-post.titleUpper;  // ✅ "HELLO WORLD"
-Object.keys(post);  // ["id", "title", "authorId", "author"] (no "titleUpper")
-JSON.stringify(post);  // ✅ Excludes derived properties (non-enumerable)
+const post = posts[0];
+post.titleUpper;  // "HELLO WORLD" — typed as string
+post.wordCount;   // 2 — typed as number
+Object.keys(post);  // ["id", "title", "authorId", "author"] (no derived props)
+JSON.stringify(post);  // Excludes derived properties (non-enumerable)
 ```
 
 Derived properties:
@@ -306,7 +341,7 @@ Derived properties:
 - Are non-enumerable (hidden from `Object.keys()` and `JSON.stringify()`)
 - Must be pure functions (no I/O, no database queries)
 - Only transform data already in the entity
-- Are NOT part of TypeScript type inference
+- Are fully typed via `Row<T>` inference
 
 **Partial selects** with `pick()`:
 ```typescript
@@ -1040,25 +1075,3 @@ import PostgresDriver from "@b9g/zen/postgres";
 // MySQL (mysql2)
 import MySQLDriver from "@b9g/zen/mysql";
 ```
-
-## What This Library Does Not Do
-
-**Query Generation:**
-- **No model classes** — Tables are plain definitions, not class instances
-- **No hidden JOINs** — You write all SQL explicitly
-- **No implicit query building** — No `.where().orderBy().limit()` chains
-- **No lazy loading** — Related data comes from your JOINs
-- **No ORM identity map** — Normalization is per-query, not session-wide
-
-**Migrations:**
-- **No down migrations** — Forward-only, monotonic versioning (1 → 2 → 3)
-- **No destructive helpers** — No `dropColumn()`, `dropTable()`, `renameColumn()` methods
-- **No automatic migrations** — DDL must be written explicitly in upgrade events
-- **No migration files** — Event handlers replace traditional migration folders
-- **No branching versions** — Linear version history only
-
-**Safety Philosophy:**
-- Migrations are **additive and idempotent** by design
-- Use `ensureColumn()`, `ensureIndex()`, `copyColumn()` for safe schema changes
-- Breaking changes require multi-step migrations (add, migrate data, deprecate)
-- Version numbers never decrease — rollbacks are new forward migrations
