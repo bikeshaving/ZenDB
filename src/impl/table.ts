@@ -1644,6 +1644,36 @@ export function table<
 		);
 	}
 
+	// Validate compound indexes have 2+ fields (use .db.index() for single fields)
+	for (const idx of options.indexes ?? []) {
+		if (idx.length < 2) {
+			throw new TableDefinitionError(
+				`Compound index in table "${name}" must have at least 2 fields. Use .db.index() for single-field indexes.`,
+				name,
+			);
+		}
+	}
+
+	// Validate compound unique constraints have 2+ fields (use .db.unique() for single fields)
+	for (const u of options.unique ?? []) {
+		if (u.length < 2) {
+			throw new TableDefinitionError(
+				`Compound unique constraint in table "${name}" must have at least 2 fields. Use .db.unique() for single-field constraints.`,
+				name,
+			);
+		}
+	}
+
+	// Validate compound foreign keys have 2+ fields (use .db.references() for single fields)
+	for (const ref of options.references ?? []) {
+		if (ref.fields.length < 2) {
+			throw new TableDefinitionError(
+				`Compound foreign key in table "${name}" must have at least 2 fields. Use .db.references() for single-field foreign keys.`,
+				name,
+			);
+		}
+	}
+
 	// Extract Zod schemas and metadata from .meta()
 	const zodShape: Record<string, ZodType> = {};
 	const meta = {

@@ -77,10 +77,10 @@ db.addEventListener("upgradeneeded", (e) => {
         id: z.string().uuid().db.primary().db.auto(),
         email: z.string().email().db.unique(),
         name: z.string(),
-        avatar: z.string().optional(),  // new field
+        avatar: z.string().optional(), // new field
       });
-      await db.ensureTable(Users);          // adds missing columns/indexes
-      await db.ensureConstraints(Users);    // applies new constraints on existing data
+      await db.ensureTable(Users); // adds missing columns/indexes
+      await db.ensureConstraints(Users); // applies new constraints on existing data
     }
   })());
 });
@@ -205,7 +205,7 @@ const Users = table("users", {
 
 // id and createdAt are optional - auto-generated if not provided
 const user = await db.insert(Users, {name: "Alice"});
-user.id;        // "550e8400-e29b-41d4-a716-446655440000"
+user.id; // "550e8400-e29b-41d4-a716-446655440000"
 user.createdAt; // 2024-01-15T10:30:00.000Z
 ```
 
@@ -256,7 +256,7 @@ const settings = await db.insert(Settings, {
 
 // On read: JSON strings are parsed back to objects/arrays
 settings.config.theme; // "dark" (object, not string)
-settings.tags[0];      // "admin" (array, not string)
+settings.tags[0]; // "admin" (array, not string)
 ```
 
 **Custom encoding/decoding:**
@@ -319,14 +319,16 @@ const posts = await db.all([Posts, Users.active])`
 `;
 ```
 
-**Compound indexes** via table options:
+**Compound indexes and unique constraints** via table options:
 ```typescript
 const Posts = table("posts", {
   id: z.string().db.primary(),
   authorId: z.string(),
+  slug: z.string(),
   createdAt: z.date(),
 }, {
   indexes: [["authorId", "createdAt"]],
+  unique: [["authorId", "slug"]],  // unique together
 });
 ```
 
@@ -373,16 +375,16 @@ type Post = Row<typeof Posts>;
 // Post includes: id, title, authorId, titleUpper, tags
 
 const posts = await db.all([Posts, Users, PostTags, Tags])`
-  JOIN "users" ON ${Users.on(Posts)}
-  LEFT JOIN "post_tags" ON ${PostTags.cols.postId} = ${Posts.cols.id}
-  LEFT JOIN "tags" ON ${Tags.on(PostTags)}
+  JOIN ${Users} ON ${Users.on(Posts)}
+  LEFT JOIN ${PostTags} ON ${PostTags.cols.postId} = ${Posts.cols.id}
+  LEFT JOIN ${Tags} ON ${Tags.on(PostTags)}
 `;
 
 const post = posts[0];
 post.titleUpper;  // "HELLO WORLD" — typed as string
-post.tags;        // ["javascript", "typescript"] — traverses relationships
-Object.keys(post);  // ["id", "title", "authorId", "author"] (no derived props)
-JSON.stringify(post);  // Excludes derived properties (non-enumerable)
+post.tags; // ["javascript", "typescript"] — traverses relationships
+Object.keys(post); // ["id", "title", "authorId", "author"] (no derived props)
+JSON.stringify(post); // Excludes derived properties (non-enumerable)
 ```
 
 Derived properties:
@@ -394,9 +396,9 @@ Derived properties:
 
 **Partial selects** with `pick()`:
 ```typescript
-const UserSummary = Users.pick("id", "name");
+const UserSummaries = Users.pick("id", "name");
 const posts = await db.all([Posts, UserSummary])`
-  JOIN "users" ON ${UserSummary.on(Posts)}
+  JOIN ${UserSummaries} ON ${UserSummary.on(Posts)}
 `;
 // posts[0].author has only id and name
 ```
@@ -989,41 +991,41 @@ Override with `.db.type("CUSTOM")` when using custom encode/decode.
 ```typescript
 import {
   // Zod (extended with .db namespace)
-  z,                  // Re-exported Zod with .db already available
+  z,                        // Re-exported Zod with .db already available
+  extendZod,                // Extend a separate Zod instance (advanced)
 
   // Table and view definition
-  table,              // Create a table definition from Zod schema
-  view,               // Create a read-only view from a table
-  isTable,            // Type guard for Table objects
-  isView,             // Type guard for View objects
-  extendZod,          // Extend a separate Zod instance (advanced)
+  table,                    // Create a table definition from Zod schema
+  view,                     // Create a read-only view from a table
+  isTable,                  // Type guard for Table objects
+  isView,                   // Type guard for View objects
 
   // Database
-  Database,           // Main database class
-  Transaction,        // Transaction context (passed to transaction callbacks)
-  DatabaseUpgradeEvent, // Event object for "upgradeneeded" handler
+  Database,                 // Main database class
+  Transaction,              // Transaction context (passed to transaction callbacks)
+  DatabaseUpgradeEvent,     // Event object for "upgradeneeded" handler
 
   // SQL builtins (for .db.inserted() / .db.updated())
-  NOW,                // CURRENT_TIMESTAMP alias
-  TODAY,              // CURRENT_DATE alias
-  CURRENT_TIMESTAMP,  // SQL CURRENT_TIMESTAMP
-  CURRENT_DATE,       // SQL CURRENT_DATE
-  CURRENT_TIME,       // SQL CURRENT_TIME
+  NOW,                      // CURRENT_TIMESTAMP alias
+  TODAY,                    // CURRENT_DATE alias
+  CURRENT_TIMESTAMP,        // SQL CURRENT_TIMESTAMP
+  CURRENT_DATE,             // SQL CURRENT_DATE
+  CURRENT_TIME,             // SQL CURRENT_TIME
 
   // Errors
-  DatabaseError,        // Base error class
-  ValidationError,    // Schema validation failed
-  TableDefinitionError, // Invalid table definition
-  MigrationError,     // Migration failed
-  MigrationLockError, // Failed to acquire migration lock
-  QueryError,         // SQL execution failed
-  NotFoundError,      // Entity not found
-  AlreadyExistsError, // Unique constraint violated
+  DatabaseError,            // Base error class
+  ValidationError,          // Schema validation failed
+  TableDefinitionError,     // Invalid table definition
+  MigrationError,           // Migration failed
+  MigrationLockError,       // Failed to acquire migration lock
+  QueryError,               // SQL execution failed
+  NotFoundError,            // Entity not found
+  AlreadyExistsError,       // Unique constraint violated
   ConstraintViolationError, // Database constraint violated
-  ConnectionError,    // Connection failed
-  TransactionError,   // Transaction failed
-  isDatabaseError,      // Type guard for DatabaseError
-  hasErrorCode,       // Check error code
+  ConnectionError,          // Connection failed
+  TransactionError,         // Transaction failed
+  isDatabaseError,          // Type guard for DatabaseError
+  hasErrorCode,             // Check error code
 } from "@b9g/zen";
 ```
 
@@ -1032,34 +1034,34 @@ import {
 ```typescript
 import type {
   // Table types
-  Table,              // Table definition object
-  PartialTable,       // Table created via .pick()
-  DerivedTable,       // Table with derived fields via .derive()
-  TableOptions,       // Options for table()
-  ReferenceInfo,      // Foreign key reference metadata
-  CompoundReference,  // Compound foreign key reference
+  Table,             // Table definition object
+  PartialTable,      // Table created via .pick()
+  DerivedTable,      // Table with derived fields via .derive()
+  TableOptions,      // Options for table()
+  ReferenceInfo,     // Foreign key reference metadata
+  CompoundReference, // Compound foreign key reference
 
   // Field types
-  FieldMeta,          // Field metadata for form generation
-  FieldType,          // Field type enum
-  FieldDBMeta,        // Database-specific field metadata
+  FieldMeta,         // Field metadata for form generation
+  FieldType,         // Field type enum
+  FieldDBMeta,       // Database-specific field metadata
 
   // Type inference
-  Row,                // Infer row type from Table (after read)
-  Insert,             // Infer insert type from Table (respects defaults/.db.auto())
-  Update,             // Infer update type from Table (all fields optional)
+  Row,               // Infer row type from Table (after read)
+  Insert,            // Infer insert type from Table (respects defaults/.db.auto())
+  Update,            // Infer update type from Table (all fields optional)
 
   // Fragment types
-  SetValues,          // Values accepted by Table.set()
-  SQLTemplate,        // SQL template object (return type of set(), on(), etc.)
-  SQLDialect,         // "sqlite" | "postgresql" | "mysql"
+  SetValues,         // Values accepted by Table.set()
+  SQLTemplate,       // SQL template object (return type of set(), on(), etc.)
+  SQLDialect,        // "sqlite" | "postgresql" | "mysql"
 
   // Driver types
-  Driver,             // Driver interface for adapters
-  TaggedQuery,        // Tagged template query function
+  Driver,            // Driver interface for adapters
+  TaggedQuery,       // Tagged template query function
 
   // Error types
-  DatabaseErrorCode,  // Error code string literals
+  DatabaseErrorCode, // Error code string literals
 } from "@b9g/zen";
 ```
 

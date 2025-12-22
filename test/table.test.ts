@@ -195,6 +195,61 @@ describe("table", () => {
 		expect(logs.primaryKey()).toBe(null);
 	});
 
+	test("singleton compound index throws error", () => {
+		expect(() =>
+			table(
+				"posts",
+				{
+					id: z.string().db.primary(),
+					authorId: z.string(),
+				},
+				{
+					indexes: [["authorId"]], // only 1 field - should throw
+				},
+			),
+		).toThrow(/must have at least 2 fields.*\.db\.index\(\)/);
+	});
+
+	test("singleton compound unique throws error", () => {
+		expect(() =>
+			table(
+				"posts",
+				{
+					id: z.string().db.primary(),
+					slug: z.string(),
+				},
+				{
+					unique: [["slug"]], // only 1 field - should throw
+				},
+			),
+		).toThrow(/must have at least 2 fields.*\.db\.unique\(\)/);
+	});
+
+	test("singleton compound foreign key throws error", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+		});
+
+		expect(() =>
+			table(
+				"posts",
+				{
+					id: z.string().db.primary(),
+					authorId: z.string(),
+				},
+				{
+					references: [
+						{
+							fields: ["authorId"], // only 1 field - should throw
+							table: Users,
+							as: "author",
+						},
+					],
+				},
+			),
+		).toThrow(/must have at least 2 fields.*\.db\.references\(\)/);
+	});
+
 	test("extracts Zod 4 .meta() for UI metadata", () => {
 		const users = table("users", {
 			id: z.string().uuid().db.primary(),
