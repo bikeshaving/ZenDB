@@ -264,7 +264,7 @@ settings.tags[0]; // "admin" (array, not string)
 Override automatic JSON encoding with custom transformations:
 
 ```typescript
-const Custom = table("custom", {
+const Articles = table("articles", {
   id: z.string().db.primary(),
   // Store array as CSV instead of JSON
   tags: z.array(z.string())
@@ -273,8 +273,8 @@ const Custom = table("custom", {
     .db.type("TEXT"), // Required: explicit column type for DDL
 });
 
-await db.insert(Custom, {id: "c1", tags: ["a", "b", "c"]});
-// Stored as: tags='a,b,c' (not '["a","b","c"]')
+await db.insert(Articles, {id: "a1", tags: ["news", "tech", "featured"]});
+// Stored as: tags='news,tech,featured' (not '["news","tech","featured"]')
 ```
 
 **Explicit column types:**
@@ -397,8 +397,8 @@ Derived properties:
 **Partial selects** with `pick()`:
 ```typescript
 const UserSummaries = Users.pick("id", "name");
-const posts = await db.all([Posts, UserSummary])`
-  JOIN ${UserSummaries} ON ${UserSummary.on(Posts)}
+const posts = await db.all([Posts, UserSummaries])`
+  JOIN ${UserSummaries} ON ${UserSummaries.on(Posts)}
 `;
 // posts[0].author has only id and name
 ```
