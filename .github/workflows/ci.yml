@@ -59,7 +59,7 @@ jobs:
         run: bun run build
 
       - name: Test (SQLite + PostgreSQL + MySQL)
-        run: bun test
+        run: bun run test
         env:
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/test_db
           MYSQL_URL: mysql://root:mysql@localhost:3306/test_db
