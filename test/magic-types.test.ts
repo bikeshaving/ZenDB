@@ -101,4 +101,85 @@ describe("Magic Join Types", () => {
 
 		await driver.close();
 	});
+
+	test("derived properties are typed correctly", () => {
+		// Define a table with derived properties
+		const Articles = table(
+			"articles",
+			{
+				id: z.string().db.primary(),
+				title: z.string(),
+				body: z.string(),
+			},
+			{
+				derive: {
+					titleUpper: (a) => a.title.toUpperCase(),
+					wordCount: (a) => a.body.split(" ").length,
+					summary: (a) => a.body.slice(0, 100),
+				},
+			},
+		);
+
+		// Row type should include both schema fields and derived properties
+		type Article = Row<typeof Articles>;
+		expect(Articles.name).toBe("articles"); // use Articles at runtime
+
+		// Type check: these should compile
+		const article: Article = {
+			id: "1",
+			title: "Hello",
+			body: "Hello world this is a test",
+			titleUpper: "HELLO",
+			wordCount: 6,
+			summary: "Hello world this is a test",
+		};
+
+		expect(article.id).toBe("1");
+		expect(article.titleUpper).toBe("HELLO");
+		expect(article.wordCount).toBe(6);
+	});
+
+	test("derived properties work at runtime", async () => {
+		const Articles = table(
+			"articles",
+			{
+				id: z.string().db.primary(),
+				title: z.string(),
+				body: z.string(),
+			},
+			{
+				derive: {
+					titleUpper: (a) => a.title.toUpperCase(),
+					wordCount: (a) => a.body.split(" ").length,
+				},
+			},
+		);
+
+		const driver = new BunSQLiteDriver(":memory:");
+		const db = new Database(driver);
+		await db.open(1);
+		await db.ensureTable(Articles);
+
+		await db.insert(Articles, {
+			id: "a1",
+			title: "Hello World",
+			body: "This is a test article with several words",
+		});
+
+		const article = await db.get(Articles)`
+			WHERE ${Articles.cols.id} = ${"a1"}
+		`;
+
+		expect(article).not.toBeNull();
+		expect(article!.title).toBe("Hello World");
+		// Derived properties are lazy getters
+		expect(article!.titleUpper).toBe("HELLO WORLD");
+		expect(article!.wordCount).toBe(8);
+
+		// Derived properties are non-enumerable (not in Object.keys)
+		expect(Object.keys(article!)).not.toContain("titleUpper");
+		expect(Object.keys(article!)).not.toContain("wordCount");
+
+		await driver.close();
+	});
 });

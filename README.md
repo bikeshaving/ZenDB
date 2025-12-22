@@ -58,7 +58,7 @@ const Posts = table("posts", {
   id: z.string().uuid().db.primary().db.auto(),
   authorId: z.string().uuid().db.references(Users, "author"),
   title: z.string(),
-  published: z.boolean().default(false),
+  published: z.boolean().db.inserted(() => false),
 });
 
 // 2. Create database with migrations
@@ -111,6 +111,32 @@ const post = await db.get(Posts, posts[0].id);
 await db.update(Users, {name: "Alice Smith"}, user.id);
 ```
 
+## Why Zen?
+
+Zen is the missing link between SQL and typed data. By writing tables with Zod schema, you get idempotent migration helpers, typed CRUD, normalized object references, and many features other database clients cannot provide.
+
+### What Zen is not:
+- **Zen is not a query builder** — Rather than using a fluent query builder interface (`.where().orderBy().limit()`), Zen uses explicit SQL tagged template functions instead
+  ```
+  db.get(Posts)`
+    WHERE ${Posts.cols.published} = ${true}
+    ORDER BY ${Posts.cols.publishDate}
+    DESC LIMIT 20
+  ```.
+- **Zen is not an ORM** — Tables are not classes, they are Zod-powered singletons which provide schema-aware SQL-fragment helpers. These tables can be passed to CRUD helpers to validate writes, generate DDL, and normalize joined data into an object graph.
+- **Zen is not a startup** — Zen is an open-source library, not a venture-backed SaaS. There will never be a managed “ZenDB” instance or a “Zen Studio.” The library is a thin wrapper around Zod and JavaScript SQL drivers, with a focus on runtime abstractions rather than complicated tooling.
+
+### Safety
+
+- **No lazy loading** — Related data comes from your JOINs
+- **No ORM identity map** — Normalization is per-query, not session-wide
+- **No down migrations** — Forward-only versioning (1 → 2 → 3)
+- **No destructive helpers** — No `dropColumn()`, `dropTable()`, `renameColumn()`
+- **No automatic migrations** — Schema changes are explicit in upgrade events
+
+Migrations are **additive and idempotent** by design. Use `ensureColumn()`, `ensureIndex()`, `copyColumn()` for safe schema evolution. Breaking changes require multi-step migrations. Rollbacks are new forward migrations.
+
+
 ## Table Definitions
 
 ```typescript
@@ -121,7 +147,7 @@ const Users = table("users", {
   id: z.string().uuid().db.primary().db.auto(),
   email: z.string().email().db.unique(),
   name: z.string().max(100),
-  role: z.enum(["user", "admin"]).default("user"),
+  role: z.enum(["user", "admin"]).db.inserted(() => "user"),
   createdAt: z.date().db.auto(),
 });
 
@@ -130,9 +156,22 @@ const Posts = table("posts", {
   title: z.string(),
   content: z.string().optional(),
   authorId: z.string().uuid().db.references(Users, "author", {onDelete: "cascade"}),
-  published: z.boolean().default(false),
+  published: z.boolean().db.inserted(() => false),
 });
 ```
+
+**Zod to Database Behavior:**
+
+| Zod Method | Effect |
+|------------|--------|
+| `.optional()` | Column allows `NULL`; field omittable on insert |
+| `.nullable()` | Column allows `NULL`; must explicitly pass `null` or value |
+| `.string().max(n)` | `VARCHAR(n)` in DDL (if n ≤ 255) |
+| `.string().uuid()` | Used by `.db.auto()` to generate UUIDs |
+| `.number().int()` | `INTEGER` column type |
+| `.date()` | `TIMESTAMPTZ` / `DATETIME` / `TEXT` depending on dialect |
+| `.object()` / `.array()` | Stored as JSON, auto-encoded/decoded |
+| `.default()` | **Throws error** — use `.db.inserted()` instead |
 
 **The `.db` namespace:**
 
@@ -286,19 +325,22 @@ const Posts = table("posts", {
   derive: {
     // Pure functions only (no I/O, no side effects)
     titleUpper: (post) => post.title.toUpperCase(),
-    tags: (post) => post.postTags?.map(pt => pt.tag) ?? [],
+    wordCount: (post) => post.title.split(" ").length,
   }
 });
+
+type Post = Row<typeof Posts>;
+// Post includes: id, title, authorId, titleUpper, wordCount
 
 const posts = await db.all([Posts, Users])`
   JOIN "users" ON ${Users.on(Posts)}
 `;
 
-type PostWithDerived = Row<typeof Posts> & {titleUpper: string; tags: string[]};
-const post = posts[0] as PostWithDerived;
-post.titleUpper;  // ✅ "HELLO WORLD"
-Object.keys(post);  // ["id", "title", "authorId", "author"] (no "titleUpper")
-JSON.stringify(post);  // ✅ Excludes derived properties (non-enumerable)
+const post = posts[0];
+post.titleUpper;  // "HELLO WORLD" — typed as string
+post.wordCount;   // 2 — typed as number
+Object.keys(post);  // ["id", "title", "authorId", "author"] (no derived props)
+JSON.stringify(post);  // Excludes derived properties (non-enumerable)
 ```
 
 Derived properties:
@@ -306,7 +348,7 @@ Derived properties:
 - Are non-enumerable (hidden from `Object.keys()` and `JSON.stringify()`)
 - Must be pure functions (no I/O, no database queries)
 - Only transform data already in the entity
-- Are NOT part of TypeScript type inference
+- Are fully typed via `Row<T>` inference
 
 **Partial selects** with `pick()`:
 ```typescript
@@ -492,7 +534,7 @@ zen provides idempotent helpers that encourage safe, additive-only migrations:
 const Posts = table("posts", {
   id: z.string().db.primary(),
   title: z.string(),
-  views: z.number().default(0), // NEW - add to schema
+  views: z.number().db.inserted(() => 0), // NEW - add to schema
 });
 
 if (e.oldVersion < 2) {
@@ -1040,25 +1082,3 @@ import PostgresDriver from "@b9g/zen/postgres";
 // MySQL (mysql2)
 import MySQLDriver from "@b9g/zen/mysql";
 ```
-
-## What This Library Does Not Do
-
-**Query Generation:**
-- **No model classes** — Tables are plain definitions, not class instances
-- **No hidden JOINs** — You write all SQL explicitly
-- **No implicit query building** — No `.where().orderBy().limit()` chains
-- **No lazy loading** — Related data comes from your JOINs
-- **No ORM identity map** — Normalization is per-query, not session-wide
-
-**Migrations:**
-- **No down migrations** — Forward-only, monotonic versioning (1 → 2 → 3)
-- **No destructive helpers** — No `dropColumn()`, `dropTable()`, `renameColumn()` methods
-- **No automatic migrations** — DDL must be written explicitly in upgrade events
-- **No migration files** — Event handlers replace traditional migration folders
-- **No branching versions** — Linear version history only
-
-**Safety Philosophy:**
-- Migrations are **additive and idempotent** by design
-- Use `ensureColumn()`, `ensureIndex()`, `copyColumn()` for safe schema changes
-- Breaking changes require multi-step migrations (add, migrate data, deprecate)
-- Version numbers never decrease — rollbacks are new forward migrations
