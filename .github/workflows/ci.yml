@@ -26,6 +26,19 @@ jobs:
         ports:
           - 5432:5432
 
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+          MYSQL_DATABASE: test_db
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 3306:3306
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,8 +58,8 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Test (SQLite + PostgreSQL)
+      - name: Test (SQLite + PostgreSQL + MySQL)
         run: bun test
         env:
-          # PostgreSQL connection for tests
           POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          MYSQL_URL: mysql://root:mysql@localhost:3306/test_db
