@@ -921,12 +921,14 @@ export interface TableOptions<
 /**
  * Infer the derived property types from a TableOptions derive object.
  */
-export type InferDerived<TDerive> = TDerive extends Record<
-	string,
-	(entity: any) => infer R
->
-	? {[K in keyof TDerive]: TDerive[K] extends (entity: any) => infer R ? R : never}
-	: {};
+export type InferDerived<TDerive> =
+	TDerive extends Record<string, (entity: any) => unknown>
+		? {
+				[K in keyof TDerive]: TDerive[K] extends (entity: any) => infer R
+					? R
+					: never;
+			}
+		: {};
 
 // Symbol to identify Table objects
 const TABLE_MARKER = Symbol.for("@b9g/zen:table");
@@ -1103,7 +1105,7 @@ export interface DerivedTable<
 export interface Table<
 	T extends ZodRawShape = ZodRawShape,
 	Refs extends Record<string, Table<any>> = {},
-	Derived extends Record<string, unknown> = {},
+	_Derived extends Record<string, unknown> = {},
 > {
 	readonly [TABLE_MARKER]: true;
 	/** @internal Symbol-keyed internal metadata */
@@ -1624,7 +1626,8 @@ function createViewObject<
  */
 export function table<
 	T extends Record<string, ZodType>,
-	TDerive extends Record<string, (entity: z.infer<ZodObject<T>>) => unknown> = {},
+	TDerive extends Record<string, (entity: z.infer<ZodObject<T>>) => unknown> =
+		{},
 >(
 	name: string,
 	shape: T,
@@ -2497,7 +2500,8 @@ type GetDerived<T> = T extends Table<any, any, infer D> ? D : {};
  * });
  * type Post = Row<typeof Posts>;  // includes titleUpper: string
  */
-export type Row<T extends Queryable<any>> = z.infer<T["schema"]> & GetDerived<T>;
+export type Row<T extends Queryable<any>> = z.infer<T["schema"]> &
+	GetDerived<T>;
 
 // ============================================================================
 // Join Result Types (Magic Types for Multi-Table Queries)

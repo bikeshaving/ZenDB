@@ -122,6 +122,7 @@ describe("Magic Join Types", () => {
 
 		// Row type should include both schema fields and derived properties
 		type Article = Row<typeof Articles>;
+		expect(Articles.name).toBe("articles"); // use Articles at runtime
 
 		// Type check: these should compile
 		const article: Article = {
