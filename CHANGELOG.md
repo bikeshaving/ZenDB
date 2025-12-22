@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2025-12-22
+
+### Added
+
+- New type exports: `PartialTable`, `DerivedTable`, `SetValues`, `FieldDBMeta`, `ReferenceInfo`, `CompoundReference`, `TaggedQuery`, `SQLDialect`, `isTable`
+- Views documentation section in README
+- `EnsureError` and `SchemaDriftError` documented in error types
+
+### Changed
+
+- Reorganized `zen.ts` exports into logical groups
+- README Types section now accurately reflects actual exports (removed non-existent `SQLFragment`, `DDLFragment`, `DBExpression`)
+
+### Fixed
+
+- `isTable` type guard now exported (was missing)
+
 ## [0.1.1] - 2025-12-21
 
 ### Added
