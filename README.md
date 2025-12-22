@@ -313,6 +313,28 @@ const Posts = table("posts", {
 });
 ```
 
+**Compound foreign keys** for composite primary keys:
+```typescript
+const OrderProducts = table("order_products", {
+  orderId: z.string().uuid(),
+  productId: z.string().uuid(),
+  // ... compound primary key
+});
+
+const OrderItems = table("order_items", {
+  id: z.string().uuid().db.primary(),
+  orderId: z.string().uuid(),
+  productId: z.string().uuid(),
+  quantity: z.number(),
+}, {
+  references: [{
+    fields: ["orderId", "productId"],
+    table: OrderProducts,
+    as: "orderProduct",
+  }],
+});
+```
+
 **Derived properties** for client-side transformations:
 ```typescript
 const Posts = table("posts", {
@@ -325,20 +347,23 @@ const Posts = table("posts", {
   derive: {
     // Pure functions only (no I/O, no side effects)
     titleUpper: (post) => post.title.toUpperCase(),
-    wordCount: (post) => post.title.split(" ").length,
+    // Traverse relationships (requires JOIN in query)
+    tags: (post) => post.postTags?.map(pt => pt.tag?.name) ?? [],
   }
 });
 
 type Post = Row<typeof Posts>;
-// Post includes: id, title, authorId, titleUpper, wordCount
+// Post includes: id, title, authorId, titleUpper, tags
 
-const posts = await db.all([Posts, Users])`
+const posts = await db.all([Posts, Users, PostTags, Tags])`
   JOIN "users" ON ${Users.on(Posts)}
+  LEFT JOIN "post_tags" ON ${PostTags.cols.postId} = ${Posts.cols.id}
+  LEFT JOIN "tags" ON ${Tags.on(PostTags)}
 `;
 
 const post = posts[0];
 post.titleUpper;  // "HELLO WORLD" — typed as string
-post.wordCount;   // 2 — typed as number
+post.tags;        // ["javascript", "typescript"] — traverses relationships
 Object.keys(post);  // ["id", "title", "authorId", "author"] (no derived props)
 JSON.stringify(post);  // Excludes derived properties (non-enumerable)
 ```
@@ -347,7 +372,7 @@ Derived properties:
 - Are lazy getters (computed on access, not stored)
 - Are non-enumerable (hidden from `Object.keys()` and `JSON.stringify()`)
 - Must be pure functions (no I/O, no database queries)
-- Only transform data already in the entity
+- Can traverse resolved relationships from the same query
 - Are fully typed via `Row<T>` inference
 
 **Partial selects** with `pick()`:
@@ -776,6 +801,8 @@ interface Driver {
 
 **Migration locking**: If the driver provides `withMigrationLock()`, migrations run atomically (PostgreSQL uses advisory locks, MySQL uses `GET_LOCK`, SQLite uses exclusive transactions).
 
+**Connection pooling**: Handled by the underlying driver. `postgres.js` and `mysql2` pool automatically; `better-sqlite3` uses a single connection (SQLite is single-writer anyway).
+
 ## Error Handling
 
 All errors extend `DatabaseError` with typed error codes:
@@ -905,13 +932,12 @@ import {
   Transaction,        // Transaction context (passed to transaction callbacks)
   DatabaseUpgradeEvent, // Event object for "upgradeneeded" handler
 
-  // DB expressions
-  db,                 // Runtime DB expressions (db.now(), db.json(), etc.)
-  isDBExpression,     // Type guard for DBExpression objects
-
-  // Custom field helpers
-  setDBMeta,          // Set database metadata on a Zod schema
-  getDBMeta,          // Get database metadata from a Zod schema
+  // SQL builtins (for .db.inserted() / .db.updated())
+  NOW,                // CURRENT_TIMESTAMP alias
+  TODAY,              // CURRENT_DATE alias
+  CURRENT_TIMESTAMP,  // SQL CURRENT_TIMESTAMP
+  CURRENT_DATE,       // SQL CURRENT_DATE
+  CURRENT_TIME,       // SQL CURRENT_TIME
 
   // Errors
   DatabaseError,        // Base error class
