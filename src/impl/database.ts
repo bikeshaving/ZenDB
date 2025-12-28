@@ -1886,6 +1886,7 @@ export class Database extends EventTarget {
 	#version: number = 0;
 	#opened: boolean = false;
 	#tables: Table<any>[] = [];
+	#inMigrationLock: boolean = false;
 
 	constructor(driver: Driver, options?: {tables?: Table<any>[]}) {
 		super();
@@ -1943,11 +1944,22 @@ export class Database extends EventTarget {
 		};
 
 		// Use driver's migration lock if available, otherwise use transaction
+		// Set flag to prevent nested lock attempts from ensureTable/etc inside upgrade handler
 		if (this.#driver.withMigrationLock) {
-			await this.#driver.withMigrationLock(runMigration);
+			this.#inMigrationLock = true;
+			try {
+				await this.#driver.withMigrationLock(runMigration);
+			} finally {
+				this.#inMigrationLock = false;
+			}
 		} else {
 			// Fallback: Use driver's transaction for locking
-			await this.#driver.transaction(runMigration);
+			this.#inMigrationLock = true;
+			try {
+				await this.#driver.transaction(runMigration);
+			} finally {
+				this.#inMigrationLock = false;
+			}
 		}
 
 		this.#version = version;
@@ -3169,6 +3181,11 @@ export class Database extends EventTarget {
 
 		const doEnsure = () => this.#driver.ensureTable!(table);
 
+		// Skip lock if already inside migration (e.g., called from upgrade handler)
+		if (this.#inMigrationLock) {
+			return await doEnsure();
+		}
+
 		// Wrap in migration lock if available
 		if (this.#driver.withMigrationLock) {
 			return await this.#driver.withMigrationLock(doEnsure);
@@ -3196,6 +3213,11 @@ export class Database extends EventTarget {
 		}
 
 		const doEnsure = () => this.#driver.ensureView!(viewObj);
+
+		// Skip lock if already inside migration (e.g., called from upgrade handler)
+		if (this.#inMigrationLock) {
+			return await doEnsure();
+		}
 
 		// Wrap in migration lock if available
 		if (this.#driver.withMigrationLock) {
@@ -3237,6 +3259,11 @@ export class Database extends EventTarget {
 		}
 
 		const doEnsure = () => this.#driver.ensureConstraints!(table);
+
+		// Skip lock if already inside migration (e.g., called from upgrade handler)
+		if (this.#inMigrationLock) {
+			return await doEnsure();
+		}
 
 		// Wrap in migration lock if available
 		if (this.#driver.withMigrationLock) {
@@ -3282,6 +3309,11 @@ export class Database extends EventTarget {
 		// Delegate to driver if it implements copyColumn
 		if (this.#driver.copyColumn) {
 			const doCopy = () => this.#driver.copyColumn!(table, fromField, toField);
+
+			// Skip lock if already inside migration (e.g., called from upgrade handler)
+			if (this.#inMigrationLock) {
+				return await doCopy();
+			}
 
 			// Wrap in migration lock if available
 			if (this.#driver.withMigrationLock) {
@@ -3329,6 +3361,11 @@ export class Database extends EventTarget {
 				);
 			}
 		};
+
+		// Skip lock if already inside migration (e.g., called from upgrade handler)
+		if (this.#inMigrationLock) {
+			return await doCopy();
+		}
 
 		// Run under migration lock if available
 		if (this.#driver.withMigrationLock) {

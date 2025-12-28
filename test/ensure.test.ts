@@ -1464,5 +1464,106 @@ for (const dialect of dialects) {
 				expect(record!.tags).toEqual(["alpha", "beta", "gamma"]);
 			});
 		});
+
+		// =============================================================================
+		// Regression: ensureTable inside upgrade handler (Issue #12)
+		// Only run for SQLite since it uses in-memory database per test
+		// PostgreSQL/MySQL share the same _migrations table across tests
+		// =============================================================================
+
+		describe("ensureTable inside upgrade handler", () => {
+			it("should not throw nested transaction error", async () => {
+				// Only test with SQLite - shared databases have migration table conflicts
+				if (dialect.name !== "sqlite") return;
+				if (maybeSkip()) return;
+
+				// Close the existing db that was opened in beforeEach
+				await driver.close();
+
+				// Create fresh driver without opening
+				driver = new BunDriver(dialect.url);
+
+				const Users = table(`users_upgrade_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				const Posts = table(`posts_upgrade_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					title: stringField(),
+				});
+
+				db = new Database(driver);
+
+				db.addEventListener("upgradeneeded", (e) => {
+					e.waitUntil(
+						(async () => {
+							// This should NOT throw "cannot start a transaction within a transaction"
+							await db.ensureTable(Users);
+							await db.ensureTable(Posts);
+						})(),
+					);
+				});
+
+				// This should not throw
+				await db.open(1);
+
+				// Verify tables were created
+				const user = await db.insert(Users, {id: "1", name: "Alice"});
+				expect(user.name).toBe("Alice");
+
+				const post = await db.insert(Posts, {id: "1", title: "Hello"});
+				expect(post.title).toBe("Hello");
+			});
+
+			it("should work with multiple version upgrades", async () => {
+				// Only test with SQLite - shared databases have migration table conflicts
+				if (dialect.name !== "sqlite") return;
+				if (maybeSkip()) return;
+
+				// Close the existing db
+				await driver.close();
+
+				driver = new BunDriver(dialect.url);
+
+				const Users = table(`users_multi_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+					email: stringField().optional(),
+				});
+
+				db = new Database(driver);
+
+				const appliedVersions: number[] = [];
+
+				db.addEventListener("upgradeneeded", (e) => {
+					e.waitUntil(
+						(async () => {
+							if (e.oldVersion < 1) {
+								appliedVersions.push(1);
+								await db.ensureTable(Users);
+							}
+							if (e.oldVersion < 2) {
+								appliedVersions.push(2);
+								// Table already exists, ensureTable should just add missing columns
+								await db.ensureTable(Users);
+							}
+						})(),
+					);
+				});
+
+				await db.open(2);
+
+				expect(appliedVersions).toEqual([1, 2]);
+
+				// Verify table works
+				const user = await db.insert(Users, {
+					id: "1",
+					name: "Bob",
+					email: "bob@example.com",
+				});
+				expect(user.email).toBe("bob@example.com");
+			});
+		});
 	});
 }

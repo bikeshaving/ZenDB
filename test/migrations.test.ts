@@ -4,6 +4,7 @@ import {
 	DatabaseUpgradeEvent,
 	type Driver,
 } from "../src/impl/database.js";
+import {table, z} from "../src/zen.js";
 
 // Helper to build SQL from template parts
 function buildSql(strings: TemplateStringsArray): string {
@@ -398,5 +399,133 @@ describe("Migration race condition", () => {
 
 		// The migrations table should be created while the lock is held
 		expect(tableCreatedWhileLocked).toBe(true);
+	});
+});
+
+// =============================================================================
+// Regression: ensureTable inside upgrade handler (Issue #12)
+// =============================================================================
+
+describe("ensureTable inside upgrade handler", () => {
+	test("should not throw nested transaction error", async () => {
+		let ensureTableCalled = false;
+		let nestedLockAttempted = false;
+
+		const driver: Driver = {
+			supportsReturning: true,
+			all: async () => [],
+			get: async (strings: TemplateStringsArray) => {
+				const sql = buildSql(strings);
+				if (sql.includes("MAX(version)")) {
+					return {version: 0} as any;
+				}
+				return null;
+			},
+			run: async () => 0,
+			val: async () => null,
+			close: async () => {},
+			transaction: async (fn) => fn(driver),
+			getColumns: async () => [],
+			explain: async () => [],
+			withMigrationLock: async (fn) => {
+				// Track if we're trying to nest locks
+				if (nestedLockAttempted) {
+					throw new Error("cannot start a transaction within a transaction");
+				}
+				nestedLockAttempted = true;
+				try {
+					return await fn();
+				} finally {
+					nestedLockAttempted = false;
+				}
+			},
+			ensureTable: async () => {
+				ensureTableCalled = true;
+				return {applied: true};
+			},
+		};
+
+		const db = new Database(driver);
+
+		const Users = table("users", {
+			id: z.string(),
+		});
+
+		db.addEventListener("upgradeneeded", (e) => {
+			(e as DatabaseUpgradeEvent).waitUntil(
+				(async () => {
+					// This should NOT throw "cannot start a transaction within a transaction"
+					await db.ensureTable(Users);
+				})(),
+			);
+		});
+
+		// This should not throw
+		await db.open(1);
+
+		expect(ensureTableCalled).toBe(true);
+	});
+
+	test("multiple ensureTable calls should work inside upgrade handler", async () => {
+		const ensuredTables: string[] = [];
+		let lockDepth = 0;
+		let maxLockDepth = 0;
+
+		const driver: Driver = {
+			supportsReturning: true,
+			all: async () => [],
+			get: async (strings: TemplateStringsArray) => {
+				const sql = buildSql(strings);
+				if (sql.includes("MAX(version)")) {
+					return {version: 0} as any;
+				}
+				return null;
+			},
+			run: async () => 0,
+			val: async () => null,
+			close: async () => {},
+			transaction: async (fn) => fn(driver),
+			getColumns: async () => [],
+			explain: async () => [],
+			withMigrationLock: async (fn) => {
+				lockDepth++;
+				maxLockDepth = Math.max(maxLockDepth, lockDepth);
+				if (lockDepth > 1) {
+					throw new Error("cannot start a transaction within a transaction");
+				}
+				try {
+					return await fn();
+				} finally {
+					lockDepth--;
+				}
+			},
+			ensureTable: async (tbl: any) => {
+				ensuredTables.push(tbl.name || "unknown");
+				return {applied: true};
+			},
+		};
+
+		const db = new Database(driver);
+
+		const Users = table("users", {id: z.string()});
+		const Posts = table("posts", {id: z.string()});
+		const Tags = table("tags", {id: z.string()});
+
+		db.addEventListener("upgradeneeded", (e) => {
+			(e as DatabaseUpgradeEvent).waitUntil(
+				(async () => {
+					await db.ensureTable(Users);
+					await db.ensureTable(Posts);
+					await db.ensureTable(Tags);
+				})(),
+			);
+		});
+
+		// This should not throw
+		await db.open(1);
+
+		expect(ensuredTables).toEqual(["users", "posts", "tags"]);
+		// Lock should only be acquired once (at the open level), not for each ensureTable
+		expect(maxLockDepth).toBe(1);
 	});
 });
