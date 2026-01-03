@@ -4,12 +4,7 @@
  * Generates SELECT statements with prefixed column aliases for entity normalization.
  */
 
-import {
-	type Table,
-	isTable,
-	decodeData,
-	type DriverDecoder,
-} from "./table.js";
+import {type Table, isTable, decodeData, type DriverDecoder} from "./table.js";
 import {
 	ident,
 	makeTemplate,
