@@ -4,13 +4,7 @@
  * Generates SELECT statements with prefixed column aliases for entity normalization.
  */
 
-import {
-	type Table,
-	isTable,
-	validateWithStandardSchema,
-	decodeData,
-	type DriverDecoder,
-} from "./table.js";
+import {type Table, isTable, decodeData, type DriverDecoder} from "./table.js";
 import {
 	ident,
 	makeTemplate,
@@ -482,13 +476,12 @@ export function buildEntityMap(
 			const key = entityKey(table.name, pk);
 
 			if (!entities.has(key)) {
-				// Decode JSON strings back to objects/arrays, then validate
+				// Decode JSON strings back to objects/arrays
+				// No validation on reads - validation happens on writes only
 				const decoded = decodeData(table, data, driver);
-				const parsed = validateWithStandardSchema<Record<string, unknown>>(
-					table.schema,
-					decoded,
-				);
-				entities.set(key, parsed);
+				if (decoded) {
+					entities.set(key, decoded);
+				}
 			}
 		}
 	}
