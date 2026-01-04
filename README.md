@@ -839,9 +839,14 @@ const fields = Users.fields();
 //   role: { name: "role", type: "select", options: ["user", "admin"], default: "user" },
 // }
 
-const pkName = Users.primaryKey();    // "id" (field name)
+const pkName = Users.meta.primary;    // "id" (field name)
 const pkFragment = Users.primary;     // SQLTemplate: "users"."id"
-const refs = Posts.references();      // [{fieldName: "authorId", table: Users, as: "author"}]
+const refs = Posts.meta.references;   // [{fieldName: "authorId", table: Users, as: "author"}]
+
+// Relation navigation (forward and reverse)
+Posts.relations().author.table;       // Users table
+Posts.relations().author.fields();    // Users field metadata
+Users.relations().posts.table;        // Posts table (if reverseAs: "posts" defined)
 ```
 
 ## Performance
@@ -1094,10 +1099,9 @@ Users.primary;                 // SQLTemplate for primary key column
 // Metadata
 Users.name;                    // Table name string
 Users.schema;                  // Zod schema
-Users.meta;                    // Table metadata (primary, indexes, etc.)
-Users.primaryKey();            // Primary key field name or null
+Users.meta;                    // Table metadata (primary, references, indexes, etc.)
 Users.fields();                // Field metadata for form generation
-Users.references();            // Foreign key references
+Users.relations();             // Forward and reverse relation navigators
 
 // Derived Tables
 Users.pick("id", "email");     // PartialTable with subset of fields
