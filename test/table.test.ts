@@ -1264,3 +1264,211 @@ describe("decodeData error handling", () => {
 		}
 	});
 });
+
+// =============================================================================
+// Relations (Issue #18)
+// =============================================================================
+
+describe("Table.relations()", () => {
+	test("returns empty object for table with no relations", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			name: z.string(),
+		});
+
+		const relations = Users.relations();
+		expect(Object.keys(relations)).toHaveLength(0);
+	});
+
+	test("returns forward relation from references", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			email: z.string().email(),
+		});
+
+		const Posts = table("posts", {
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(Users, "author"),
+		});
+
+		const relations = Posts.relations();
+		expect(Object.keys(relations)).toEqual(["author"]);
+		expect(relations.author).toBeDefined();
+		expect(relations.author.table).toBe(Users);
+	});
+
+	test("returns reverse relation when defined with reverseAs", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			email: z.string().email(),
+		});
+
+		const Posts = table("posts", {
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(Users, "author", {reverseAs: "posts"}),
+		});
+
+		const relations = Users.relations();
+		expect(Object.keys(relations)).toEqual(["posts"]);
+		expect(relations.posts).toBeDefined();
+		expect(relations.posts.table).toBe(Posts);
+	});
+
+	test("returns both forward and reverse relations", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			email: z.string().email(),
+		});
+
+		const Posts = table("posts", {
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(Users, "author", {reverseAs: "posts"}),
+		});
+
+		// Posts has forward relation to Users
+		const postRelations = Posts.relations();
+		expect(Object.keys(postRelations)).toEqual(["author"]);
+		expect(postRelations.author.table).toBe(Users);
+
+		// Users has reverse relation to Posts
+		const userRelations = Users.relations();
+		expect(Object.keys(userRelations)).toEqual(["posts"]);
+		expect(userRelations.posts.table).toBe(Posts);
+	});
+
+	test("relation fields() navigates to related table fields", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			email: z.string().email(),
+		});
+
+		// Posts definition registers reverse relation on Users
+		table("posts", {
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(Users, "author", {reverseAs: "posts"}),
+		});
+
+		const relations = Users.relations();
+		const postFields = relations.posts.fields();
+
+		// Should have Posts fields
+		expect(postFields.id).toBeDefined();
+		expect(postFields.title).toBeDefined();
+		expect(postFields.authorId).toBeDefined();
+
+		// Should have forward relation navigator via fields() magic keys
+		expect(postFields.author).toBeDefined();
+		expect(postFields.author.table).toBe(Users);
+	});
+
+	test("supports multiple reverse relations", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			name: z.string(),
+		});
+
+		const Posts = table("posts", {
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(Users, "author", {reverseAs: "posts"}),
+		});
+
+		const Comments = table("comments", {
+			id: z.string().db.primary(),
+			body: z.string(),
+			authorId: z
+				.string()
+				.db.references(Users, "author", {reverseAs: "comments"}),
+		});
+
+		const relations = Users.relations();
+		expect(Object.keys(relations).sort()).toEqual(["comments", "posts"]);
+		expect(relations.posts.table).toBe(Posts);
+		expect(relations.comments.table).toBe(Comments);
+	});
+
+	test("chained navigation through relations", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+			email: z.string().email(),
+		});
+
+		// Posts definition registers reverse relation on Users
+		table("posts", {
+			id: z.string().db.primary(),
+			title: z.string(),
+			authorId: z.string().db.references(Users, "author", {reverseAs: "posts"}),
+		});
+
+		// Navigate: Users -> relations().posts -> fields().author -> fields().email
+		const email = Users.relations().posts.fields().author.fields().email;
+		expect(email).toBeDefined();
+		expect(email.name).toBe("email");
+		expect(email.type).toBe("email");
+	});
+
+	test("relations() without reverseAs does not include reverse relation", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+		});
+
+		// No reverseAs specified
+		table("posts", {
+			id: z.string().db.primary(),
+			authorId: z.string().db.references(Users, "author"),
+		});
+
+		// Users should have no relations (no reverseAs)
+		const relations = Users.relations();
+		expect(Object.keys(relations)).toHaveLength(0);
+	});
+
+	test("throws on duplicate reverseAs names for same target table", () => {
+		const Users = table("users", {
+			id: z.string().db.primary(),
+		});
+
+		// First table registers "items" reverse relation
+		table("posts", {
+			id: z.string().db.primary(),
+			authorId: z.string().db.references(Users, "author", {reverseAs: "items"}),
+		});
+
+		// Second table tries to use same reverseAs name - should throw
+		expect(() =>
+			table("comments", {
+				id: z.string().db.primary(),
+				authorId: z
+					.string()
+					.db.references(Users, "author", {reverseAs: "items"}),
+			}),
+		).toThrow(/reverse relation "items".*collides/);
+	});
+
+	test("throws when reverseAs collides with forward relation name", () => {
+		const Teams = table("teams", {
+			id: z.string().db.primary(),
+			name: z.string(),
+		});
+
+		// Members has a forward relation named "team"
+		const Members = table("members", {
+			id: z.string().db.primary(),
+			teamId: z.string().db.references(Teams, "team"),
+		});
+
+		// Now try to add a reverse relation with same name as Members' forward relation
+		expect(() =>
+			table("projects", {
+				id: z.string().db.primary(),
+				memberId: z
+					.string()
+					.db.references(Members, "member", {reverseAs: "team"}),
+			}),
+		).toThrow(/reverse relation "team".*collides.*forward relation/);
+	});
+});

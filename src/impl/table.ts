@@ -1029,6 +1029,73 @@ const TABLE_MARKER = Symbol.for("@b9g/zen:table");
 // Symbol for internal table metadata (not part of public API)
 const TABLE_META = Symbol.for("@b9g/zen:table-meta");
 
+// ============================================================================
+// Reverse Relations Registry
+// ============================================================================
+
+/**
+ * Registry for reverse relations (one-to-many).
+ *
+ * When a table defines a reference with `reverseAs`, it registers itself here
+ * so the target table can navigate back via `reverses()`.
+ *
+ * Uses WeakMap so tables can be garbage collected.
+ * Stores thunks to handle circular references (lazy resolution).
+ */
+const reverseRelationsRegistry = new WeakMap<
+	Table<any>,
+	Map<string, () => Table<any>>
+>();
+
+/**
+ * Register a reverse relation on a target table.
+ * Called when a reference is defined with `reverseAs`.
+ *
+ * @param targetTable - The table being referenced (e.g., Users)
+ * @param reverseName - The name for the reverse relation (e.g., "posts")
+ * @param getSourceTable - Thunk returning the source table (e.g., () => Posts)
+ * @param sourceTableName - Name of the source table for error messages
+ * @param fieldName - Name of the FK field for error messages
+ */
+function registerReverseRelation(
+	targetTable: Table<any>,
+	reverseName: string,
+	getSourceTable: () => Table<any>,
+	sourceTableName: string,
+	fieldName: string,
+): void {
+	let relations = reverseRelationsRegistry.get(targetTable);
+	if (!relations) {
+		relations = new Map();
+		reverseRelationsRegistry.set(targetTable, relations);
+	}
+
+	// Check for duplicate reverseAs names
+	if (relations.has(reverseName)) {
+		throw new TableDefinitionError(
+			`Table "${sourceTableName}": reverse relation "${reverseName}" (from field "${fieldName}") ` +
+				`collides with an existing reverse relation on target table "${targetTable.name}". ` +
+				`Each reverseAs name must be unique per target table.`,
+			sourceTableName,
+			fieldName,
+		);
+	}
+
+	relations.set(reverseName, getSourceTable);
+}
+
+/**
+ * Get all reverse relations for a table.
+ *
+ * @param table - The table to get reverse relations for
+ * @returns Map of reverse relation names to thunks returning source tables
+ */
+function getReverseRelations(
+	table: Table<any>,
+): Map<string, () => Table<any>> | undefined {
+	return reverseRelationsRegistry.get(table);
+}
+
 /**
  * Check if a value is a Table object.
  */
@@ -1156,12 +1223,13 @@ type FilterRefs<
 };
 
 /**
- * A relationship jump point for navigating to a referenced table's fields.
+ * A relationship navigator for traversing table relations.
+ * Used for both forward (many-to-one) and reverse (one-to-many) navigation.
  */
 export interface Relation<TargetTable extends Table<any, any>> {
-	/** Navigate to the target table's fields */
+	/** Navigate to the related table's fields */
 	fields(): ReturnType<TargetTable["fields"]>;
-	/** Direct access to the referenced table */
+	/** Direct access to the related table */
 	readonly table: TargetTable;
 }
 
@@ -1221,9 +1289,10 @@ export interface Table<
 	 * Get the primary key field name.
 	 *
 	 * @returns The primary key field name, or null if no primary key is defined.
+	 * @deprecated Use `table.meta.primary` instead.
 	 *
 	 * @example
-	 * const pk = Users.primaryKey(); // "id"
+	 * const pk = Users.meta.primary; // "id"
 	 */
 	primaryKey(): string | null;
 
@@ -1236,7 +1305,10 @@ export interface Table<
 	 */
 	readonly primary: SQLTemplate | null;
 
-	/** Get all foreign key references */
+	/**
+	 * Get all foreign key references.
+	 * @deprecated Use `table.meta.references` for raw FK metadata, or `table.relations()` for navigation.
+	 */
 	references(): ReferenceInfo[];
 
 	/**
@@ -1405,6 +1477,40 @@ export interface Table<
 	values(rows: Partial<z.infer<ZodObject<T>>>[]): SQLTemplate;
 
 	/**
+	 * Navigate table relations (both forward and reverse).
+	 *
+	 * Returns an object with relation names as keys. Each key provides
+	 * a `Relation` with `fields()` and `table` properties.
+	 *
+	 * - Forward relations come from `as` in `.db.references(Table, "as")`
+	 * - Reverse relations come from `reverseAs` in `.db.references(Table, "as", { reverseAs: "..." })`
+	 *
+	 * @example
+	 * const Users = table("users", {
+	 *   id: z.string().db.primary(),
+	 *   email: z.string().email(),
+	 * });
+	 *
+	 * const Posts = table("posts", {
+	 *   id: z.string().db.primary(),
+	 *   title: z.string(),
+	 *   authorId: z.string().db.references(Users, "author", { reverseAs: "posts" }),
+	 * });
+	 *
+	 * // Forward relation (many-to-one): Posts -> Users
+	 * Posts.relations().author.fields().email  // Users.email field metadata
+	 * Posts.relations().author.table           // Users table
+	 *
+	 * // Reverse relation (one-to-many): Users -> Posts
+	 * Users.relations().posts.fields().title   // Posts.title field metadata
+	 * Users.relations().posts.table            // Posts table
+	 *
+	 * // Chain navigation
+	 * Users.relations().posts.fields().author.fields().email  // Back to Users.email
+	 */
+	relations(): Record<string, Relation<Table<any, any>>>;
+
+	/**
 	 * Get a view that excludes soft-deleted rows.
 	 *
 	 * Returns a read-only View named `{table}_active` (e.g., `users_active`)
@@ -1490,6 +1596,7 @@ export interface View<
 	/**
 	 * Get reference metadata for foreign key relationships.
 	 * Delegates to the base table's references.
+	 * @deprecated Use `view.baseTable.meta.references` for raw FK metadata, or `view.baseTable.relations()` for navigation.
 	 */
 	references(): ReferenceInfo[];
 
@@ -1877,6 +1984,17 @@ export function table<
 						key,
 					);
 				}
+
+				// Validate 'reverseAs' doesn't collide with forward relation names in TARGET table
+				const targetRefs = getTableMeta(ref.table).references;
+				const collidingRef = targetRefs.find((r) => r.as === ref.reverseAs);
+				if (collidingRef) {
+					throw new TableDefinitionError(
+						`Table "${name}": reverse relation "${ref.reverseAs}" (from field "${key}") collides with forward relation "${collidingRef.as}" in target table "${ref.table.name}". Choose a different 'reverseAs' name.`,
+						name,
+						key,
+					);
+				}
 			}
 
 			meta.references.push({
@@ -1916,7 +2034,23 @@ export function table<
 
 	const schema = z.object(zodShape as any);
 
-	return createTableObject(name, schema, zodShape, meta, options);
+	const tableObj = createTableObject(name, schema, zodShape, meta, options);
+
+	// Register reverse relations after table is created
+	// This allows the target table's reverses() to navigate back
+	for (const ref of meta.references) {
+		if (ref.reverseAs) {
+			registerReverseRelation(
+				ref.table,
+				ref.reverseAs,
+				() => tableObj,
+				name,
+				ref.fieldName,
+			);
+		}
+	}
+
+	return tableObj;
 }
 
 /**
@@ -2035,6 +2169,31 @@ function createTableObject(
 
 		references(): ReferenceInfo[] {
 			return meta.references;
+		},
+
+		relations(): Record<string, Relation<Table<any, any>>> {
+			const result: Record<string, Relation<Table<any, any>>> = {};
+
+			// Add forward relations (from this table's references)
+			for (const ref of meta.references) {
+				result[ref.as] = {
+					fields: () => ref.table.fields() as any,
+					table: ref.table,
+				};
+			}
+
+			// Add reverse relations (from tables that reference this one)
+			const reverseMap = getReverseRelations(table);
+			if (reverseMap) {
+				for (const [reverseName, getSourceTable] of reverseMap) {
+					result[reverseName] = {
+						fields: () => getSourceTable().fields() as any,
+						table: getSourceTable(),
+					};
+				}
+			}
+
+			return result;
 		},
 
 		deleted(): SQLTemplate {

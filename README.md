@@ -110,7 +110,7 @@ const post = await db.get(Posts, posts[0].id);
 await db.update(Users, {name: "Alice Smith"}, user.id);
 ```
 
-## Why Zen?
+## Why ZenDB?
 
 Zen is the missing link between SQL and typed data. By writing tables with Zod schema, you get idempotent migration helpers, typed CRUD, normalized object references, and many features other database clients cannot provide.
 
@@ -829,19 +829,29 @@ type NewUser = Insert<typeof Users>; // Insert type (respects defaults/.db.auto(
 
 ## Field Metadata
 
-Tables expose metadata for form generation:
+Tables expose metadata for introspection and form generation:
 
 ```typescript
 const fields = Users.fields();
-// {
-//   email: { name: "email", type: "email", required: true, unique: true },
-//   name: { name: "name", type: "text", required: true, maxLength: 100 },
-//   role: { name: "role", type: "select", options: ["user", "admin"], default: "user" },
-// }
 
-const pkName = Users.primaryKey();    // "id" (field name)
+// Preferred: raw schema and db metadata
+fields.email.name;              // "email"
+fields.email.schema;            // ZodString - use Zod APIs (isOptional(), etc.)
+fields.email.db;                // FieldDBMeta object
+fields.email.db.unique;         // true
+fields.email.db.primaryKey;     // undefined
+
+const pkName = Users.meta.primary;    // "id" (field name)
 const pkFragment = Users.primary;     // SQLTemplate: "users"."id"
-const refs = Posts.references();      // [{fieldName: "authorId", table: Users, as: "author"}]
+const refs = Posts.meta.references;   // [{fieldName: "authorId", table: Users, as: "author"}]
+
+// Relation navigation (forward and reverse)
+Posts.relations().author.table;       // Users table
+Posts.relations().author.fields();    // Users field metadata
+Users.relations().posts.table;        // Posts table (if reverseAs: "posts" defined)
+
+// Chain navigation through relationships
+Users.relations().posts.fields().author.fields().email;  // Back to Users.email field
 ```
 
 ## Performance
@@ -1037,9 +1047,9 @@ import type {
   CompoundReference, // Compound foreign key reference
 
   // Field types
-  FieldMeta,         // Field metadata for form generation
-  FieldType,         // Field type enum
+  FieldMeta,         // Field metadata for introspection
   FieldDBMeta,       // Database-specific field metadata
+  Relation,          // Relation navigator from table.relations()
 
   // Type inference
   Row,               // Infer row type from Table (after read)
@@ -1094,10 +1104,9 @@ Users.primary;                 // SQLTemplate for primary key column
 // Metadata
 Users.name;                    // Table name string
 Users.schema;                  // Zod schema
-Users.meta;                    // Table metadata (primary, indexes, etc.)
-Users.primaryKey();            // Primary key field name or null
+Users.meta;                    // Table metadata (primary, references, indexes, etc.)
 Users.fields();                // Field metadata for form generation
-Users.references();            // Foreign key references
+Users.relations();             // Forward and reverse relation navigators
 
 // Derived Tables
 Users.pick("id", "email");     // PartialTable with subset of fields

@@ -1377,7 +1377,7 @@ describe("enumerability and serialization", () => {
 			id: z.string().db.primary(),
 			title: z.string(),
 			authorId: z.string().db.references(users, "author", {
-				reverseAs: "posts",
+				reverseAs: "derivedPosts",
 			}),
 		},
 		{
@@ -1688,7 +1688,7 @@ describe("enumerability and serialization", () => {
 			id: z.string().db.primary(),
 			title: z.string(),
 			authorId: z.string().nullable().db.references(users, "author", {
-				reverseAs: "posts",
+				reverseAs: "nullablePosts",
 			}),
 		});
 
