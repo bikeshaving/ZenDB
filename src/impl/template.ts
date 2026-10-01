@@ -96,6 +96,107 @@ export function isSQLIdentifier(value: unknown): value is SQLIdentifier {
 	);
 }
 
+const SQL_ENCODABLE = Symbol.for("@b9g/zen:encodable");
+
+/**
+ * A value awaiting dialect-specific encoding.
+ *
+ * Carries the field type alongside the value so the encoding can be applied
+ * once a driver is known, matching what insert()/update() produce for the
+ * same column.
+ */
+export interface SQLEncodable {
+	readonly [SQL_ENCODABLE]: true;
+	readonly value: unknown;
+	readonly fieldType: string;
+}
+
+/**
+ * Create a value marked for dialect-specific encoding.
+ */
+export function encodable(value: unknown, fieldType: string): SQLEncodable {
+	return {[SQL_ENCODABLE]: true, value, fieldType};
+}
+
+/**
+ * Check if a value is awaiting dialect-specific encoding.
+ */
+export function isSQLEncodable(value: unknown): value is SQLEncodable {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		SQL_ENCODABLE in value &&
+		(value as any)[SQL_ENCODABLE] === true
+	);
+}
+
+/**
+ * Minimal interface for driver encoding capability.
+ * Defined here to avoid circular imports from database.ts.
+ */
+export interface DriverEncoder {
+	encodeValue?(value: unknown, fieldType: string): unknown;
+}
+
+/**
+ * Convert one app value to its database representation.
+ *
+ * Prefers the driver's dialect-specific encoding and otherwise falls back to a
+ * format accepted by SQLite, PostgreSQL and MySQL alike.
+ */
+export function encodeFieldValue(
+	value: unknown,
+	fieldType: string,
+	driver?: DriverEncoder,
+): unknown {
+	if (driver?.encodeValue) {
+		return driver.encodeValue(value, fieldType);
+	}
+
+	if (fieldType === "json" && value !== null && value !== undefined) {
+		return JSON.stringify(value);
+	}
+
+	if (
+		fieldType === "datetime" &&
+		value instanceof Date &&
+		!isNaN(value.getTime())
+	) {
+		// UTC string: "YYYY-MM-DD HH:MM:SS.mmm". The Z is stripped because MySQL
+		// doesn't accept it, but UTC semantics are preserved since toISOString()
+		// always returns UTC time.
+		return value.toISOString().replace("T", " ").replace("Z", "");
+	}
+
+	return value;
+}
+
+/**
+ * Apply pending encodings to a template's values once a driver is known.
+ */
+export function resolveEncodables(
+	values: unknown[],
+	driver?: DriverEncoder,
+): unknown[] {
+	let found = false;
+	for (const value of values) {
+		if (isSQLEncodable(value)) {
+			found = true;
+			break;
+		}
+	}
+
+	if (!found) {
+		return values;
+	}
+
+	return values.map((value) =>
+		isSQLEncodable(value)
+			? encodeFieldValue(value.value, value.fieldType, driver)
+			: value,
+	);
+}
+
 // ============================================================================
 // Template Building
 // ============================================================================

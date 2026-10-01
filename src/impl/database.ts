@@ -18,6 +18,8 @@ import {
 	validateWithStandardSchema,
 	getTableMeta,
 	inferFieldType,
+	isTable,
+	isView,
 } from "./table.js";
 import {z} from "zod";
 import {normalize, normalizeOne} from "./query.js";
@@ -26,6 +28,8 @@ import {
 	ident,
 	isSQLTemplate,
 	makeTemplate,
+	encodeFieldValue,
+	resolveEncodables,
 } from "./template.js";
 import {EnsureError} from "./errors.js";
 // ============================================================================
@@ -233,41 +237,7 @@ export function encodeData<T extends Table<any>>(
 			encoded[key] = driver.encodeValue(value, fieldType);
 		} else if (fieldSchema) {
 			// 3. Auto-encode fallback
-			// Check if field is an object, array, or date type - auto-encode
-			let core = fieldSchema;
-			while (typeof (core as any).unwrap === "function") {
-				// Stop unwrapping if we hit an array, object, or date
-				if (
-					core instanceof z.ZodArray ||
-					core instanceof z.ZodObject ||
-					core instanceof z.ZodDate
-				) {
-					break;
-				}
-				core = (core as any).unwrap();
-			}
-
-			if (
-				(core instanceof z.ZodObject || core instanceof z.ZodArray) &&
-				value !== null &&
-				value !== undefined
-			) {
-				// Automatic JSON encoding for objects and arrays
-				encoded[key] = JSON.stringify(value);
-			} else if (
-				core instanceof z.ZodDate &&
-				value instanceof Date &&
-				!isNaN(value.getTime())
-			) {
-				// Automatic datetime string encoding for Date objects
-				// Convert to UTC string: "YYYY-MM-DD HH:MM:SS.mmm"
-				// Note: This format works with SQLite, PostgreSQL, and MySQL.
-				// The Z is stripped because MySQL doesn't accept it, but we preserve
-				// UTC semantics since toISOString() always returns UTC time.
-				encoded[key] = value.toISOString().replace("T", " ").replace("Z", "");
-			} else {
-				encoded[key] = value;
-			}
+			encoded[key] = encodeFieldValue(value, inferFieldType(fieldSchema));
 		} else {
 			encoded[key] = value;
 		}
@@ -870,6 +840,9 @@ function expandFragments(
 
 			// Append the next template string part
 			newStrings[newStrings.length - 1] += strings[i + 1];
+		} else if (isTable(value) || isView(value)) {
+			newStrings.push(strings[i + 1]);
+			newValues.push(ident(value.name));
 		} else {
 			// Regular value: add placeholder position
 			newStrings.push(strings[i + 1]);
@@ -945,6 +918,41 @@ export type TaggedQuery<T> = (
 ) => Promise<T>;
 
 /**
+ * Wrap a driver so pending encodings are applied to template values before
+ * they reach it.
+ *
+ * Applied once at the driver boundary rather than at each call site, so no
+ * query path can bypass it.
+ */
+function withEncoding(driver: Driver): Driver {
+	const templateMethods = new Set(["all", "get", "run", "val", "explain"]);
+
+	return new Proxy(driver, {
+		get(target, prop, receiver) {
+			const original = Reflect.get(target, prop, receiver);
+
+			if (typeof original !== "function") {
+				return original;
+			}
+
+			if (typeof prop === "string" && templateMethods.has(prop)) {
+				return (strings: TemplateStringsArray, values: unknown[]) =>
+					original.call(target, strings, resolveEncodables(values, target));
+			}
+
+			if (prop === "transaction") {
+				return (fn: (txDriver: Driver) => Promise<unknown>) =>
+					original.call(target, (txDriver: Driver) =>
+						fn(withEncoding(txDriver)),
+					);
+			}
+
+			return original.bind(target);
+		},
+	});
+}
+
+/**
  * Transaction context with query methods.
  *
  * Provides the same query interface as Database, but bound to a single
@@ -954,7 +962,7 @@ export class Transaction {
 	#driver: Driver;
 
 	constructor(driver: Driver) {
-		this.#driver = driver;
+		this.#driver = withEncoding(driver);
 	}
 
 	// ==========================================================================
@@ -1890,7 +1898,7 @@ export class Database extends EventTarget {
 
 	constructor(driver: Driver, options?: {tables?: Table<any>[]}) {
 		super();
-		this.#driver = driver;
+		this.#driver = withEncoding(driver);
 		this.#tables = options?.tables ?? [];
 	}
 

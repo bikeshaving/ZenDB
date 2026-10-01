@@ -14,6 +14,7 @@ import {
 	makeTemplate,
 	createTemplate,
 	isSQLTemplate,
+	encodable,
 	type SQLTemplate,
 } from "./template.js";
 import {ValidationError} from "./errors.js";
@@ -2514,7 +2515,15 @@ function createTableObject(
 							`All rows must have the same columns. Row is missing column "${col}"`,
 						);
 					}
-					templateValues.push((validated as Record<string, unknown>)[col]);
+					const rawValue = (validated as Record<string, unknown>)[col];
+					const fieldMeta = meta.fields[col];
+					if (fieldMeta?.encode && typeof fieldMeta.encode === "function") {
+						templateValues.push(fieldMeta.encode(rawValue));
+					} else {
+						templateValues.push(
+							encodable(rawValue, inferFieldType(schema.shape[col])),
+						);
+					}
 					strings.push(colIdx < columns.length - 1 ? ", " : ")");
 				}
 

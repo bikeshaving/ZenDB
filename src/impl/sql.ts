@@ -8,7 +8,7 @@
  * - Template rendering (for DDL and queries)
  */
 
-import {isSQLIdentifier} from "./template.js";
+import {isSQLIdentifier, isSQLEncodable, encodeFieldValue} from "./template.js";
 import {isSQLBuiltin, resolveSQLBuiltin} from "./builtins.js";
 
 // ============================================================================
@@ -64,6 +64,9 @@ export function renderSQL(
 			const value = values[i];
 			if (isSQLIdentifier(value)) {
 				sql += quoteIdent(value.name, dialect);
+			} else if (isSQLEncodable(value)) {
+				params.push(encodeFieldValue(value.value, value.fieldType));
+				sql += placeholder(params.length, dialect);
 			} else {
 				params.push(value);
 				sql += placeholder(params.length, dialect);

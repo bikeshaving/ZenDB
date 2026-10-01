@@ -483,8 +483,9 @@ const counts = await db.query<{count: number}>`
   SELECT COUNT(*) as count FROM ${Posts} WHERE ${Posts.cols.authorId} = ${userId}
 `;
 
-// Execute statements
-await db.exec`CREATE INDEX idx_posts_author ON ${Posts}(${Posts.cols.authorId})`;
+// Execute statements. Index expressions take a bare column name, so use
+// ident() rather than cols, which is table-qualified.
+await db.exec`CREATE INDEX idx_posts_author ON ${Posts}(${ident("authorId")})`;
 
 // Single value
 const count = await db.val<number>`SELECT COUNT(*) FROM ${Posts}`;
@@ -1142,7 +1143,7 @@ await db.get(Users, "u1");
 
 // Raw Query Methods (no normalization)
 await db.query<{count: number}>`SELECT COUNT(*) as count FROM ${Users}`;
-await db.exec`CREATE INDEX idx_users_email ON ${Users}(${Users.cols.email})`;
+await db.exec`CREATE INDEX idx_users_email ON ${Users}(${ident("email")})`;
 await db.val<number>`SELECT COUNT(*) FROM ${Users}`;
 
 // CRUD Helpers
