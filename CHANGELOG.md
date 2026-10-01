@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-10-01
+
+### Changed
+
+- **`zod` is now a peer dependency only.** It was declared in both
+  `dependencies` and `peerDependencies`, which is self-contradictory: the peer
+  contract says the host provides zod, while the `dependencies` entry allowed a
+  second copy to be installed alongside it. `@b9g/zen` now has zero runtime
+  dependencies, so a consumer's bundle no longer risks carrying two copies of
+  zod (#20).
+
+  Your project must provide `zod` itself. npm installs the peer automatically,
+  and upgrading in place keeps the copy you already have, so most projects need
+  no change. Package managers that do not install peers automatically (yarn 1,
+  or npm with `--legacy-peer-deps`) need an explicit `npm i zod`.
+
+### Added
+
+- `@b9g/zen/schema` entrypoint for using table and view definitions away from a
+  database connection — form validation, API contracts, types shared between
+  client and server. It excludes the database runtime, so it bundles about 65%
+  smaller than the main entrypoint (#7).
+
+### Fixed
+
+- **A table interpolated into raw SQL is now expanded.** `db.exec`, `db.query`,
+  `db.val` and `db.explain` sent the table object to the driver as a bound
+  parameter, producing `near "?": syntax error` for the form the README
+  documents. Tables and views are now quoted identifiers, as they already were
+  in the typed methods.
+- **`Table.values()` now encodes rows through the schema.** It validated rows
+  but skipped encoding, so a `z.date()` column handed a `Date` straight to the
+  driver and the binding was rejected. Objects, arrays and custom
+  `.db.encode()` were skipped the same way. Encoding is applied where the
+  dialect is known, so `values()` and `insert()` now write identical values for
+  the same row.
+- **`Insert<>` respects `.db.auto()`, `.db.inserted()` and `.db.upserted()`.**
+  Generated fields were still required at the type level, so the README's own
+  Quick Start did not compile even though the runtime was correct. `npm run
+  typecheck` now covers the public API, including that example, so a type-level
+  regression in the public surface fails the build.
+- Two README `CREATE INDEX` examples used a table-qualified `cols` reference
+  inside an index expression, which SQL does not allow. They use `ident()` on a
+  bare column name instead.
+
 ## [0.1.6] - 2026-01-05
 
 ### Added

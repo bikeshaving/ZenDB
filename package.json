@@ -1,6 +1,6 @@
 {
   "name": "@b9g/zen",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Define Zod tables. Write raw SQL. Get typed objects.",
   "type": "module",
   "exports": {
