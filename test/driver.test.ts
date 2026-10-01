@@ -835,5 +835,144 @@ for (const dialect of dialects) {
 				expect(page2[1].name).toBe("Charlie");
 			});
 		});
+
+		describe("Table Interpolation", () => {
+			it("expands a table into raw SQL as a quoted identifier", async () => {
+				if (maybeSkip()) return;
+
+				const Users = table(`interp_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				await db.ensureTable(Users);
+				await db.insert(Users, {id: "1", name: "Alice"});
+
+				expect(Number(await db.val`SELECT COUNT(*) FROM ${Users}`)).toBe(1);
+
+				const counted = await db.query<{total: number}>`
+					SELECT COUNT(*) AS total FROM ${Users}
+				`;
+				expect(Number(counted[0].total)).toBe(1);
+
+				await db.exec`
+					UPDATE ${Users} SET ${Users.set({name: "Alicia"})}
+					WHERE ${Users.cols.id} = ${"1"}
+				`;
+				expect((await db.get(Users, "1"))!.name).toBe("Alicia");
+
+				await db.exec`
+					CREATE INDEX ${ident(`idx_${runId}_${testId}`)}
+					ON ${Users}(${ident("name")})
+				`;
+			});
+
+			it("quotes the table name rather than inlining it", async () => {
+				if (maybeSkip()) return;
+
+				const Select = table(`select_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+				});
+
+				await db.ensureTable(Select);
+				await db.insert(Select, {id: "a"});
+
+				expect(Number(await db.val`SELECT COUNT(*) FROM ${Select}`)).toBe(1);
+			});
+		});
+
+		describe("values() Encoding", () => {
+			it("encodes exactly as insert() does for the same row", async () => {
+				if (maybeSkip()) return;
+
+				const Events = table(`values_enc_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					at: z.date(),
+					payload: z.object({a: z.number()}),
+					flag: z.boolean(),
+				});
+
+				await db.ensureTable(Events);
+
+				const when = new Date("2026-03-04T05:06:07.890Z");
+				const row = {at: when, payload: {a: 1}, flag: true};
+
+				await db.insert(Events, {id: "insert", ...row});
+				await db.exec`
+					INSERT INTO ${Events} ${Events.values([{id: "values", ...row}])}
+				`;
+
+				const raw = await db.query<Record<string, unknown>>`
+					SELECT ${Events.cols.id} AS id, ${Events.cols.at} AS at,
+						${Events.cols.payload} AS payload, ${Events.cols.flag} AS flag
+					FROM ${Events} ORDER BY ${Events.cols.id}
+				`;
+
+				expect(raw.length).toBe(2);
+				expect(String(raw[0].at)).toBe(String(raw[1].at));
+				expect(String(raw[0].payload)).toBe(String(raw[1].payload));
+				expect(String(raw[0].flag)).toBe(String(raw[1].flag));
+			});
+
+			it("round-trips a date written through values()", async () => {
+				if (maybeSkip()) return;
+
+				const Events = table(`values_date_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					at: z.date(),
+				});
+
+				await db.ensureTable(Events);
+
+				const when = new Date("2026-03-04T05:06:07.890Z");
+				await db.exec`
+					INSERT INTO ${Events} ${Events.values([{id: "a", at: when}])}
+				`;
+
+				const back = await db.get(Events, "a");
+				expect(back!.at instanceof Date).toBe(true);
+				expect(back!.at.getTime()).toBe(when.getTime());
+			});
+
+			it("honors a custom .db.encode()", async () => {
+				if (maybeSkip()) return;
+
+				const Tagged = table(`values_custom_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					tags: z
+						.array(z.string())
+						.db.encode((value: string[]) => value.join("|")),
+				});
+
+				await db.ensureTable(Tagged);
+				await db.exec`
+					INSERT INTO ${Tagged} ${Tagged.values([{id: "a", tags: ["x", "y"]}])}
+				`;
+
+				const raw = await db.query<Record<string, unknown>>`
+					SELECT ${Tagged.cols.tags} AS tags FROM ${Tagged}
+				`;
+				expect(raw[0].tags).toBe("x|y");
+			});
+
+			it("encodes inside a transaction", async () => {
+				if (maybeSkip()) return;
+
+				const Events = table(`values_tx_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					at: z.date(),
+				});
+
+				await db.ensureTable(Events);
+
+				await db.transaction(async (tx) => {
+					await tx.exec`
+						INSERT INTO ${Events} ${Events.values([{id: "a", at: new Date()}])}
+					`;
+				});
+
+				expect(Number(await db.val`SELECT COUNT(*) FROM ${Events}`)).toBe(1);
+			});
+		});
 	});
 }

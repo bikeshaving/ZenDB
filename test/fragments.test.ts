@@ -163,6 +163,49 @@ describe("Table.values()", () => {
 		).toThrow();
 	});
 
+	test("encodes dates, objects and arrays without a driver", () => {
+		const Records = table("records", {
+			id: z.string().uuid().db.primary(),
+			at: z.date(),
+			payload: z.object({a: z.number()}),
+			tags: z.array(z.string()),
+			flag: z.boolean(),
+		});
+
+		const {params} = renderFragment(
+			Records.values([
+				{
+					id: uuid1,
+					at: new Date("2026-03-04T05:06:07.890Z"),
+					payload: {a: 1},
+					tags: ["x", "y"],
+					flag: true,
+				},
+			]),
+		);
+
+		expect(params).toEqual([
+			uuid1,
+			"2026-03-04 05:06:07.890",
+			'{"a":1}',
+			'["x","y"]',
+			true,
+		]);
+	});
+
+	test("applies a custom .db.encode()", () => {
+		const Tagged = table("tagged", {
+			id: z.string().uuid().db.primary(),
+			tags: z.array(z.string()).db.encode((value: string[]) => value.join("|")),
+		});
+
+		const {params} = renderFragment(
+			Tagged.values([{id: uuid1, tags: ["x", "y"]}]),
+		);
+
+		expect(params).toEqual([uuid1, "x|y"]);
+	});
+
 	test("throws on empty rows", () => {
 		expect(() => Posts.values([])).toThrow(
 			"values() requires at least one row",
