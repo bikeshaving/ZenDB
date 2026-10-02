@@ -1,0 +1,45 @@
+name: Website
+
+# zendb.org is the static site in website/, published to the gh-pages branch.
+# Every push to main rebuilds it. The site is self-contained: its guides live
+# in website/docs/guides, so nothing outside website/ changes the output.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # The site has its own lockfile and does not depend on @b9g/zen, so the
+      # root package does not need building first.
+      - run: bun install --frozen-lockfile
+        working-directory: website
+
+      - name: Build
+        run: npm run static
+        working-directory: website
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: website/dist/public
+          cname: zendb.org

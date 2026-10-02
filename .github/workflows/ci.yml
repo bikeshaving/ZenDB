@@ -4,62 +4,86 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
-  test:
-    name: Test
+  check:
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: mysql
-          MYSQL_DATABASE: test_db
-        options: >-
-          --health-cmd "mysqladmin ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 3306:3306
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install dependencies
-        run: bun install
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
 
-      - name: Type check
-        run: bun run typecheck
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Lint
-        run: bun run lint
+        run: npm run lint
 
       - name: Build
-        run: bun run build
+        run: npm run build
 
-      - name: Test (SQLite + PostgreSQL + MySQL)
-        run: bun run test
+  test:
+    runs-on: ubuntu-latest
+
+    # Ports, credentials and database name mirror docker-compose.yml, because
+    # the dialect URLs in test/driver.test.ts are the same in both places. A
+    # dialect this job cannot reach is skipped rather than failed, so a
+    # mismatch here costs coverage silently.
+    services:
+      postgres:
+        image: postgres:16-alpine
         env:
-          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/test_db
-          MYSQL_URL: mysql://root:mysql@localhost:3306/test_db
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd "pg_isready -U testuser -d test_db"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 15432:5432
+
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpass
+          MYSQL_DATABASE: test_db
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -utestuser -ptestpass"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 13306:3306
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - run: bun install --frozen-lockfile
+
+      # A dialect the suite cannot reach is skipped, not failed, so without
+      # this the job can go green while covering SQLite alone.
+      - name: Check every dialect is reachable
+        run: node .github/scripts/check-dialects.js
+
+      - name: Test (SQLite, PostgreSQL, MySQL)
+        run: npm test
