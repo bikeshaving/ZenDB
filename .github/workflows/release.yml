@@ -66,9 +66,15 @@ jobs:
         with:
           bun-version: latest
 
+      # node 22, not 24 as the other repositories use. better-sqlite3 is pinned
+      # to ^11, which predates node 24: its Database destructor runs after the
+      # environment is torn down and aborts the process with "Assertion failed:
+      # (env) != nullptr" once the tests have passed. Supporting node 24 means
+      # widening the better-sqlite3 peer range, which is a consumer-facing
+      # decision rather than a CI fix.
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 22
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing needs npm 11.5.1+, and staged publishing 11.15.0+
