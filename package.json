@@ -5,56 +5,56 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/src/zen.d.ts",
-      "import": "./dist/src/zen.js"
+      "types": "./dist/zen.d.ts",
+      "import": "./dist/zen.js"
     },
     "./bun": {
-      "types": "./dist/src/bun.d.ts",
-      "import": "./dist/src/bun.js"
+      "types": "./dist/bun.d.ts",
+      "import": "./dist/bun.js"
     },
     "./sqlite": {
-      "types": "./dist/src/sqlite.d.ts",
-      "import": "./dist/src/sqlite.js"
+      "types": "./dist/sqlite.d.ts",
+      "import": "./dist/sqlite.js"
     },
     "./postgres": {
-      "types": "./dist/src/postgres.d.ts",
-      "import": "./dist/src/postgres.js"
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
     },
     "./mysql": {
-      "types": "./dist/src/mysql.d.ts",
-      "import": "./dist/src/mysql.js"
+      "types": "./dist/mysql.d.ts",
+      "import": "./dist/mysql.js"
     },
     "./schema": {
-      "types": "./dist/src/schema.d.ts",
-      "import": "./dist/src/schema.js"
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js"
     },
     "./schema.js": {
-      "types": "./dist/src/schema.d.ts",
-      "import": "./dist/src/schema.js"
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js"
     },
     "./bun.js": {
-      "types": "./dist/src/bun.d.ts",
-      "import": "./dist/src/bun.js"
+      "types": "./dist/bun.d.ts",
+      "import": "./dist/bun.js"
     },
     "./mysql.js": {
-      "types": "./dist/src/mysql.d.ts",
-      "import": "./dist/src/mysql.js"
+      "types": "./dist/mysql.d.ts",
+      "import": "./dist/mysql.js"
     },
     "./postgres.js": {
-      "types": "./dist/src/postgres.d.ts",
-      "import": "./dist/src/postgres.js"
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
     },
     "./sqlite.js": {
-      "types": "./dist/src/sqlite.d.ts",
-      "import": "./dist/src/sqlite.js"
+      "types": "./dist/sqlite.d.ts",
+      "import": "./dist/sqlite.js"
     },
     "./zen": {
-      "types": "./dist/src/zen.d.ts",
-      "import": "./dist/src/zen.js"
+      "types": "./dist/zen.d.ts",
+      "import": "./dist/zen.js"
     },
     "./zen.js": {
-      "types": "./dist/src/zen.d.ts",
-      "import": "./dist/src/zen.js"
+      "types": "./dist/zen.d.ts",
+      "import": "./dist/zen.js"
     },
     "./package.json": "./dist/package.json"
   },
@@ -65,10 +65,10 @@
     "test:node": "node --import tsx --test src/impl/*.node-test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "lint": "eslint --ext .js,.jsx,.ts,.tsx .",
-    "prepublishOnly": "echo 'ERROR: Cannot publish from root directory. Use libuild publish instead.' && exit 1"
+    "prepublishOnly": "echo 'ERROR: Cannot publish from root directory. Use libuild to publish or stage the package.' && exit 1"
   },
   "devDependencies": {
-    "@b9g/libuild": "^0.2.17",
+    "@b9g/libuild": "^0.2.25",
     "@eslint/js": "^9.39.2",
     "@types/better-sqlite3": "^7.6.0",
     "@types/bun": "^1.3.4",
@@ -121,6 +121,6 @@
   "bugs": {
     "url": "https://github.com/bikeshaving/zen/issues"
   },
-  "module": "./dist/src/zen.js",
-  "types": "./dist/src/zen.d.ts"
+  "module": "./dist/zen.js",
+  "types": "./dist/zen.d.ts"
 }

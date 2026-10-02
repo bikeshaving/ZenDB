@@ -5,7 +5,7 @@
     "": {
       "name": "@zealot/monorepo",
       "devDependencies": {
-        "@b9g/libuild": "^0.2.17",
+        "@b9g/libuild": "^0.2.25",
         "@eslint/js": "^9.39.2",
         "@types/better-sqlite3": "^7.6.0",
         "@types/bun": "^1.3.4",
@@ -35,7 +35,9 @@
     },
   },
   "packages": {
-    "@b9g/libuild": ["@b9g/libuild@0.2.17", "", { "dependencies": { "commander": "^15.0.0", "esbuild": "^0.28.1", "expect": "^30.4.1", "glob": "^13.0.6", "pretty-format": "^30.4.1" }, "peerDependencies": { "playwright": "^1.40.0", "typescript": "^5.0.0" }, "optionalPeers": ["playwright", "typescript"], "bin": { "libuild": "cli.js" } }, "sha512-7TXKet+ZCwmGqsp4ICWkQUvGWu6tVFFAeRfUF5Y3VlLrsZFMk1NlQLESzbdudvx3GMk2+2wOi3lDRPLtWUT9AA=="],
+    "@b9g/async-context": ["@b9g/async-context@0.2.1", "", {}, "sha512-Pga+sVg8yVR1Z40BkeK/OWKNJeXlA2XhZWusx6g7dM956biRSTfdInS29Z3WIfvdXi8YsgSzTOiOhcQlD8U2pw=="],
+
+    "@b9g/libuild": ["@b9g/libuild@0.2.25", "", { "dependencies": { "@b9g/async-context": "^0.2.1", "commander": "^15.0.0", "esbuild": "^0.28.1", "expect": "^30.4.1", "glob": "^13.0.6", "pretty-format": "^30.4.1" }, "peerDependencies": { "playwright": "^1.40.0", "typescript": "^5.0.0 || ^6.0.0" }, "optionalPeers": ["playwright", "typescript"], "bin": { "libuild": "cli.js" } }, "sha512-gASB1QiejGfe5vIGbp2wwIhMvz4T1ppo9RlmtwI8tpVXld8GqXl/7NliU0HiY5IU3ZqaLDTbiick7BXSkKAJgw=="],
 
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
 
