@@ -129,6 +129,7 @@ export {
 
 	// Connection errors
 	ConnectionError,
+	DatabaseClosedError,
 	TransactionError,
 
 	// Error types

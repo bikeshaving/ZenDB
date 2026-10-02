@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`db.close()`** releases the driver's connection. `close()` existed on the
+  `Driver` interface but not on `Database`, so the only way to close was to
+  hold the driver and close it yourself, which nothing documented. Safe to call
+  more than once. Closing is terminal — every driver's close releases its
+  handle or pool, so the instance cannot be reopened, and a later query throws
+  the new `DatabaseClosedError` rather than surfacing whatever the underlying
+  library reports once its connection is gone.
+- **`await using` support.** `Database` implements `Symbol.asyncDispose`, so an
+  `await using` binding closes it when the block ends, including on an early
+  return or a throw. Needs a runtime with `Symbol.asyncDispose` (Node 22+,
+  Bun). The emitted declarations now reference it, so a consumer typechecking
+  with `skipLibCheck: false` and a `lib` that lacks `ESNext.Disposable` must
+  add it; `close()` itself carries no such requirement.
+
 ## [0.1.7] - 2026-10-02
 
 ### Changed

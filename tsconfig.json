@@ -1,6 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    // ES2022 implies lib.es2022.full, which carries DOM - Database extends
+    // EventTarget. Naming lib explicitly would drop that, so DOM is listed
+    // alongside the Disposable types that `await using` needs.
+    "lib": ["ES2022", "DOM", "ESNext.Disposable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "declaration": true,
