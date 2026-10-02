@@ -9,7 +9,7 @@
     "build-logo": "bun run scripts/build-logo.ts",
     "check-links": "bun run scripts/check-links.ts",
     "predeploy": "npm run static && npm run check-links",
-    "deploy": "gh-pages -d dist/public --nojekyll --cname zendb.org"
+    "deploy": "wrangler pages deploy dist/public --project-name zendb"
   },
   "dependencies": {
     "@b9g/assets": "^0.2.1",
@@ -32,9 +32,9 @@
   "devDependencies": {
     "@types/node": "^18.19.130",
     "@types/prismjs": "^1.26.5",
-    "gh-pages": "^6.3.0",
     "sharp": "^0.33.5",
     "svg-to-ico": "^1.0.17",
-    "typescript": "^4.9.5"
+    "typescript": "^4.9.5",
+    "wrangler": "^4.147.0"
   }
 }
