@@ -115,11 +115,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bikeshaving/zen.git"
+    "url": "git+https://github.com/bikeshaving/ZenDB.git"
   },
   "homepage": "https://zendb.org",
   "bugs": {
-    "url": "https://github.com/bikeshaving/zen/issues"
+    "url": "https://github.com/bikeshaving/ZenDB/issues"
   },
   "module": "./dist/zen.js",
   "types": "./dist/zen.d.ts"
