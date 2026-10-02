@@ -10,7 +10,13 @@
  */
 
 import {describe, it, expect, afterAll, beforeAll, beforeEach} from "bun:test";
-import {Database, table, z, ident} from "../src/impl/../zen.js";
+import {
+	Database,
+	table,
+	z,
+	ident,
+	DatabaseClosedError,
+} from "../src/impl/../zen.js";
 import BunDriver from "../src/impl/../bun.js";
 
 // =============================================================================
@@ -833,6 +839,103 @@ for (const dialect of dialects) {
 				expect(page2.length).toBe(2);
 				expect(page2[0].name).toBe("Bob");
 				expect(page2[1].name).toBe("Charlie");
+			});
+		});
+
+		describe("close()", () => {
+			// Each test owns its Database, so closing it cannot interfere with
+			// the shared one beforeEach manages - mysql2 throws if a pool is
+			// ended twice.
+			const own = () => new Database(new BunDriver(dialect.url));
+
+			it("releases the connection and refuses later queries", async () => {
+				if (maybeSkip()) return;
+
+				const Users = table(`close_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				const mine = own();
+				await mine.open(1);
+				await mine.ensureTable(Users);
+				await mine.insert(Users, {id: "1", name: "Alice"});
+				expect((await mine.get(Users, "1"))!.name).toBe("Alice");
+
+				await mine.close();
+
+				let name = "";
+				try {
+					await mine.get(Users, "1");
+				} catch (err: any) {
+					name = err.constructor.name;
+				}
+				expect(name).toBe("DatabaseClosedError");
+			});
+
+			it("is safe to call twice", async () => {
+				if (maybeSkip()) return;
+
+				const mine = own();
+				await mine.open(1);
+				await mine.close();
+				await mine.close();
+			});
+
+			it("refuses raw SQL after close", async () => {
+				if (maybeSkip()) return;
+
+				const mine = own();
+				await mine.open(1);
+				await mine.close();
+
+				let threw = false;
+				try {
+					await mine.val`SELECT 1`;
+				} catch (err: any) {
+					threw = err instanceof DatabaseClosedError;
+				}
+				expect(threw).toBe(true);
+			});
+
+			it("cannot be reopened", async () => {
+				if (maybeSkip()) return;
+
+				const mine = own();
+				await mine.open(1);
+				await mine.close();
+
+				let message = "";
+				try {
+					await mine.open(1);
+				} catch (err: any) {
+					message = err.message;
+				}
+				expect(message).toContain("cannot be reopened");
+			});
+
+			it("names the cause rather than leaking the driver's error", async () => {
+				if (maybeSkip()) return;
+
+				const mine = own();
+				await mine.open(1);
+				await mine.close();
+
+				let message = "";
+				try {
+					await mine.val`SELECT 1`;
+				} catch (err: any) {
+					message = err.message;
+				}
+				expect(message).toContain("Database is closed");
+				expect(message).toContain("close()");
+			});
+
+			it("closes without ever having been opened", async () => {
+				if (maybeSkip()) return;
+
+				const mine = own();
+				await mine.close();
 			});
 		});
 

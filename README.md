@@ -491,6 +491,32 @@ await db.exec`CREATE INDEX idx_posts_author ON ${Posts}(${ident("authorId")})`;
 const count = await db.val<number>`SELECT COUNT(*) FROM ${Posts}`;
 ```
 
+## Closing
+
+`db.close()` releases the driver's connection:
+
+```typescript
+const db = new Database(new SQLiteDriver("file:app.db"));
+try {
+  await db.open(1);
+  await db.insert(Users, {email: "alice@example.com", name: "Alice"});
+} finally {
+  await db.close();
+}
+```
+
+It is safe to call more than once, so a cleanup path need not track whether it
+already has.
+
+Closing is **terminal**. Every driver's close releases its handle or pool, so
+the instance cannot be reopened — `open()` throws afterwards, and any later
+query throws `DatabaseClosedError` rather than surfacing whatever the
+underlying library says once its connection is gone. Create a new `Database`
+to query again.
+
+In-flight work is not awaited. Await your queries and transactions before
+closing.
+
 ## CRUD Helpers
 ```typescript
 // Insert with Zod validation (uses RETURNING to get actual row)
@@ -1135,6 +1161,7 @@ const db = new Database(new SQLiteDriver("file:app.db"));
 // Lifecycle
 await db.open(1);
 db.addEventListener("upgradeneeded", () => {});
+await db.close();                      // Releases the connection. Terminal.
 
 // Query Methods (with normalization)
 await db.all(Users)`WHERE ${Users.cols.email} = ${"alice@example.com"}`;

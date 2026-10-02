@@ -19,6 +19,7 @@ export type DatabaseErrorCode =
 	| "ALREADY_EXISTS"
 	| "CONSTRAINT_VIOLATION"
 	| "CONNECTION_ERROR"
+	| "DATABASE_CLOSED"
 	| "TRANSACTION_ERROR"
 	| "ENSURE_ERROR"
 	| "SCHEMA_DRIFT_ERROR"
@@ -242,6 +243,19 @@ export class ConnectionError extends DatabaseError {
 	constructor(message: string, options?: ErrorOptions) {
 		super("CONNECTION_ERROR", message, options);
 		this.name = "ConnectionError";
+	}
+}
+
+/**
+ * Thrown when a Database is used after close().
+ *
+ * Closing is terminal: every driver's close releases the underlying handle or
+ * pool, so the instance cannot be reopened.
+ */
+export class DatabaseClosedError extends DatabaseError {
+	constructor(message: string, options?: ErrorOptions) {
+		super("DATABASE_CLOSED", message, options);
+		this.name = "DatabaseClosedError";
 	}
 }
 

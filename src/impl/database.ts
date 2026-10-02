@@ -31,7 +31,7 @@ import {
 	encodeFieldValue,
 	resolveEncodables,
 } from "./template.js";
-import {EnsureError} from "./errors.js";
+import {EnsureError, DatabaseClosedError} from "./errors.js";
 // ============================================================================
 // DB Expressions - Runtime values evaluated by the database
 // ============================================================================
@@ -924,6 +924,37 @@ export type TaggedQuery<T> = (
  * Applied once at the driver boundary rather than at each call site, so no
  * query path can bypass it.
  */
+/**
+ * A driver that refuses every operation.
+ *
+ * close() swaps the real driver for this, so a query after close names the
+ * mistake instead of surfacing whatever the underlying library says once its
+ * handle is gone. Doing it here rather than guarding each query means no path
+ * can miss the check.
+ */
+function closedDriver(): Driver {
+	const refuse = (): never => {
+		throw new DatabaseClosedError(
+			"Database is closed. close() releases the driver's connection and " +
+				"cannot be undone - create a new Database to query again.",
+		);
+	};
+
+	return new Proxy({} as Driver, {
+		get(_target, prop) {
+			if (prop === "close") {
+				return async () => {};
+			}
+
+			if (prop === "supportsReturning") {
+				return false;
+			}
+
+			return refuse;
+		},
+	});
+}
+
 function withEncoding(driver: Driver): Driver {
 	const templateMethods = new Set(["all", "get", "run", "val", "explain"]);
 
@@ -1893,6 +1924,7 @@ export class Database extends EventTarget {
 	#driver: Driver;
 	#version: number = 0;
 	#opened: boolean = false;
+	#closed: boolean = false;
 	#tables: Table<any>[] = [];
 	#inMigrationLock: boolean = false;
 
@@ -1927,6 +1959,13 @@ export class Database extends EventTarget {
 	 * await db.open(2);
 	 */
 	async open(version: number): Promise<void> {
+		if (this.#closed) {
+			throw new DatabaseClosedError(
+				"Database is closed and cannot be reopened. Create a new Database " +
+					"with a new driver instead.",
+			);
+		}
+
 		if (this.#opened) {
 			throw new Error("Database already opened");
 		}
@@ -1972,6 +2011,41 @@ export class Database extends EventTarget {
 
 		this.#version = version;
 		this.#opened = true;
+	}
+
+	/**
+	 * Close the database, releasing the driver's connection.
+	 *
+	 * Safe to call more than once, so a cleanup path can call it without
+	 * tracking whether it already has. Terminal: every driver's close releases
+	 * its handle or pool, so the instance cannot be reopened and any later
+	 * query throws DatabaseClosedError.
+	 *
+	 * In-flight work is not awaited. Await your queries and transactions before
+	 * closing.
+	 *
+	 * @example
+	 * const db = new Database(new SQLiteDriver(":memory:"));
+	 * try {
+	 *   await db.open(1);
+	 *   await db.insert(Users, {id: "1", name: "Alice"});
+	 * } finally {
+	 *   await db.close();
+	 * }
+	 */
+	async close(): Promise<void> {
+		if (this.#closed) {
+			return;
+		}
+
+		// Set before awaiting, so a query racing the close is refused rather
+		// than reaching a driver whose handle is already going away.
+		this.#closed = true;
+		this.#opened = false;
+
+		const driver = this.#driver;
+		this.#driver = closedDriver();
+		await driver.close();
 	}
 
 	// ==========================================================================
