@@ -517,6 +517,22 @@ to query again.
 In-flight work is not awaited. Await your queries and transactions before
 closing.
 
+`Database` also implements `Symbol.asyncDispose`, so `await using` closes it
+for you, including on an early return or a throw:
+
+```typescript
+await using db = new Database(new SQLiteDriver("file:app.db"));
+await db.open(1);
+await db.insert(Users, {email: "alice@example.com", name: "Alice"});
+// closed when the block ends
+```
+
+That needs a runtime with `Symbol.asyncDispose` (Node 22+, Bun) and
+TypeScript 5.2+ with `lib` including `ESNext.Disposable`. If you typecheck
+with `skipLibCheck: false` and a `lib` without it, add `ESNext.Disposable` —
+otherwise our declarations will report `Property 'asyncDispose' does not
+exist on type 'SymbolConstructor'`. `db.close()` has no such requirement.
+
 ## CRUD Helpers
 ```typescript
 // Insert with Zod validation (uses RETURNING to get actual row)

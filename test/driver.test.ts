@@ -937,6 +937,55 @@ for (const dialect of dialects) {
 				const mine = own();
 				await mine.close();
 			});
+
+			it("closes at the end of an `await using` block", async () => {
+				if (maybeSkip()) return;
+
+				const Users = table(`using_${runId}_${testId}`, {
+					id: stringId().db.primary(),
+					name: stringField(),
+				});
+
+				let escaped: Database;
+				{
+					await using mine = own();
+					await mine.open(1);
+					await mine.ensureTable(Users);
+					await mine.insert(Users, {id: "1", name: "Alice"});
+					expect((await mine.get(Users, "1"))!.name).toBe("Alice");
+					escaped = mine;
+				}
+
+				let name = "";
+				try {
+					await escaped.get(Users, "1");
+				} catch (err: any) {
+					name = err.constructor.name;
+				}
+				expect(name).toBe("DatabaseClosedError");
+			});
+
+			it("closes on a throw inside `await using`", async () => {
+				if (maybeSkip()) return;
+
+				let escaped: Database | null = null;
+				try {
+					await using mine = own();
+					await mine.open(1);
+					escaped = mine;
+					throw new Error("boom");
+				} catch {
+					/* expected */
+				}
+
+				let threw = false;
+				try {
+					await escaped!.val`SELECT 1`;
+				} catch (err: any) {
+					threw = err instanceof DatabaseClosedError;
+				}
+				expect(threw).toBe(true);
+			});
 		});
 
 		describe("Table Interpolation", () => {

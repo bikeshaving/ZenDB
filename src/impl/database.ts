@@ -2048,6 +2048,19 @@ export class Database extends EventTarget {
 		await driver.close();
 	}
 
+	/**
+	 * Close the database when an `await using` block ends.
+	 *
+	 * @example
+	 * await using db = new Database(new SQLiteDriver(":memory:"));
+	 * await db.open(1);
+	 * await db.insert(Users, {id: "1", name: "Alice"});
+	 * // closed here, including on an early return or a throw
+	 */
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.close();
+	}
+
 	// ==========================================================================
 	// Migration Table Helpers
 	// ==========================================================================
